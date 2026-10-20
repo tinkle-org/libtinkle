@@ -1,0 +1,31 @@
+# release-plz: Rust-native release automation (NOT release-please).
+# https://release-plz.dev/docs/configuration
+# Flow: conventional commits on main -> release-plz opens a Release PR
+# (version bumps + CHANGELOG via git-cliff + semver-checks) -> merge the
+# PR -> crates publish to crates.io + GitHub releases + tags `<pkg>-v<ver>`.
+# Crates with `publish = false` (syntra-core, syntra-ws, tinkle-schema)
+# are versioned internally but never published. Only libtinkle,
+# tinkle-ffi and libtinkle-web go to crates.io.
+
+[workspace]
+# Derive semver from conventional commits; detect breaking API changes.
+semver_check = true
+# Update CHANGELOG.md per crate with git-cliff (keep-a-changelog style).
+changelog_update = true
+# Tag format `<package_name>-v<version>` (e.g. libtinkle-v0.2.0).
+git_tag_name = "{{ package }}-v{{ version }}"
+# Create a GitHub release per tag.
+git_release_enable = true
+# Publish to crates.io on Release PR merge (needs CARGO_REGISTRY_TOKEN).
+release = true
+# Never publish prereleases from feature branches; main only via CI.
+publish_allow_dirty = false
+
+[changelog]
+# Conventional-commits body; keep it short — details live in PRs.
+body = """
+## [{{ version }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+### Changed
+{% for commit in commits %}* {{ commit.message | trim }}
+{% endfor %}
+"""

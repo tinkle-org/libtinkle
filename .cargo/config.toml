@@ -1,0 +1,2 @@
+[registries.buf]
+index = "sparse+https://buf.build/gen/cargo/public/"

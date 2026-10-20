@@ -1,0 +1,24 @@
+[package]
+name = "tinkle-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "UniFFI facade over libtinkle for iOS (Swift) and Android (Kotlin)."
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "tinkle_ffi"
+crate-type = ["cdylib", "staticlib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
+[dependencies]
+libtinkle = { path = "../libtinkle" }
+tinkle-schema.workspace = true
+uniffi.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,21 @@
+[package]
+name = "libtinkle-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "wasm-bindgen wrapper over libtinkle for browser/WASM."
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+libtinkle = { path = "../libtinkle" }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+# getrandom 0.2 matches rand 0.8 (via libtinkle). The `js` feature enables
+# WebCrypto-backed randomness on wasm32-unknown-unknown; without it, rand
+# fails to compile for wasm. Feature unifies transitively to fix libtinkle.
+getrandom = { version = "0.2", features = ["js"] }

@@ -1,0 +1,6 @@
+/target
+/proto/**/*.tmp
+**/*.rs.bk
+.DS_Store
+.env
+buf.lock

@@ -1,0 +1,45 @@
+[workspace]
+members = [
+  "crates/syntra-core",
+  "crates/syntra-ws",
+  "crates/tinkle-schema",
+  "crates/libtinkle",
+  "crates/tinkle-ffi",
+  "crates/libtinkle-web",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+authors = ["Tinkle Messenger"]
+repository = "https://github.com/tinklehq/libtinkle"
+rust-version = "1.87"
+
+[workspace.dependencies]
+prost = "0.14"
+prost-types = "0.14"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3"
+tungstenite = "0.26"
+thiserror = "2"
+bytes = "1"
+tracing = "0.1"
+rand = "0.8"
+url = "2"
+tokio-util = { version = "0.7", features = ["full"] }
+zeroize = { version = "1", features = ["derive"] }
+async-trait = "0.1"
+futures-channel = "0.3"
+uniffi = { version = "0.31", features = ["tokio", "cli"] }
+
+syntra-core = { path = "crates/syntra-core", version = "0.1.0" }
+syntra-ws = { path = "crates/syntra-ws", version = "0.1.0" }
+tinkle-schema = { path = "crates/tinkle-schema", version = "0.1.0" }
+
+# BSR-generated prost bindings (public index, no token).
+# Versions pinned from `buf registry sdk version` (see PROTO_PINNING.md).
+tinklecorp_syntra_community_neoeinstein-prost = { version = "0.5.0-20261020002338-abd0f913f41c.2", registry = "buf" }
+tinklecorp_tinkle-proto_community_neoeinstein-prost = { version = "0.5.0-20261020173106-64b4706c3194.2", registry = "buf" }

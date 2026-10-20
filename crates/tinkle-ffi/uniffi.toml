@@ -1,0 +1,18 @@
+# UniFFI binding configuration for the tinkle_ffi namespace.
+# Consumed when generating foreign bindings, e.g.:
+#   cargo run -p tinkle-ffi --bin uniffi-bindgen -- \
+#     generate --library target/debug/libtinkle_ffi.dylib \
+#     --language swift --out-dir out/swift
+#   cargo run -p tinkle-ffi --bin uniffi-bindgen -- \
+#     generate --library target/debug/libtinkle_ffi.dylib \
+#     --language kotlin --out-dir out/kotlin
+
+namespace = "tinkle_ffi"
+
+[bindings.kotlin]
+package_name = "com.tinkle.lib"
+
+# Swift module names must be valid identifiers (no dots), so the
+# Kotlin package `com.tinkle.lib` maps to the `TinkleLib` module here.
+[bindings.swift]
+module_name = "TinkleLib"

@@ -1,0 +1,33 @@
+[package]
+name = "syntra-ws"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Syntra WSS/WS transport adapters (native tokio + wasm)."
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+syntra-core.workspace = true
+prost.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+futures-util.workspace = true
+url.workspace = true
+tracing.workspace = true
+
+# Native-only WS stack: tokio full + tungstenite. Gated to not(wasm32)
+# because mio/net + rustls native-roots break wasm32-unknown-unknown.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio.workspace = true
+tungstenite.workspace = true
+tokio-tungstenite.workspace = true
+
+# WASM browser stack: reduced tokio (no mio/net) + ws_stream_wasm.
+# wasm.rs is currently a stub returning a descriptive error at runtime;
+# that is acceptable — this target must COMPILE for wasm32-unknown-unknown.
+# Full ws_stream_wasm wiring (WsMeta::connect, binary pumps) is follow-up.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tokio = { version = "1", default-features = false, features = ["sync", "time", "rt", "macros"] }
+ws_stream_wasm = "0.7"
+wasm-bindgen-futures = "0.4"

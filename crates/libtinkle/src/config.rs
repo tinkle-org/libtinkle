@@ -1,0 +1,127 @@
+//! Client configuration + credential handling.
+//!
+//! Credentials are opaque secret bytes presented only as
+//! `ClientHello.credential`. They are redacted from `Debug`, never
+//! logged, never placed in URLs, never persisted by this crate, and
+//! zeroized on drop.
+
+use std::time::Duration;
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
+use syntra_core::ConnectionConfig;
+
+/// Opaque credential (e.g. session token bytes). `Debug` is redacted.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+pub struct Credential {
+    bytes: Vec<u8>,
+}
+
+impl Credential {
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    pub fn from_session_token(token: &str) -> Self {
+        Self {
+            bytes: token.as_bytes().to_vec(),
+        }
+    }
+
+    /// Borrow secret bytes for the handshake only. Callers MUST NOT log
+    /// or retain the returned slice beyond the handshake.
+    /// crate-internal: only the connection engine may touch secrets.
+    pub(crate) fn expose_secret(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
+impl std::fmt::Debug for Credential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Credential([redacted])")
+    }
+}
+
+/// Reconnect policy: bounded exponential backoff with jitter.
+#[derive(Debug, Clone)]
+pub struct ReconnectPolicy {
+    /// Initial delay after first loss.
+    pub base_delay: Duration,
+    /// Maximum delay cap.
+    pub max_delay: Duration,
+    /// Maximum reconnect attempts (None = unbounded; callers SHOULD bound).
+    pub max_attempts: Option<u32>,
+    /// Multiplier per attempt.
+    pub multiplier: f64,
+}
+
+impl Default for ReconnectPolicy {
+    fn default() -> Self {
+        Self {
+            base_delay: Duration::from_millis(500),
+            max_delay: Duration::from_secs(30),
+            max_attempts: Some(10),
+            multiplier: 2.0,
+        }
+    }
+}
+
+impl ReconnectPolicy {
+    pub(crate) fn delay_for(&self, attempt: u32) -> Duration {
+        let mut d = self.base_delay.as_millis() as f64 * self.multiplier.powi(attempt as i32);
+        let max = self.max_delay.as_millis() as f64;
+        if d > max {
+            d = max;
+        }
+        // Full jitter: random in [d/2, d].
+        let jitter: f64 = rand::random::<f64>() * 0.5 + 0.5;
+        Duration::from_millis((d * jitter) as u64)
+    }
+}
+
+/// High-level client configuration.
+#[derive(Debug, Clone)]
+pub struct ClientConfig {
+    /// WSS URL, e.g. `wss://gateway.example.com/syntra/v1/ws`.
+    pub url: String,
+    /// Allow `ws://` (development loopback/isolated nets only).
+    pub allow_insecure: bool,
+    /// Syntra connection tuning.
+    pub connection: ConnectionConfig,
+    /// Reconnect tuning.
+    pub reconnect: ReconnectPolicy,
+    /// Default per-RPC timeout_ms when callers pass 0 is
+    /// `connection.default_timeout` (bounded, documented).
+    pub user_agent: Option<String>,
+}
+
+impl ClientConfig {
+    pub fn new(url: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            allow_insecure: false,
+            connection: ConnectionConfig::default(),
+            reconnect: ReconnectPolicy::default(),
+            user_agent: None,
+        }
+    }
+
+    /// Development-only plaintext. Production MUST use `wss://`.
+    pub fn insecure_dev(mut self) -> Self {
+        self.allow_insecure = true;
+        self
+    }
+
+    pub(crate) fn ws_config(&self) -> syntra_ws::WsConfig {
+        syntra_ws::WsConfig {
+            url: self.url.clone(),
+            allow_insecure: self.allow_insecure,
+            sni_override: None,
+            connect_timeout: Duration::from_secs(10),
+            close_grace: Duration::from_secs(2),
+        }
+    }
+}
