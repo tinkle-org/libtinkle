@@ -85,21 +85,31 @@ jobs:
               return re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
 
           def section(name, text):
-              # Capture text between `## <name>` and the next `## ` heading.
+              # Capture text between `## <name>` and the next `## ` heading,
+              # inspecting only visible content (HTML comments stripped) so
+              # commented-out checkboxes cannot count as evidence.
               m = re.search(
                   r"^## " + re.escape(name) + r"\s*\n(.*?)(?=^## |\Z)",
-                  text,
+                  strip_comments(text),
                   re.MULTILINE | re.DOTALL,
               )
               return m.group(1) if m else None
 
           errors = []
 
-          # 1. Every template section must survive (no deleted headings).
-          headings = re.findall(r"^## (.+?)\s*$", template, re.MULTILINE)
-          for h in headings:
-              if section(h, body) is None:
-                  errors.append(f"missing section: ## {h}")
+          # 1. Every template section must survive (no deleted headings),
+          #    including `### ` subsections such as Platform notes and Test
+          #    evidence, each matched at its own heading level. (The `# `
+          #    line inside the How-tested example fence is level 1 and is
+          #    intentionally not treated as a heading.)
+          headings = re.findall(r"^(#{2,3}) (.+?)\s*$", template, re.MULTILINE)
+          for hashes, h in headings:
+              if not re.search(
+                  r"^" + hashes + " " + re.escape(h) + r"\s*$",
+                  strip_comments(body),
+                  re.MULTILINE,
+              ):
+                  errors.append(f"missing section: {hashes} {h}")
 
           # 2. Type of change needs at least one checked box.
           toc = section("Type of change", body) or ""
