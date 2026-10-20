@@ -1,0 +1,95 @@
+name: Platform issue (iOS / Android / Web)
+description: Binding, lifecycle, storage, push, TLS, or packaging issue on Swift, Kotlin, or WASM.
+title: "[Platform]: "
+labels: ["platform", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for UniFFI / wasm-bindgen surface, mobile lifecycle, storage, push, or build issues.
+        Core protocol bugs go in Bug report. Redact all secrets.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      multiple: true
+      options:
+        - iOS (Swift via UniFFI)
+        - Android (Kotlin via UniFFI/JNI)
+        - Web / WASM (wasm-bindgen, browser)
+    validations:
+      required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      multiple: true
+      options:
+        - Binding generation (uniffi-bindgen / wasm-bindgen surface)
+        - Async runtime (tokio bridging, Task.cancel / coroutines / spawn_local)
+        - Lifecycle (suspend / resume / reconnect / sync_after_wake)
+        - Storage (CursorStore: GRDB / Room / IndexedDB)
+        - Push (APNs / FCM / WorkManager / Doze)
+        - TLS / ATS / Network Security Config (wss only)
+        - Build / packaging (Xcode, Gradle/AGP/NDK, wasm-pack / target wasm32)
+        - App binary size / startup / perf
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Behaviour on device/simulator/emulator/browser vs expected. Include OS version, device, and lifecycle state (foreground/background/wake).
+      placeholder: |
+        iOS 18 simulator, Swift 6: connect() succeeds foreground, after background suspend + APNs wake sync_after_wake misses resubscribe...
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Repro / build steps
+      description: Xcode/Gradle/browser steps, UniFFI regen commands, wasm build commands, minimal host-language snippet.
+      placeholder: |
+        ```swift
+        let client = TinkleClient(url: "wss://...", token: "<redacted>")
+        try await client.connect()
+        // background, then APNs wake...
+        ```
+        ```sh
+        cargo check -p tinkle-ffi
+        cargo check -p syntra-ws -p libtinkle-web --target wasm32-unknown-unknown
+        ```
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Toolchain pins that matter for bindings.
+      placeholder: |
+        libtinkle git sha:
+        rustc --version --verbose:
+        uniffi version:
+        Xcode / Swift version:
+        Android Studio / AGP / NDK / Kotlin version:
+        Browser + wasm-bindgen / wasm-pack version:
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / errors
+      description: Redacted device logs, Logcat/Console output, or browser console. No tokens or raw frames.
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I redacted all secrets and did not log ClientHello / Frame bytes
+          required: true
+        - label: Native code has no browser-only APIs and wasm code has no raw sockets / blocking std::net (cfg boundary intact)
+          required: false

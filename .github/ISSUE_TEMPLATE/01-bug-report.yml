@@ -1,0 +1,110 @@
+name: Bug report
+description: Report a reproducible bug in libtinkle (Rust core, iOS / Android bindings, or Web/WASM).
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Complete the form so we can reproduce it.
+        Do **not** paste session tokens, private keys, or full `ClientHello` dumps — redact secrets.
+        For security vulnerabilities, do not open a public issue (see `config.yml` contact links).
+  - type: dropdown
+    id: crate-area
+    attributes:
+      label: Crate / area
+      description: Where do you think the bug lives?
+      multiple: true
+      options:
+        - syntra-core (codec, state, handshake, ids, pending, timeouts, reconnect)
+        - syntra-ws native (tokio-tungstenite, TLS)
+        - syntra-ws wasm (ws_stream_wasm, browser transport)
+        - tinkle-schema (methods, realtime validation)
+        - libtinkle (Client, facades, CursorStore)
+        - tinkle-ffi iOS/Android (UniFFI Swift/Kotlin)
+        - libtinkle-web (wasm-bindgen, browser)
+        - Docs / examples
+        - CI / tooling
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform / target
+      description: Where does it reproduce?
+      multiple: true
+      options:
+        - Rust core (Linux / macOS native)
+        - iOS (Swift via UniFFI)
+        - Android (Kotlin via UniFFI/JNI)
+        - Web / WASM (wasm32-unknown-unknown, browser)
+        - Multiple / all
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: What happened, and what did you expect instead? Include Syntra error code (e.g. DEADLINE_EXCEEDED, UNAVAILABLE) if present — branch on code, not message text.
+      placeholder: |
+        Connected with Client::new(...). Called messages().send_message(...).
+        Expected RpcResult payload. Got UNKNOWN with is_unknown_outcome() == true.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps / code to reproduce
+      description: Minimal repro. Self-contained Rust snippet, Swift/Kotlin call, or JS/WASM steps preferred.
+      placeholder: |
+        ```rust
+        let client = libtinkle::Client::new(
+          libtinkle::ClientConfig::new("wss://gateway.test.example.com/syntra/v1/ws"),
+          libtinkle::Credential::from_session_token("<redacted>"),
+          libtinkle::InMemoryCursorStore::new(),
+        );
+        client.connect().await?;
+        // ...
+        ```
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Versions that matter for this SDK.
+      placeholder: |
+        libtinkle version / git sha:
+        rustc --version --verbose:
+        tokio / uniffi / wasm-bindgen versions (if known):
+        iOS: Xcode + device/simulator + Swift version (if applicable):
+        Android: Android Studio / AGP / emulator device + Kotlin version (if applicable):
+        Web: browser + version + wasm target (if applicable):
+        Gateway URL (redacted host only, no tokens):
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste redacted logs, backtrace, or RpcError code. Never paste tokens, ClientHello bytes, or raw Frame dumps.
+      placeholder: |
+        RUST_LOG=... cargo test -p libtinkle --test client_integration -- --nocapture
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I redacted all secrets (no tokens, keys, ClientHello bytes, or Authorization headers)
+          required: true
+        - label: I searched open and closed issues for duplicates
+          required: true
+        - label: I can reproduce on the latest `main`
+          required: false

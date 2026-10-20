@@ -152,10 +152,7 @@ fn is_canonical_stream(s: &str) -> bool {
     if kind != "user" && kind != "room" {
         return false;
     }
-    match id.parse::<i64>() {
-        Ok(v) if v > 0 => true,
-        _ => false,
-    }
+    matches!(id.parse::<i64>(), Ok(v) if v > 0)
 }
 
 fn validate_event_kind_agreement(e: &RealtimeEvent) -> Result<(), RealtimeError> {
@@ -189,23 +186,45 @@ fn validate_sequence_grammar(batch: &RealtimeBatch) -> Result<(), RealtimeError>
         .iter()
         .filter_map(|e| e.kind.as_ref())
         .collect();
-    let ok = match kinds.as_slice() {
-        [K::UpdateRedacted(_)] => true,
-        [K::DialogReadAdvanced(_)] => true,
-        [K::MessageSnapshot(_), K::ChatPosition(_)] => true,
-        [K::UserHydration(_), K::MessageSnapshot(_), K::ChatPosition(_)] => true,
-        [K::ChatHydration(_), K::MessageSnapshot(_), K::ChatPosition(_)] => true,
-        [K::UserHydration(_), K::ChatHydration(_), K::MessageSnapshot(_), K::ChatPosition(_)] => {
-            true
-        }
-        [K::MessageSendFailed(_), K::ChatPosition(_)] => true,
-        [K::UserHydration(_), K::MessageSendFailed(_), K::ChatPosition(_)] => true,
-        [K::ChatHydration(_), K::MessageSendFailed(_), K::ChatPosition(_)] => true,
-        [K::UserHydration(_), K::ChatHydration(_), K::MessageSendFailed(_), K::ChatPosition(_)] => {
-            true
-        }
-        _ => false,
-    };
+    let ok = matches!(
+        kinds.as_slice(),
+        [K::UpdateRedacted(_)]
+            | [K::DialogReadAdvanced(_)]
+            | [K::MessageSnapshot(_), K::ChatPosition(_)]
+            | [
+                K::UserHydration(_),
+                K::MessageSnapshot(_),
+                K::ChatPosition(_)
+            ]
+            | [
+                K::ChatHydration(_),
+                K::MessageSnapshot(_),
+                K::ChatPosition(_)
+            ]
+            | [
+                K::UserHydration(_),
+                K::ChatHydration(_),
+                K::MessageSnapshot(_),
+                K::ChatPosition(_)
+            ]
+            | [K::MessageSendFailed(_), K::ChatPosition(_)]
+            | [
+                K::UserHydration(_),
+                K::MessageSendFailed(_),
+                K::ChatPosition(_)
+            ]
+            | [
+                K::ChatHydration(_),
+                K::MessageSendFailed(_),
+                K::ChatPosition(_)
+            ]
+            | [
+                K::UserHydration(_),
+                K::ChatHydration(_),
+                K::MessageSendFailed(_),
+                K::ChatPosition(_)
+            ]
+    );
     if !ok {
         return Err(RealtimeError::InvalidBatch(
             "event sequence violates allowed grammar".into(),

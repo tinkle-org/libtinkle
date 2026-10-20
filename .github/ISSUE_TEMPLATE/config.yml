@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & discussions
+    url: https://github.com/tinklehq/libtinkle/discussions
+    about: Ask usage, integration (Swift/Kotlin/JS), and design questions here instead of opening an issue.
+  - name: Security vulnerability
+    url: https://github.com/tinklehq/libtinkle/security/policy
+    about: Do not file public issues for vulnerabilities involving credentials, TLS, or E2EE. Use private reporting.
+  - name: Protocol specs (syntra)
+    url: https://github.com/tinklehq/libtinkle/blob/main/docs/architecture.md
+    about: Check architecture, platform, reconnect/sync, and security docs before filing protocol issues.

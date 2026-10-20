@@ -1,0 +1,86 @@
+name: Feature request
+description: Propose a new API, method binding, platform adapter, or realtime/sync capability.
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Propose the problem first, then the API. One proposal per issue so it can be scoped to a crate and platform.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What job can't you do today with libtinkle / tinkle-ffi / libtinkle-web?
+      placeholder: |
+        As an iOS dev I need durable cursor resubscribe after APNs wake without holding a background socket...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Desired API sketch in Rust, plus Swift/Kotlin/JS shape if it crosses tinkle-ffi or libtinkle-web.
+      placeholder: |
+        ```rust
+        // Rust
+        client.realtime().sync_after_wake(persisted_cursors).await?;
+        ```
+        ```swift
+        // Swift (UniFFI)
+        try await client.syncAfterWake()
+        ```
+        ```kotlin
+        // Kotlin
+        client.syncAfterWake()
+        ```
+        ```js
+        // Web
+        await tinkle_sync_after_wake()
+        ```
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      description: Which crates / platforms would this touch?
+      multiple: true
+      options:
+        - syntra-core
+        - syntra-ws native
+        - syntra-ws wasm
+        - tinkle-schema
+        - libtinkle
+        - tinkle-ffi iOS (Swift)
+        - tinkle-ffi Android (Kotlin)
+        - libtinkle-web (WASM/JS)
+        - Docs / examples
+        - Not sure — needs triage
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds, other SDKs (e.g. matrix-rust-sdk bindings approach), or doing nothing.
+      placeholder: Poll with call_raw + manual cursor store...
+    validations:
+      required: false
+  - type: textarea
+    id: compat
+    attributes:
+      label: Protocol / compatibility notes
+      description: Does this need a Syntra wire change, new tinkle-proto method, or BSR pin bump? See PROTO_PINNING.md.
+      placeholder: No wire change / Requires new method binding / Requires Syntra spec update...
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: This is one focused proposal (not a bundle of requests)
+          required: true
+        - label: I checked open feature requests for duplicates
+          required: true

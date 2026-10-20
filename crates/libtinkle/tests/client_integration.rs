@@ -31,6 +31,8 @@ async fn mock_gateway(listener: TcpListener) {
         tokio::spawn(async move {
             use tokio_tungstenite::tungstenite::handshake::server::ErrorResponse;
             use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+            // Large Err is tungstenite's handshake API shape, not our design.
+            #[allow(clippy::result_large_err)]
             let callback = |req: &Request, mut resp: Response| -> Result<Response, ErrorResponse> {
                 // Select syntra.v1 when offered (WS §1C).
                 let offered = req
