@@ -1,0 +1,150 @@
+name: PR template check
+
+# Validates that PR descriptions follow .github/pull_request_template.md:
+# all template sections present, key sections filled in, and at least one
+# Type-of-change box checked. Release-plz's own PRs are exempt (it uses a
+# fixed body format); without the exemption the release flow would deadlock
+# against this required check.
+# Runs on pull_request_target so this workflow definition (including the
+# inline validator) is base-owned: under pull_request the definition would
+# come from the merge ref and PR-controlled code would execute. Combined
+# with the base-pinned checkout below, no PR head content is executed;
+# only the PR body text is read as data.
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  pr-template-check:
+    name: pr-template-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          # Read the template from the base revision, not the merge ref:
+          # the PR head must not be able to rewrite the template it is
+          # validated against.
+          ref: ${{ github.event.pull_request.base.sha }}
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Under pull_request_target GITHUB_REF_NAME is the base branch,
+          # so take the PR number from the event payload instead.
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 - <<'EOF'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          pr = os.environ["PR_NUMBER"]
+          info = json.loads(
+              subprocess.run(
+                   ["gh", "pr", "view", pr, "--repo", repo,
+                    "--json",
+                    "body,author,headRefName,headRepository,"
+                    "headRepositoryOwner,isCrossRepository"],
+                  capture_output=True,
+                  text=True,
+                  check=True,
+              ).stdout
+          )
+
+          # Exempt automation that uses a fixed, non-template body format.
+          # All three must hold: the branch prefix alone is
+          # contributor-controlled, so also require the automation author
+          # identity and a same-repo head (release-plz pushes here, never
+          # from a fork). The observed automation author login is
+          # "app/github-actions"; the classic bot login is accepted too.
+          head_repo = (
+              f"{info['headRepositoryOwner']['login']}"
+              f"/{info['headRepository']['name']}"
+          )
+          if (
+              info["author"]["login"]
+              in ("github-actions[bot]", "app/github-actions")
+              and info["headRefName"].startswith("release-plz-")
+              and not info["isCrossRepository"]
+              and head_repo == repo
+          ):
+              print("Exempt automation PR; skipping template check.")
+              sys.exit(0)
+
+          body = info["body"] or ""
+          with open(".github/pull_request_template.md") as f:
+              template = f.read()
+
+          def strip_comments(text):
+              return re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+
+          def section(name, text):
+              # Capture text between `## <name>` and the next `## ` heading,
+              # inspecting only visible content (HTML comments stripped) so
+              # commented-out checkboxes cannot count as evidence.
+              m = re.search(
+                  r"^## " + re.escape(name) + r"\s*\n(.*?)(?=^## |\Z)",
+                  strip_comments(text),
+                  re.MULTILINE | re.DOTALL,
+              )
+              return m.group(1) if m else None
+
+          errors = []
+
+          # 1. Every template section must survive (no deleted headings),
+          #    including `### ` subsections such as Platform notes and Test
+          #    evidence, each matched at its own heading level. (The `# `
+          #    line inside the How-tested example fence is level 1 and is
+          #    intentionally not treated as a heading.)
+          headings = re.findall(r"^(#{2,3}) (.+?)\s*$", template, re.MULTILINE)
+          for hashes, h in headings:
+              if not re.search(
+                  r"^" + hashes + " " + re.escape(h) + r"\s*$",
+                  strip_comments(body),
+                  re.MULTILINE,
+              ):
+                  errors.append(f"missing section: {hashes} {h}")
+
+          # 2. Type of change needs at least one checked box.
+          toc = section("Type of change", body) or ""
+          if not re.search(r"^- \[[xX]\] ", toc, re.MULTILINE):
+              errors.append("Type of change: check at least one box")
+
+          # 3. Free-text sections must contain real prose, not just the
+          #    template's HTML placeholder comments.
+          for name in ("Summary", "Breaking changes / migration"):
+              content = strip_comments(section(name, body) or "").strip()
+              if not content:
+                  errors.append(f"## {name}: fill in (placeholder comments only)")
+
+          # 4. How tested needs evidence: a checked box or pasted output.
+          #    Only the `### Test evidence` subsection counts, with HTML
+          #    comments stripped: the template's own unchecked boxes and
+          #    example fence would otherwise let untouched boilerplate pass.
+          tested = section("How tested", body) or ""
+          evidence_match = re.search(
+              r"^### Test evidence\s*\n(.*?)(?=^### |\Z)",
+              tested,
+              re.MULTILINE | re.DOTALL,
+          )
+          evidence = strip_comments(
+              evidence_match.group(1) if evidence_match else ""
+          ).strip()
+          if not re.search(r"^- \[[xX]\] ", tested, re.MULTILINE) and not (
+              evidence
+          ):
+              errors.append("## How tested: check a box or paste test evidence")
+
+          if errors:
+              print("PR description does not follow the PR template:")
+              for e in errors:
+                  print(f"  - {e}")
+              sys.exit(1)
+          print("PR description follows the template.")
+          EOF
