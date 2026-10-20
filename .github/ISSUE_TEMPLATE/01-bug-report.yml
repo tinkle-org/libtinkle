@@ -40,7 +40,6 @@ body:
         - Android (Kotlin via UniFFI/JNI)
         - Web / WASM (wasm32-unknown-unknown, browser)
         - Multiple / all
-      default: 0
     validations:
       required: true
   - type: textarea
@@ -70,10 +69,6 @@ body:
         ```
         1. ...
         2. ...
-      value: |
-        ```rust
-        // minimal repro here
-        ```
     validations:
       required: true
   - type: textarea

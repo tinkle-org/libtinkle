@@ -30,7 +30,7 @@
 - [ ] `tinkle-ffi` (UniFFI — iOS Swift / Android Kotlin)
 - [ ] `libtinkle-web` (wasm-bindgen — browser/WASM)
 - [ ] Docs (`docs/`, `README.md`, examples)
-- [ ] CI / release (` .github/workflows`, `release-plz`, BSR pinning)
+- [ ] CI / release (`.github/workflows`, `release-plz`, BSR pinning)
 
 ## Platform impact
 

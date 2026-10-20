@@ -17,7 +17,6 @@ body:
         - iOS (Swift via UniFFI)
         - Android (Kotlin via UniFFI/JNI)
         - Web / WASM (wasm-bindgen, browser)
-      default: 0
     validations:
       required: true
   - type: dropdown
@@ -34,7 +33,6 @@ body:
         - TLS / ATS / Network Security Config (wss only)
         - Build / packaging (Xcode, Gradle/AGP/NDK, wasm-pack / target wasm32)
         - App binary size / startup / perf
-      default: 0
     validations:
       required: true
   - type: textarea
