@@ -20,7 +20,7 @@ sibling repositories (`syntra/`, `tinkle-proto/`):
 
 ```text
 libtinkle/
-  Cargo.toml                  workspace (only libtinkle + tinkle-ffi + libtinkle-web public)
+  Cargo.toml                  workspace (all crates publish=false; git tags + GitHub releases only)
   .cargo/config.toml          public BSR Cargo index (no token for public modules)
   crates/syntra-core/         PRIVATE Syntra v1 core (publish=false, never imported by apps)
   crates/syntra-ws/           PRIVATE WSS/WS adapters (publish=false, cfg-gated native/wasm)
