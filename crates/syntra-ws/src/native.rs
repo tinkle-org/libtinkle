@@ -189,7 +189,7 @@ pub async fn connect(
     let version = conn.negotiated_version().await.unwrap_or(1);
 
     // Detach writer task (it lives until shutdown/close).
-    let _ = writer_task; // held by runtime; shutdown via WsHandle::close
+    std::mem::drop(writer_task); // held by runtime; shutdown via WsHandle::close
 
     Ok(WsHandle {
         conn,

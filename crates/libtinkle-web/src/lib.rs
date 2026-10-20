@@ -17,8 +17,8 @@
 //! - `ws_stream_wasm` wiring: complete `syntra-ws::wasm::connect`
 //!   (`WsMeta::connect`, binary-only pumps via `wasm-bindgen-futures`).
 
-use wasm_bindgen::prelude::*;
 use libtinkle::{Client, ClientConfig, Credential, InMemoryCursorStore};
+use wasm_bindgen::prelude::*;
 
 /// Minimal proof: construct a `Client` with an in-memory cursor store,
 /// run the Syntra handshake over the browser WebSocket, and resolve.

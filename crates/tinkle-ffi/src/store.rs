@@ -17,11 +17,8 @@ use libtinkle::CursorStore as _;
 #[uniffi::export(with_foreign)]
 #[async_trait::async_trait]
 pub trait FfiCursorStore: Send + Sync {
-    async fn load(
-        &self,
-        principal: String,
-        stream: String,
-    ) -> Result<Option<u64>, crate::FfiError>;
+    async fn load(&self, principal: String, stream: String)
+        -> Result<Option<u64>, crate::FfiError>;
 
     async fn save(
         &self,
@@ -30,11 +27,8 @@ pub trait FfiCursorStore: Send + Sync {
         cursor: u64,
     ) -> Result<(), crate::FfiError>;
 
-    async fn remove_stream(
-        &self,
-        principal: String,
-        stream: String,
-    ) -> Result<(), crate::FfiError>;
+    async fn remove_stream(&self, principal: String, stream: String)
+        -> Result<(), crate::FfiError>;
 
     async fn clear_principal(&self, principal: String) -> Result<(), crate::FfiError>;
 }

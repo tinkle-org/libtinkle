@@ -51,7 +51,7 @@ pub fn validate_method(method: &str) -> Result<(), SyntraError> {
             });
         }
         for b in seg.bytes() {
-            if b < 0x21 || b > 0x7E {
+            if !(0x21..=0x7E).contains(&b) {
                 return Err(SyntraError::Protocol {
                     code: ErrorCode::InvalidArgument,
                     message: "method must be ASCII printable excluding spaces/control".to_string(),

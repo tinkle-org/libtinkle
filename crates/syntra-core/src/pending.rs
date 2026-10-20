@@ -75,6 +75,10 @@ impl PendingTable {
         self.inner.lock().unwrap().len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.inner.lock().unwrap().is_empty()
+    }
+
     /// Complete one RPC with its terminal `result`. Unknown ids are
     /// ignored with a diagnostic (no error storm). Returns true if a
     /// waiter existed.

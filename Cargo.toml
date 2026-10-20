@@ -15,7 +15,7 @@ edition = "2021"
 license = "Apache-2.0 OR MIT"
 authors = ["Tinkle Messenger"]
 repository = "https://github.com/tinklehq/libtinkle"
-rust-version = "1.87"
+rust-version = "1.88"
 
 [workspace.dependencies]
 prost = "0.14"

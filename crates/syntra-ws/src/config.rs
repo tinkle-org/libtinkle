@@ -70,7 +70,7 @@ impl Endpoint {
                 "credentials must not appear in the URL".to_string(),
             ));
         }
-        if url.query().map(|q| looks_like_secret(q)).unwrap_or(false) {
+        if url.query().map(looks_like_secret).unwrap_or(false) {
             return Err(crate::error::TransportError::InvalidUrl(
                 "query must not carry credential patterns".to_string(),
             ));
