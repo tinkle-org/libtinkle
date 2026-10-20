@@ -1,0 +1,99 @@
+name: PR template check
+
+# Validates that PR descriptions follow .github/pull_request_template.md:
+# all template sections present, key sections filled in, and at least one
+# Type-of-change box checked. Release-plz's own PRs are exempt (it uses a
+# fixed body format); without the exemption the release flow would deadlock
+# against this required check.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  pr-template-check:
+    name: pr-template-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'EOF'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          pr = os.environ["GITHUB_REF_NAME"].split("/")[0]
+          info = json.loads(
+              subprocess.run(
+                  ["gh", "pr", "view", pr, "--repo", repo,
+                   "--json", "body,author,headRefName"],
+                  capture_output=True,
+                  text=True,
+                  check=True,
+              ).stdout
+          )
+
+          # Exempt automation that uses a fixed, non-template body format.
+          if info["author"]["login"] == "github-actions[bot]" or info[
+              "headRefName"
+          ].startswith("release-plz-"):
+              print("Exempt automation PR; skipping template check.")
+              sys.exit(0)
+
+          body = info["body"] or ""
+          with open(".github/pull_request_template.md") as f:
+              template = f.read()
+
+          def strip_comments(text):
+              return re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+
+          def section(name, text):
+              # Capture text between `## <name>` and the next `## ` heading.
+              m = re.search(
+                  r"^## " + re.escape(name) + r"\s*\n(.*?)(?=^## |\Z)",
+                  text,
+                  re.MULTILINE | re.DOTALL,
+              )
+              return m.group(1) if m else None
+
+          errors = []
+
+          # 1. Every template section must survive (no deleted headings).
+          headings = re.findall(r"^## (.+?)\s*$", template, re.MULTILINE)
+          for h in headings:
+              if section(h, body) is None:
+                  errors.append(f"missing section: ## {h}")
+
+          # 2. Type of change needs at least one checked box.
+          toc = section("Type of change", body) or ""
+          if not re.search(r"^- \[[xX]\] ", toc, re.MULTILINE):
+              errors.append("Type of change: check at least one box")
+
+          # 3. Free-text sections must contain real prose, not just the
+          #    template's HTML placeholder comments.
+          for name in ("Summary", "Breaking changes / migration"):
+              content = strip_comments(section(name, body) or "").strip()
+              if not content:
+                  errors.append(f"## {name}: fill in (placeholder comments only)")
+
+          # 4. How tested needs evidence: a checked box or pasted output.
+          tested = section("How tested", body) or ""
+          if not re.search(r"^- \[[xX]\] ", tested, re.MULTILINE) and not (
+              strip_comments(tested).strip()
+          ):
+              errors.append("## How tested: check a box or paste test evidence")
+
+          if errors:
+              print("PR description does not follow the PR template:")
+              for e in errors:
+                  print(f"  - {e}")
+              sys.exit(1)
+          print("PR description follows the template.")
+          EOF
