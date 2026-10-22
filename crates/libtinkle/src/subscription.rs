@@ -62,10 +62,10 @@ pub(crate) struct SubscriptionManager {
 }
 
 #[derive(Debug, Default, Clone)]
-struct Interests {
-    rooms: Vec<(i64, u64)>,
-    watch_user_ids: Vec<i64>,
-    subscribed: bool,
+pub(crate) struct Interests {
+    pub(crate) rooms: Vec<(i64, u64)>,
+    pub(crate) watch_user_ids: Vec<i64>,
+    pub(crate) subscribed: bool,
 }
 
 impl SubscriptionManager {
@@ -87,11 +87,6 @@ impl SubscriptionManager {
         g.rooms = rooms;
         g.watch_user_ids = watch_user_ids;
         g.subscribed = true;
-    }
-
-    pub(crate) async fn interests_snapshot(&self) -> (Vec<(i64, u64)>, Vec<i64>) {
-        let g = self.interests.lock().await;
-        (g.rooms.clone(), g.watch_user_ids.clone())
     }
 
     /// Hydrate memory cursors from durable storage (call after connect,

@@ -3,7 +3,8 @@
 The same logical client runtime (`libtinkle::Client` + `syntra-core` +
 `tinkle-schema`) is reused on all targets. Platform code wraps the async
 core; it never reimplements framing, handshake, correlation, or cursor
-logic.
+logic. Syntra comes from crates.io (`syntra-core`/`syntra-runtime`/
+`syntra-ws` `=1.0.0-rc.1`); the local prototype crates were removed.
 
 ## Runtime compatibility review (before choosing crates)
 
@@ -78,8 +79,7 @@ pub async fn tinkle_connect(url: String, token: String) -> Result<JsValue, JsVal
 ## Compilation checks (verified 2026-10-20)
 
 ```sh
-cargo check -p syntra-core -p tinkle-schema -p syntra-ws -p libtinkle   # native, passes
-cargo check -p syntra-core --no-default-features --target wasm32-unknown-unknown  # pure core, passes
+cargo check -p tinkle-schema -p libtinkle -p tinkle-ffi   # native, passes (syntra-* build transitively)
 cargo check -p tinkle-schema --target wasm32-unknown-unknown           # pure app, passes
 ```
 

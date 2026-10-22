@@ -12,6 +12,9 @@ use syntra_core::proto::{
     frame::Body, rpc_result::Outcome, Frame, Notification, RpcError as ProtoRpcError, RpcRequest,
     RpcResult,
 };
+// Upstream codec helpers: syntra-core types are prost 0.13 internally,
+// workspace Tinkle types are prost 0.14. Boundary stays opaque Vec<u8>.
+use syntra_core::{decode_frame, encode_frame, ConnectionState, ValidationContext};
 use tinkle_schema::proto::{
     peer_input::Target as PeerTarget, realtime_event::Kind as EK,
     realtime_notification::Kind as NK, Message as TinkleMessage, PeerInput, RealtimeBatch,
@@ -61,7 +64,10 @@ async fn mock_gateway(listener: TcpListener) {
                 _ => return,
             };
             let bytes = hello_msg.into_data();
-            let frame = match Frame::decode(&*bytes) {
+            let frame = match decode_frame(
+                &bytes,
+                ValidationContext::pre_handshake(ConnectionState::Connected),
+            ) {
                 Ok(f) => f,
                 Err(_) => return,
             };
@@ -76,8 +82,11 @@ async fn mock_gateway(listener: TcpListener) {
                     connection_id: format!("mock-{}", rand::random::<u32>()),
                 })),
             };
-            let mut buf = Vec::new();
-            ready.encode(&mut buf).unwrap();
+            let buf = encode_frame(
+                &ready,
+                ValidationContext::pre_handshake(ConnectionState::Authenticating),
+            )
+            .unwrap();
             if write
                 .send(tokio_tungstenite::tungstenite::Message::Binary(buf.into()))
                 .await
@@ -101,7 +110,7 @@ async fn mock_gateway(listener: TcpListener) {
                 if data.is_empty() {
                     continue;
                 }
-                let frame = match Frame::decode(&*data) {
+                let frame = match decode_frame(&data, ValidationContext::active(1)) {
                     Ok(f) => f,
                     Err(_) => continue,
                 };
@@ -128,12 +137,9 @@ async fn mock_gateway(listener: TcpListener) {
                     let nf = Frame {
                         version: 1,
                         request_id: 0,
-                        body: Some(Body::Notification(Notification {
-                            payload: pbuf.into(),
-                        })),
+                        body: Some(Body::Notification(Notification { payload: pbuf })),
                     };
-                    let mut nbuf = Vec::new();
-                    nf.encode(&mut nbuf).unwrap();
+                    let nbuf = encode_frame(&nf, ValidationContext::active(1)).unwrap();
                     let _ = write
                         .send(tokio_tungstenite::tungstenite::Message::Binary(nbuf.into()))
                         .await;
@@ -143,8 +149,7 @@ async fn mock_gateway(listener: TcpListener) {
                 if is_slow(&resp_frame) {
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 }
-                let mut out = Vec::new();
-                resp_frame.encode(&mut out).unwrap();
+                let out = encode_frame(&resp_frame, ValidationContext::active(1)).unwrap();
                 if write
                     .send(tokio_tungstenite::tungstenite::Message::Binary(out.into()))
                     .await
@@ -160,7 +165,7 @@ async fn mock_gateway(listener: TcpListener) {
 fn is_slow(frame: &Frame) -> bool {
     if let Some(Body::Result(r)) = &frame.body {
         if let Some(Outcome::Payload(b)) = &r.outcome {
-            return b.as_ref() == &b"SLOW"[..];
+            return b.as_slice() == b"SLOW".as_slice();
         }
     }
     false
@@ -169,7 +174,7 @@ fn is_slow(frame: &Frame) -> bool {
 fn resp_frame_needs_notif(frame: &Frame) -> bool {
     if let Some(Body::Result(r)) = &frame.body {
         if let Some(Outcome::Payload(b)) = &r.outcome {
-            return b.as_ref() == &b"WITH_NOTIF"[..];
+            return b.as_slice() == b"WITH_NOTIF".as_slice();
         }
     }
     false
@@ -181,10 +186,10 @@ async fn handle_mock_request(id: u64, req: RpcRequest) -> Frame {
             outcome: Some(Outcome::Payload(req.payload)),
         },
         "/example.Echo/Slow" => RpcResult {
-            outcome: Some(Outcome::Payload(b"SLOW".to_vec().into())),
+            outcome: Some(Outcome::Payload(b"SLOW".to_vec())),
         },
         "/example.Echo/WithNotif" => RpcResult {
-            outcome: Some(Outcome::Payload(b"WITH_NOTIF".to_vec().into())),
+            outcome: Some(Outcome::Payload(b"WITH_NOTIF".to_vec())),
         },
         "/tinkle.v1.MessagesService/SendMessage" => {
             let r = SendMessageRequest::decode(&*req.payload).unwrap_or(SendMessageRequest {
@@ -221,7 +226,7 @@ async fn handle_mock_request(id: u64, req: RpcRequest) -> Frame {
             let mut b = Vec::new();
             resp.encode(&mut b).unwrap();
             RpcResult {
-                outcome: Some(Outcome::Payload(b.into())),
+                outcome: Some(Outcome::Payload(b)),
             }
         }
         "/tinkle.v1.Realtime/SubscribeBatched" => {
@@ -238,7 +243,7 @@ async fn handle_mock_request(id: u64, req: RpcRequest) -> Frame {
             let mut b = Vec::new();
             resp.encode(&mut b).unwrap();
             RpcResult {
-                outcome: Some(Outcome::Payload(b.into())),
+                outcome: Some(Outcome::Payload(b)),
             }
         }
         "/tinkle.v1.MessagesService/GetHistory" | "/tinkle.v1.MessagesService/GetDialogs" => {
@@ -268,7 +273,7 @@ async fn handle_mock_request(id: u64, req: RpcRequest) -> Frame {
                 buf
             };
             RpcResult {
-                outcome: Some(Outcome::Payload(b.into())),
+                outcome: Some(Outcome::Payload(b)),
             }
         }
         _ => RpcResult {
@@ -293,13 +298,9 @@ async fn start_mock() -> SocketAddr {
 }
 
 fn test_client(addr: SocketAddr) -> libtinkle::Client {
-    let cfg = libtinkle::ClientConfig {
-        url: format!("ws://{addr}/syntra/v1/ws"),
-        allow_insecure: true,
-        connection: Default::default(),
-        reconnect: Default::default(),
-        user_agent: None,
-    };
+    // Builder-style construction: resilient to ConnectionConfig gaining
+    // new fields (e.g. max_rpc_timeout).
+    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
     libtinkle::Client::new(
         cfg,
         libtinkle::Credential::from_session_token("test-token"),
@@ -364,14 +365,14 @@ async fn cancellation_reports_cancelled() {
     let addr = start_mock().await;
     let c = test_client(addr);
     c.connect().await.unwrap();
-    let token = tokio_util::sync::CancellationToken::new();
+    let token = syntra_runtime::CancelToken::new();
     let t2 = token.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         t2.cancel();
     });
     let err = c
-        .call_raw_cancellable("/example.Echo/Slow", b"x".to_vec(), 5000, token)
+        .call_raw_cancellable("/example.Echo/Slow", b"x".to_vec(), 5000, &token)
         .await
         .unwrap_err();
     assert!(matches!(

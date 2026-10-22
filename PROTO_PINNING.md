@@ -12,17 +12,19 @@ Registry (`.cargo/config.toml`):
 index = "sparse+https://buf.build/gen/cargo/public/"
 ```
 
-## Syntra (`buf.build/tinklecorp/syntra`)
+## Syntra (published crates, no BSR binding)
 
-- Plugin: `buf.build/connectrpc/rust` for inspection, but the Rust
-  dependency is the prost data crate `buf.build/community/neoeinstein-prost`.
-- Crate: `tinklecorp_syntra_community_neoeinstein-prost`
-- Pinned version: `0.5.0-20261020002338-abd0f913f41c.2`
-  (`buf registry sdk version --module=buf.build/tinklecorp/syntra --plugin=buf.build/community/neoeinstein-prost`)
-- Module commit: `abd0f913f41c4a80bec862296b8f1338`
-- Runtime: `prost` / `prost-types` `0.14.1` (from the generated crate).
-- Role: data structures only. Protocol behavior lives in `syntra-core`
-  and never in generated helpers.
+- Syntra protocol types now come from published `syntra-core`
+  `=1.0.0-rc.1` (with `syntra-runtime` / `syntra-ws` at the same pin).
+  Local prototype crates `crates/syntra-core` and `crates/syntra-ws`
+  were removed.
+- Syntra proto runtime: `prost` `0.13.5` internally (see `Cargo.lock`:
+  `syntra-core` / `syntra-runtime` / `syntra-ws` depend on
+  `prost 0.13.5`). Tinkle still uses BSR prost `0.14` (below).
+- Boundary is opaque `Vec<u8>`: Tinkle payload bytes cross into Syntra
+  frames without sharing prost types. `prost 0.13.5` is the Syntra
+  internal runtime; `prost 0.14` (locked to `0.14.4` per `Cargo.lock`)
+  is the Tinkle workspace requirement — distinct roles, no type mixing.
 
 ## Tinkle (`buf.build/tinklecorp/tinkle-proto`)
 
@@ -31,7 +33,7 @@ index = "sparse+https://buf.build/gen/cargo/public/"
 - Pinned version: `0.5.0-20261020173106-64b4706c3194.2`
   (`buf registry sdk version --module=buf.build/tinklecorp/tinkle-proto --plugin=buf.build/community/neoeinstein-prost`)
 - Module commit: `64b4706c319441c3a36f9bde125d5594`
-- Runtime: same `prost` `0.14.1`.
+- Runtime: `prost` `0.14` (locked to `0.14.4` per `Cargo.lock`).
 - Method identifiers (`tinkle-schema::methods`, 169 entries) were verified
   against these service definitions. Failures use Syntra `RpcResult.error`.
 
@@ -47,10 +49,15 @@ index = "sparse+https://buf.build/gen/cargo/public/"
 
 ## Upgrading
 
+Syntra upgrades: first update the exact version requirements for
+`syntra-core`, `syntra-runtime`, and `syntra-ws` in `Cargo.toml`,
+then run `cargo update` and `cargo test`.
+
+Tinkle binding only:
+
 ```sh
-buf registry sdk version --module=buf.build/tinklecorp/syntra --plugin=buf.build/community/neoeinstein-prost
 buf registry sdk version --module=buf.build/tinklecorp/tinkle-proto --plugin=buf.build/community/neoeinstein-prost
 ```
 
-Copy the two versions verbatim into the workspace `Cargo.toml`. Do not
-construct them by hand. `cargo update -p <crate>` then `cargo test --workspace`.
+Copy the version verbatim into the workspace `Cargo.toml`. Do not
+construct it by hand. `cargo update -p <crate>` then `cargo test --workspace`.

@@ -1,7 +1,5 @@
 [workspace]
 members = [
-  "crates/syntra-core",
-  "crates/syntra-ws",
   "crates/tinkle-schema",
   "crates/libtinkle",
   "crates/tinkle-ffi",
@@ -35,11 +33,11 @@ async-trait = "0.1"
 futures-channel = "0.3"
 uniffi = { version = "0.31", features = ["tokio", "cli"] }
 
-syntra-core = { path = "crates/syntra-core", version = "0.1.0" }
-syntra-ws = { path = "crates/syntra-ws", version = "0.1.0" }
+syntra-core = { version = "=1.0.0-rc.1" }
+syntra-runtime = { version = "=1.0.0-rc.1" }
+syntra-ws = { version = "=1.0.0-rc.1" }
 tinkle-schema = { path = "crates/tinkle-schema", version = "0.1.0" }
 
 # BSR-generated prost bindings (public index, no token).
 # Versions pinned from `buf registry sdk version` (see PROTO_PINNING.md).
-tinklecorp_syntra_community_neoeinstein-prost = { version = "0.5.0-20261020002338-abd0f913f41c.2", registry = "buf" }
 tinklecorp_tinkle-proto_community_neoeinstein-prost = { version = "0.5.0-20261020173106-64b4706c3194.2", registry = "buf" }

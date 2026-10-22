@@ -8,7 +8,7 @@
 use std::time::Duration;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use syntra_core::ConnectionConfig;
+use syntra_runtime::ConnectionConfig;
 
 /// Opaque credential (e.g. session token bytes). `Debug` is redacted.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
@@ -116,12 +116,13 @@ impl ClientConfig {
     }
 
     pub(crate) fn ws_config(&self) -> syntra_ws::WsConfig {
-        syntra_ws::WsConfig {
-            url: self.url.clone(),
-            allow_insecure: self.allow_insecure,
-            sni_override: None,
-            connect_timeout: Duration::from_secs(10),
-            close_grace: Duration::from_secs(2),
-        }
+        let mut cfg = if self.allow_insecure {
+            syntra_ws::WsConfig::insecure_dev(self.url.clone())
+        } else {
+            syntra_ws::WsConfig::secure(self.url.clone())
+        };
+        cfg.connect_timeout = Duration::from_secs(10);
+        cfg.close_grace = Duration::from_secs(2);
+        cfg
     }
 }

@@ -1,8 +1,9 @@
 # libtinkle — Tinkle client runtime over Syntra
 
 A reusable Rust client runtime for the Tinkle `client-api` over Syntra,
-consuming BSR-generated Syntra protobuf messages and BSR-generated
-`tinkle-proto` application messages, implementing protocol behavior in
+consuming Syntra protocol types from the published crates.io crates
+(`syntra-core`, `syntra-runtime`, `syntra-ws`) and BSR-generated
+`tinkle-proto` application messages, implementing application behavior in
 this SDK (generated bindings alone are not an SDK).
 
 The same logical client runtime is reusable across iOS, Android, and
@@ -20,10 +21,8 @@ sibling repositories (`syntra/`, `tinkle-proto/`):
 
 ```text
 libtinkle/
-  Cargo.toml                  workspace (all crates publish=false; git tags + GitHub releases only)
+  Cargo.toml                  workspace (workspace-owned crates publish=false; git tags + GitHub releases only; syntra-core/runtime/ws from crates.io)
   .cargo/config.toml          public BSR Cargo index (no token for public modules)
-  crates/syntra-core/         PRIVATE Syntra v1 core (publish=false, never imported by apps)
-  crates/syntra-ws/           PRIVATE WSS/WS adapters (publish=false, cfg-gated native/wasm)
   crates/tinkle-schema/       PRIVATE Tinkle bindings + realtime validation (publish=false)
   crates/libtinkle/           PUBLIC Rust API: Client, Credential, CursorStore, typed facades
   crates/tinkle-ffi/          PUBLIC UniFFI: TinkleClient object for Swift/Kotlin
@@ -32,9 +31,10 @@ libtinkle/
   PROTO_PINNING.md            BSR crate versions + upgrade
 ```
 
-Apps never depend on `syntra-core`, `syntra-ws`, or `tinkle-schema`
-directly — same rule as TDLib, where MTProto internals never leak and
-clients speak only the stable `Client` / UniFFI / web surface.
+Apps never depend on the Syntra crates (`syntra-core`/`syntra-runtime`/`syntra-ws`
+from crates.io) or `tinkle-schema` directly — same rule as TDLib, where
+MTProto internals never leak and clients speak only the stable `Client` /
+UniFFI / web surface.
 
 ## Quick start
 
@@ -62,8 +62,10 @@ cargo run -p libtinkle --example subscribe
 
 ## Protocol layers (Phase 2)
 
-`syntra-core` implements each layer separately, per the specifications in
-`../syntra/specifications/`:
+Syntra comes from published crates.io crates (`syntra-core`,
+`syntra-runtime`, `syntra-ws`, all `=1.0.0-rc.1`); the local prototype
+crates were removed. `syntra-core` implements each layer separately, per
+the specifications in `../syntra/specifications/`:
 
 1. WSS transport adapter — `syntra-ws::native` (tokio-tungstenite +
    rustls TLS 1.3) and `syntra-ws::wasm` (browser WebSocket, same
@@ -92,7 +94,10 @@ cargo run -p libtinkle --example subscribe
     `RealtimeNotification`, complete-batch validation, cursor tracking).
 
 The generic Syntra implementation is independent of Tinkle types wherever
-practical; `syntra-core` never imports `tinkle-schema`.
+practical; `syntra-core` never imports `tinkle-schema`. Syntra internals
+use prost 0.13.5 while the Tinkle boundary (`tinkle-schema`, `libtinkle`)
+uses prost 0.14; payload bytes cross as opaque `Vec<u8>`, so the two prost
+versions never mix at the type level.
 
 ## Public client API (Phase 3)
 
@@ -162,17 +167,17 @@ cargo test --workspace
 cargo test -p libtinkle --test client_integration -- --nocapture
 ```
 
-- `syntra-core/tests/conformance.rs` — envelope, version, method,
-  outcome, error-code, size, state vectors (`CONF-CORE-*` intent).
 - `tinkle-schema/tests/realtime_conformance.rs` — batch grammar, UUID,
   position order, cursor/floor/reset vectors.
 - `libtinkle/tests/client_integration.rs` — live in-process mock gateway:
   handshake/auth, concurrent out-of-order RPCs, cancellation, notification
   interleaving, reconnect + cursor recovery, errors, malformed-frame
-  tolerance.
-- Platform compilation: native `cargo check`; wasm via
-  `cargo check -p syntra-ws --target wasm32-unknown-unknown` (requires the
-  target + `ws_stream_wasm`; native never touches browser APIs).
+  tolerance. Syntra protocol conformance lives upstream in the published
+  crates and is validated here transitively through these integration tests.
+- Platform compilation: native `cargo check --workspace`; wasm via
+  `cargo check -p libtinkle-web --target wasm32-unknown-unknown` (requires the
+  target + `ws_stream_wasm`; native never touches browser APIs; the
+  crates.io `syntra-ws` dependency builds transitively).
 
 ## Acceptance
 

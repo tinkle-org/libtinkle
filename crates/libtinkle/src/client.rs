@@ -15,19 +15,18 @@
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
-use tokio_util::sync::CancellationToken;
 
-use syntra_core::Connection;
+use syntra_runtime::{CancelToken, Initiator};
 
 use crate::config::{ClientConfig, Credential};
 use crate::cursor::CursorStore;
 use crate::errors::TinkleError;
 use crate::reconnect::{backoff_sleep, should_retry};
 use crate::services::{Auth, Messages, Realtime};
-use crate::subscription::{RealtimeEvent, SubscriptionManager};
+use crate::subscription::{Interests, RealtimeEvent, SubscriptionManager};
 
 struct Live {
-    conn: Connection,
+    handle: syntra_ws::WsHandle,
     connection_id: String,
     version: u32,
     sub_mgr: Arc<SubscriptionManager>,
@@ -47,6 +46,9 @@ pub struct Client {
     /// Authenticated principal label for cursor scope, e.g. `user:123`.
     /// Set after first successful subscribe; used for durable isolation.
     principal: Arc<RwLock<String>>,
+    /// Subscription interests that survive reconnect (Live + its
+    /// SubscriptionManager are discarded on close).
+    interests: Arc<tokio::sync::Mutex<Interests>>,
 }
 
 impl Client {
@@ -57,6 +59,7 @@ impl Client {
             store,
             live: Arc::new(RwLock::new(None)),
             principal: Arc::new(RwLock::new("unknown".to_string())),
+            interests: Arc::new(tokio::sync::Mutex::new(Interests::default())),
         }
     }
 
@@ -91,18 +94,16 @@ impl Client {
                 TinkleError::Syntra(syntra_core::error::SyntraError::Transport(e.to_string()))
             })?;
 
-        let conn = handle.conn.clone();
+        let conn = handle.connection().clone();
         let connection_id = handle.connection_id.clone();
         let version = handle.version;
-        // WsHandle owns WS background tasks; they are detached and end on
-        // transport loss. Explicit close() tears down via Connection::close.
-        // Forget the handle to keep tasks alive without double-close.
-        std::mem::forget(handle);
 
+        // WsHandle owns WS background tasks; Live owns the handle and
+        // explicit close() consumes it via WsHandle::close.
         let principal = self.principal.read().await.clone();
         let sub_mgr = SubscriptionManager::new(principal, self.store.clone());
 
-        // Notification pump: Connection → validate → cursors → app events.
+        // Notification pump: Initiator → validate → cursors → app events.
         // Interleaved notifications never complete an RPC (core routes them
         // here, not to pending waiters).
         let pump_conn = conn.clone();
@@ -116,7 +117,7 @@ impl Client {
         });
 
         *self.live.write().await = Some(Live {
-            conn,
+            handle,
             connection_id,
             version,
             sub_mgr,
@@ -125,12 +126,12 @@ impl Client {
         Ok(())
     }
 
-    async fn live_conn(&self) -> Result<Connection, TinkleError> {
+    async fn live_conn(&self) -> Result<Initiator, TinkleError> {
         self.live
             .read()
             .await
             .as_ref()
-            .map(|l| l.conn.clone())
+            .map(|l| l.handle.connection().clone())
             .ok_or_else(|| TinkleError::NotConnected("call connect() first".into()))
     }
 
@@ -165,7 +166,7 @@ impl Client {
         method: &str,
         payload: Vec<u8>,
         timeout_ms: u32,
-        token: CancellationToken,
+        token: &CancelToken,
     ) -> Result<Vec<u8>, TinkleError> {
         let conn = self.live_conn().await?;
         conn.call_cancellable(method, payload, timeout_ms, token)
@@ -226,12 +227,18 @@ impl Client {
                 Some(own_cursor)
             },
             rooms: req_rooms,
-            watch_user_ids,
+            watch_user_ids: watch_user_ids.clone(),
         };
         let resp = self.realtime().subscribe_batched(req).await?;
         // `stream` is user:<verified-user-id> from authenticated identity.
         *self.principal.write().await = resp.stream.clone();
-        mgr.on_subscribed(rooms, vec![]).await;
+        mgr.on_subscribed(rooms.clone(), watch_user_ids.clone())
+            .await;
+        *self.interests.lock().await = Interests {
+            rooms,
+            watch_user_ids,
+            subscribed: true,
+        };
         Ok(resp)
     }
 
@@ -246,7 +253,7 @@ impl Client {
     /// except durable cursors + diagnostics.
     pub async fn close(&self) {
         if let Some(live) = self.live.write().await.take() {
-            live.conn.close().await;
+            live.handle.close().await;
             live.pump.abort();
             live.sub_mgr.on_disconnect().await;
         }
@@ -268,15 +275,18 @@ impl Client {
         loop {
             match self.connect().await {
                 Ok(()) => {
-                    // Re-establish interests explicitly; id space is fresh.
-                    let mgr_opt = self.live_mgr().await.ok();
-                    if let Some(mgr) = mgr_opt {
-                        let (rooms, watch) = mgr.interests_snapshot().await;
-                        if !rooms.is_empty() || !watch.is_empty() {
-                            if let Err(e) = self.subscribe(rooms, watch).await {
-                                tracing::debug!(error = %e, "resubscribe failed");
-                            }
-                        }
+                    // Re-establish Client-level interests explicitly; id
+                    // space is fresh and Live was discarded on close.
+                    // Check `subscribed` (not list emptiness) so the own-user
+                    // stream is restored even when rooms/watch are empty.
+                    let (subscribed, rooms, watch) = {
+                        let g = self.interests.lock().await;
+                        (g.subscribed, g.rooms.clone(), g.watch_user_ids.clone())
+                    };
+                    if subscribed {
+                        // Propagate resubscribe failures: reconnect succeeds
+                        // only once subscriptions are active again.
+                        self.subscribe(rooms, watch).await?;
                     }
                     return Ok(());
                 }
@@ -294,6 +304,8 @@ impl Client {
 
     /// Token expiry rotation: replace credential and re-handshake on a new
     /// transport (re-auth on the same connection is forbidden by default).
+    // TODO(runtime-acceptance-credential): UNAUTHENTICATED triggers a single
+    // rotation + reconnect; acceptance must assert no hot re-auth loop.
     pub async fn rotate_credential(&mut self, next: Credential) -> Result<(), TinkleError> {
         self.close().await;
         self.credential = next;
@@ -303,7 +315,7 @@ impl Client {
     /// Observability: outstanding RPC count.
     pub async fn pending_len(&self) -> usize {
         match self.live.read().await.as_ref() {
-            Some(l) => l.conn.pending_len(),
+            Some(l) => l.handle.connection().pending_len(),
             None => 0,
         }
     }

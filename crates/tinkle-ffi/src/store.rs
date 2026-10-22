@@ -14,6 +14,9 @@ use libtinkle::CursorStore as _;
 /// All params are owned (`String`/`u64`); references are unsupported in
 /// foreign trait methods. Every method returns `Result` so foreign
 /// failures convert into [`crate::FfiError`] instead of panicking.
+// TODO(runtime-acceptance-storage): GRDB/Room acceptance — principal
+// isolation between users, no credential persistence in the cursor store,
+// crash recovery replays from last persisted cursor without gaps.
 #[uniffi::export(with_foreign)]
 #[async_trait::async_trait]
 pub trait FfiCursorStore: Send + Sync {

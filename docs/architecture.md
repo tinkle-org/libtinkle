@@ -54,15 +54,21 @@ Network                     tokio-tungstenite + rustls (native) /
 
 ## Visibility (TDLib rule)
 
-`syntra-core`, `syntra-ws`, `tinkle-schema` are `publish = false`
-implementation details, and the whole workspace is git-only distributed
-(crates.io rejects our buf-registry BSR dependencies). Apps depend only
-on `libtinkle` (Rust),
+Workspace-owned crates (`tinkle-schema`, `libtinkle`, `tinkle-ffi`,
+`libtinkle-web`) are `publish = false` implementation details, and the
+whole workspace is git-only distributed (crates.io rejects our
+buf-registry BSR dependencies). `syntra-core`/`syntra-runtime`/`syntra-ws`
+are crates.io dependencies, not workspace crates covered by that statement.
+Apps depend only on `libtinkle` (Rust),
 `tinkle-ffi` (Swift/Kotlin via UniFFI), or `libtinkle-web` (browser).
 `Frame`, `Connection`, `RpcRequest`/`RpcResult`, `request_id`,
 `WsConfig`/`WsHandle`, `ALL_METHODS`, and validators never appear in
 public signatures; `TinkleError::Syntra` is mapped to `FfiError` at the
 FFI boundary.
+
+Syntra comes from crates.io (`syntra-core`/`syntra-runtime`/`syntra-ws`
+`=1.0.0-rc.1`); the local `crates/syntra-core` and `crates/syntra-ws`
+prototypes were removed.
 
 ## Data flow
 
