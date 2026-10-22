@@ -1,0 +1,125 @@
+crates/tinkle-ffi/src/error.rs
+  s_1e01e7070c2f86::t_619e4acdb35120 36-56
+crates/tinkle-ffi/Cargo.toml
+  s_1e01e7070c2f86::t_3cf45eb5b84465 20
+crates/libtinkle/src/client.rs
+  s_92d97a960123b5::t_3c78741b59ec1e 97
+  s_92d97a960123b5::t_41ce73342bbc9d 256
+  s_936049f11ddca0::t_0634adb8ba9a21 284
+  s_92d97a960123b5::t_9c93a9dc91eace 49-51
+  s_92d97a960123b5::t_c51c898e013880 19
+  s_936049f11ddca0::t_fa528402b3f094 235-236
+  s_92d97a960123b5::t_dde7308afc31a4 120,129,134
+  s_92d97a960123b5::t_9f0d49eb90a6d7 318
+  s_936049f11ddca0::t_fd8db0c23a7dd5 280-282,286-289
+  s_1e01e7070c2f86::t_4b8258277e29f9 307-308
+  s_92d97a960123b5::t_725f22a66476d9 230,237-241
+  s_92d97a960123b5::t_b51611d3b52898 29
+  s_92d97a960123b5::t_4ceee75df710e2 278-279,283,285
+  s_92d97a960123b5::t_ff7a2e6fe02ce8 62
+  s_92d97a960123b5::t_a849979ebd4cc9 169
+  s_92d97a960123b5::t_9852d95df66b67 101-102,106
+  s_92d97a960123b5::t_a528233c76a10b 26
+crates/libtinkle/tests/client_integration.rs
+  s_149fa12b8db582::t_0fe41eed44a411 86-89
+  s_936049f11ddca0::t_fa528402b3f094 142
+  s_936049f11ddca0::t_b9982cce674805 189,192
+  s_936049f11ddca0::t_c07e9682bce0bd 246
+  s_936049f11ddca0::t_badd5e196b9d6b 229
+  s_936049f11ddca0::t_32983066cf683b 276
+  s_149fa12b8db582::t_fa8e7a1f78de15 368,375
+  s_149fa12b8db582::t_8c2c0124e1bbf5 113
+  s_149fa12b8db582::t_0e7d9d4d5bce1b 85
+  s_149fa12b8db582::t_95a9bc705cb232 168,177
+  s_149fa12b8db582::t_beb182ca0414fd 301-303
+  s_149fa12b8db582::t_45aa2e02c2119c 67-70
+  s_149fa12b8db582::t_73c1e45d116b9d 15-17
+  s_149fa12b8db582::t_90470e3837d6da 152
+  s_936049f11ddca0::t_142826401b02ed 140
+crates/libtinkle/src/config.rs
+  s_92d97a960123b5::t_89544f84dd7897 11
+  s_92d97a960123b5::t_933a2c9a5037df 119-126
+crates/libtinkle/src/subscription.rs
+  s_92d97a960123b5::t_e8c7b1f6d9d279 65-68
+crates/tinkle-ffi/src/runtime.rs
+  s_1e01e7070c2f86::t_94a76b3522b6a2 30-32
+crates/tinkle-ffi/src/store.rs
+  s_1e01e7070c2f86::t_8502548a1ad6b2 17-19
+Cargo.toml
+  s_2e1b682bc16551::t_8a26b5beeaa449 36-38
+README.md
+  s_936049f11ddca0::t_24e0873469be33 175-180
+  s_936049f11ddca0::t_1560dd80501bfd 4-6
+  s_936049f11ddca0::t_a34d3b16a166e2 24
+  s_1e01e7070c2f86::t_37497369503f14 65-68
+  s_1e01e7070c2f86::t_50c7d4b0185388 97-100
+  s_936049f11ddca0::t_84a9a50cd9b709 34-37
+docs/platform-ios-android-wasm.md
+  s_1e01e7070c2f86::t_1eef6c346bbfa2 6-7
+  s_936049f11ddca0::t_f4a1eead19c48b 82
+docs/architecture.md
+  s_936049f11ddca0::t_b7f552aeeb5d97 57-62
+  s_1e01e7070c2f86::t_8a254abca654ee 69-72
+PROTO_PINNING.md
+  s_2e1b682bc16551::t_b8a339de379264 15-24
+  s_936049f11ddca0::t_9ce92bc510ff00 25-27
+  s_936049f11ddca0::t_65016b494ff115 52-56
+  s_936049f11ddca0::t_14bbfc7ae7f2ff 36
+  s_2e1b682bc16551::t_4d60a0d745474e 57,62-63
+crates/tinkle-ffi/src/client.rs
+  s_1e01e7070c2f86::t_89e47a6c83a3a9 222-224
+  s_1e01e7070c2f86::t_5006098e1185d6 183-185
+  s_1e01e7070c2f86::t_7a212c7a4f2057 213-215
+Cargo.lock
+  s_1e01e7070c2f86::t_2736b926dc3cd2 667,671,844-853,861-874,896,1031,1322-1324,1328,1334-1353,1356-1358,1362-1365,1367,1374,1428,1440,1452
+crates/libtinkle/Cargo.toml
+  s_2e1b682bc16551::t_e8dfd17881e003 15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5f99a75d81ea30c961d78daac8af20dfce981054",
+  "prompts": {},
+  "sessions": {
+    "s_149fa12b8db582": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e9a42b687ffeizk1FN9uMUSl2t",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_1e01e7070c2f86": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e9a42b674ffeD9r6WCgNmennbu",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_2e1b682bc16551": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e9a462c81ffegE3CrjEpG14XL3",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_92d97a960123b5": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e9a449db1ffecr1kV8FWspxRxQ",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_936049f11ddca0": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e9a51041fffesLKx1ov63XBe4K",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    }
+  }
+}
