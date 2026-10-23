@@ -29,3 +29,9 @@ pub use cursor::{CursorStore, InMemoryCursorStore};
 pub use errors::TinkleError;
 pub use services::{Auth, Messages, Realtime};
 pub use subscription::RealtimeEvent;
+/// Re-exported cancellation token for [`Client::call_raw_cancellable`].
+///
+/// `Client::call_raw_cancellable` takes `&syntra_runtime::CancelToken`;
+/// apps can name the type through this re-export instead of depending on
+/// `syntra-runtime` directly.
+pub use syntra_runtime::CancelToken;

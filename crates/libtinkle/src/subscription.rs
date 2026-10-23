@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, Mutex};
 use tracing::debug;
 
 use tinkle_schema::realtime::{CursorDecision, StreamCursors, ValidatedNotification};
@@ -50,12 +50,25 @@ pub enum RealtimeEvent {
     ResetRequired { stream: String, head: Option<u64> },
 }
 
+/// Principal-scoped cursor state guarded by a single synchronization
+/// barrier. `principal` and `cursors` must always be observed and mutated
+/// together: classifying a notification with one principal's cursors while
+/// persisting under another drops or duplicates checkpoints. A single
+/// `Mutex` ensures `set_principal` atomically swaps both, and every
+/// reader commits/decides under the same lock scope. Store I/O stays
+/// outside the lock (snapshotted principal + version check) so a slow
+/// store never blocks the notification pump.
+#[derive(Debug, Default)]
+struct PrincipalState {
+    principal: String,
+    cursors: StreamCursors,
+}
+
 /// Manages one principal's realtime interests + cursors (crate-internal;
 /// apps observe [`RealtimeEvent`] via [`crate::Client::next_event`]).
 pub(crate) struct SubscriptionManager {
-    principal: RwLock<String>,
+    state: Mutex<PrincipalState>,
     store: Arc<dyn CursorStore>,
-    cursors: Mutex<StreamCursors>,
     event_tx: mpsc::Sender<RealtimeEvent>,
     event_rx: Mutex<mpsc::Receiver<RealtimeEvent>>,
     interests: Mutex<Interests>,
@@ -72,9 +85,11 @@ impl SubscriptionManager {
     pub(crate) fn new(principal: impl Into<String>, store: Arc<dyn CursorStore>) -> Arc<Self> {
         let (tx, rx) = mpsc::channel(256);
         Arc::new(Self {
-            principal: RwLock::new(principal.into()),
+            state: Mutex::new(PrincipalState {
+                principal: principal.into(),
+                cursors: StreamCursors::new(),
+            }),
             store,
-            cursors: Mutex::new(StreamCursors::new()),
             event_tx: tx,
             event_rx: Mutex::new(rx),
             interests: Mutex::new(Interests::default()),
@@ -86,15 +101,17 @@ impl SubscriptionManager {
     /// this same principal rather than the initial `unknown` value.
     /// Clears in-memory cursors only when the principal actually changes;
     /// same-principal updates preserve existing cursors.
+    ///
+    /// Holds the single `state` barrier across the compare-and-swap so no
+    /// in-flight `handle_batch`/`hydrate_from_store`/reset can classify
+    /// with the old scope and persist with the new one (or vice versa).
     pub(crate) async fn set_principal(&self, principal: String) {
-        {
-            let mut current = self.principal.write().await;
-            if *current == principal {
-                return;
-            }
-            *current = principal;
+        let mut state = self.state.lock().await;
+        if state.principal == principal {
+            return;
         }
-        *self.cursors.lock().await = StreamCursors::new();
+        state.principal = principal;
+        state.cursors = StreamCursors::new();
     }
 
     /// Record interests after a successful `SubscribeBatched`.
@@ -107,14 +124,33 @@ impl SubscriptionManager {
 
     /// Hydrate memory cursors from durable storage (call after connect,
     /// before resubscribe). Absent cursors mean zero, never start-live.
+    ///
+    /// Store reads run outside the barrier; the install re-acquires it
+    /// and is discarded when the principal rotated mid-hydrate, so a
+    /// stale scope never clobbers the new scope. Installs only move
+    /// forward (never overwrite a newer live commit that landed while
+    /// loads were in flight).
     pub(crate) async fn hydrate_from_store(&self, streams: &[String]) -> Result<(), TinkleError> {
-        let principal = self.principal.read().await.clone();
-        let mut curs = self.cursors.lock().await;
+        let principal = self.state.lock().await.principal.clone();
+        let mut loaded: Vec<(String, u64)> = Vec::with_capacity(streams.len());
         for s in streams {
-            match self.store.load(&principal, s).await? {
-                Some(v) => curs.hydrate(s, v),
-                None => curs.hydrate(s, 0),
+            let v = self.store.load(&principal, s).await?.unwrap_or(0);
+            loaded.push((s.clone(), v));
+        }
+        let mut state = self.state.lock().await;
+        if state.principal != principal {
+            // Principal rotated during the loads; stale values belong to
+            // the old scope and must not be installed into the new one.
+            return Ok(());
+        }
+        for (s, v) in loaded {
+            if v > state.cursors.get(&s) {
+                state.cursors.hydrate(&s, v);
+            } else if v == 0 && state.cursors.get(&s) == 0 {
+                state.cursors.hydrate(&s, 0);
             }
+            // v <= applied (including v == 0 with applied > 0): keep the
+            // newer live value; never move the checkpoint backward.
         }
         Ok(())
     }
@@ -129,11 +165,14 @@ impl SubscriptionManager {
                 let _ = self.event_tx.try_send(RealtimeEvent::Presence(p));
             }
             ValidatedNotification::ResetRequired { stream, head } => {
-                {
-                    let mut c = self.cursors.lock().await;
-                    c.on_reset(&stream);
-                }
-                let principal = self.principal.read().await.clone();
+                // Atomically clear memory + snapshot the owning principal
+                // under one barrier; durable removal runs outside the lock
+                // with that snapshot so it cannot hit the wrong scope.
+                let principal = {
+                    let mut state = self.state.lock().await;
+                    state.cursors.on_reset(&stream);
+                    state.principal.clone()
+                };
                 let _ = self.store.remove_stream(&principal, &stream).await;
                 let _ = self
                     .event_tx
@@ -159,26 +198,52 @@ impl SubscriptionManager {
             events: b.events.clone(),
             final_cursor: cursor,
         };
-        let decision = self.cursors.lock().await.decision(&stream, cursor);
-        match decision {
-            CursorDecision::Duplicate => {
+        // Single-barrier classify + commit: decision, memory commit, and
+        // principal snapshot happen under one lock acquisition so a
+        // concurrent `set_principal` cannot split classification (old
+        // scope) from persistence (new scope). The durable `save` runs
+        // after the lock is released, using the snapshot that matches the
+        // commit — slow store I/O never blocks the pump while holding the
+        // barrier.
+        enum Action {
+            Duplicate,
+            Next(String),
+            Gap { expected: u64 },
+            Stale { applied: u64 },
+        }
+        let action = {
+            let mut state = self.state.lock().await;
+            match state.cursors.decision(&stream, cursor) {
+                CursorDecision::Duplicate => Action::Duplicate,
+                CursorDecision::Next => {
+                    state.cursors.commit(&stream, cursor)?;
+                    Action::Next(state.principal.clone())
+                }
+                CursorDecision::Gap => Action::Gap {
+                    expected: state.cursors.get(&stream).saturating_add(1),
+                },
+                CursorDecision::Stale => Action::Stale {
+                    applied: state.cursors.get(&stream),
+                },
+            }
+        };
+        match action {
+            Action::Duplicate => {
                 debug!(%stream, cursor, "duplicate batch ignored");
                 let _ = self
                     .event_tx
                     .try_send(RealtimeEvent::Duplicate { stream, cursor });
                 Ok(())
             }
-            CursorDecision::Next => {
+            Action::Next(principal) => {
                 // Atomically commit memory + durable store. The caller must
                 // have applied all required effects + refreshes before this
                 // checkpoint; receipt alone is not commit. Here we persist
                 // the checkpoint; app effects are emitted with the event for
                 // the caller to apply atomically where possible.
-                {
-                    let mut c = self.cursors.lock().await;
-                    c.commit(&stream, cursor)?;
-                }
-                let principal = self.principal.read().await.clone();
+                // Memory already committed under the same barrier as the
+                // snapshot; `principal` is that commit's owning scope even
+                // if a rotation landed in between.
                 self.store.save(&principal, &stream, cursor).await?;
                 let _ = self.event_tx.try_send(RealtimeEvent::BatchApplied {
                     stream,
@@ -187,8 +252,7 @@ impl SubscriptionManager {
                 });
                 Ok(())
             }
-            CursorDecision::Gap => {
-                let expected = self.cursors.lock().await.get(&stream).saturating_add(1);
+            Action::Gap { expected } => {
                 debug!(%stream, expected, got = cursor, "gap: progress stopped");
                 let _ = self.event_tx.try_send(RealtimeEvent::Gap {
                     stream,
@@ -205,8 +269,7 @@ impl SubscriptionManager {
                     },
                 ))
             }
-            CursorDecision::Stale => {
-                let applied = self.cursors.lock().await.get(&stream);
+            Action::Stale { applied } => {
                 debug!(%stream, applied, got = cursor, "stale batch ignored");
                 let _ = self.event_tx.try_send(RealtimeEvent::Stale {
                     stream,

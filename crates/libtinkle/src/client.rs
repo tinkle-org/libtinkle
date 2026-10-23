@@ -311,66 +311,70 @@ impl Client {
                         (g.subscribed, g.rooms.clone(), g.watch_user_ids.clone())
                     };
                     if subscribed {
-                        // Identify the authenticated principal on the fresh
-                        // transport before reusing any stored cursors. The
-                        // credential may now map to a different account
-                        // (rotation); old room afters must not leak into the
-                        // new principal's subscription.
                         let previous = self.principal().await;
-                        let probe = tinkle_schema::proto::SubscribeRequest {
-                            own_cursor: None,
-                            rooms: Vec::new(),
-                            watch_user_ids: Vec::new(),
-                        };
-                        let authenticated = match self.realtime().subscribe_batched(probe).await {
-                            Ok(resp) => resp.stream,
-                            Err(e) => {
-                                self.close().await;
-                                return Err(e);
-                            }
-                        };
-                        *self.principal.write().await = authenticated.clone();
-                        if let Ok(mgr) = self.live_mgr().await {
-                            mgr.set_principal(authenticated.clone()).await;
-                        }
-                        // Retain previous room cursors only when the
-                        // principal is unchanged; discard them after rotation
-                        // to a different principal so `subscribe` cannot reuse
-                        // another account's checkpoints via max(old, stored).
-                        let rooms = if authenticated != previous {
-                            rooms.into_iter().map(|(id, _)| (id, 0)).collect::<Vec<_>>()
-                        } else {
-                            rooms
-                        };
-                        // Refresh each room's after-cursor from durable
-                        // storage under the authenticated principal; use the
-                        // stored cursor only when it is newer than the
-                        // caller's value. Preserve the original when no
-                        // stored cursor exists or it is not newer.
-                        let mut refreshed = Vec::with_capacity(rooms.len());
-                        for (room_id, after) in rooms {
-                            let stream = format!("room:{room_id}");
-                            match self.store.load(&authenticated, &stream).await {
-                                Ok(Some(stored)) if stored > after => {
-                                    refreshed.push((room_id, stored));
-                                }
-                                Ok(_) => {
-                                    refreshed.push((room_id, after));
-                                }
+                        if previous == "unknown" {
+                            // Principal not yet known: probe once to learn it
+                            // before reusing stored cursors. `subscribe()`
+                            // below then loads max(after, stored) under the
+                            // authenticated principal (no separate refresh
+                            // loop needed). 2 RPCs, unavoidable without a
+                            // separate identity RPC.
+                            let probe = tinkle_schema::proto::SubscribeRequest {
+                                own_cursor: None,
+                                rooms: Vec::new(),
+                                watch_user_ids: Vec::new(),
+                            };
+                            let authenticated = match self.realtime().subscribe_batched(probe).await
+                            {
+                                Ok(resp) => resp.stream,
                                 Err(e) => {
                                     self.close().await;
                                     return Err(e);
                                 }
+                            };
+                            *self.principal.write().await = authenticated.clone();
+                            if let Ok(mgr) = self.live_mgr().await {
+                                mgr.set_principal(authenticated.clone()).await;
                             }
-                        }
-                        // A subscription failure after connecting must not
-                        // leave the new connection half-open: close/reset
-                        // before propagating the original error so
-                        // is_connected() no longer reports success and a
-                        // later connect() can restore subscriptions.
-                        if let Err(e) = self.subscribe(refreshed, watch).await {
-                            self.close().await;
-                            return Err(e);
+                            // A subscription failure after connecting must not
+                            // leave the new connection half-open: close/reset
+                            // before propagating the original error so
+                            // is_connected() no longer reports success and a
+                            // later connect() can restore subscriptions.
+                            if let Err(e) = self.subscribe(rooms, watch).await {
+                                self.close().await;
+                                return Err(e);
+                            }
+                        } else {
+                            // Common case: principal already known. Single RPC
+                            // via `subscribe()`, which loads max(after,
+                            // stored) under the known principal. If the
+                            // credential now maps to a different account, the
+                            // returned stream differs and we correct below.
+                            let original_rooms = rooms.clone();
+                            let watch_clone = watch.clone();
+                            let resp = match self.subscribe(rooms, watch).await {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    self.close().await;
+                                    return Err(e);
+                                }
+                            };
+                            if resp.stream != previous {
+                                // Rotation: the first subscribe may have sent
+                                // old-principal checkpoints. Re-subscribe
+                                // zeroed so the new principal starts from its
+                                // own durable checkpoints (subscribe()
+                                // recomputes max(0, stored_under_new)).
+                                let zeroed = original_rooms
+                                    .into_iter()
+                                    .map(|(id, _)| (id, 0))
+                                    .collect::<Vec<_>>();
+                                if let Err(e) = self.subscribe(zeroed, watch_clone).await {
+                                    self.close().await;
+                                    return Err(e);
+                                }
+                            }
                         }
                     }
                     return Ok(());
@@ -394,9 +398,15 @@ impl Client {
     pub async fn rotate_credential(&mut self, next: Credential) -> Result<(), TinkleError> {
         self.close().await;
         self.credential = next;
-        // Reset cursor scope so the next subscribe re-learns the authenticated
-        // principal instead of reusing the previous account's checkpoints.
-        *self.principal.write().await = "unknown".to_string();
+        // Keep the previous principal until the next subscribe learns the new
+        // one via `SubscribeResponse.stream`. Resetting to "unknown" would make
+        // the next reconnect's `authenticated != previous` check always true
+        // and discard room cursors even for the same account. Instead, the
+        // next `subscribe()`/`reconnect()` compares stored (previous) vs new
+        // and discards only on an actual principal change, preserving cursors
+        // when `authenticated == previous`. This works even though rotation
+        // itself does close+connect without resubscribe: interests survive and
+        // the follow-up resubscribe performs the comparison.
         self.connect().await
     }
 

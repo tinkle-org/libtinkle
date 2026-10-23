@@ -31,10 +31,14 @@ libtinkle/
   PROTO_PINNING.md            BSR crate versions + upgrade
 ```
 
-Apps never depend on the Syntra crates (`syntra-core`/`syntra-runtime`/`syntra-ws`
+Apps never depend on the Syntra crates (`syntra-core`/`syntra-ws`
 from crates.io) or `tinkle-schema` directly — same rule as TDLib, where
 MTProto internals never leak and clients speak only the stable `Client` /
-UniFFI / web surface.
+UniFFI / web surface. The one exception is cancellation:
+`Client::call_raw_cancellable` takes `&syntra_runtime::CancelToken`
+(re-exported as `libtinkle::CancelToken`, so apps need not add a direct
+`syntra-runtime` dependency), and `TinkleError::Syntra` transparently
+wraps `syntra_core::error::SyntraError`.
 
 ## Quick start
 
@@ -139,7 +143,13 @@ tokio-tungstenite + rustls; browser uses `ws_stream_wasm` with identical
 protocol logic. No browser-only APIs in native code; no `Authorization`
 headers on browser WebSockets — authentication uses the approved Syntra
 handshake. Async runtime and cancellation cross platform boundaries via
-`tokio` (native) / `wasm-bindgen-futures` + `CancellationToken` (all).
+`tokio` (native) / `wasm-bindgen-futures` + `syntra_runtime::CancelToken`
+(re-exported as `libtinkle::CancelToken`) on all targets. Mobile
+bridging: Swift `Task.cancel()` / Kotlin coroutine cancellation maps to
+`CancelToken::cancel()` — the platform adapter owns a `CancelToken` per
+cancellable call and invokes `cancel()` when the Swift task or Kotlin
+coroutine is cancelled, which sends best-effort `Cancel{}` for the
+allocated request id (completion wins races).
 
 ## Security (Phase 7)
 

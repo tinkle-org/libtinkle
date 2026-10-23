@@ -14,8 +14,14 @@
 //! - Client registry: keep connected `Client`s in a global map (e.g.
 //!   `HashMap<client_id, Client>`) so JS can call/subscribe/close across
 //!   invocations instead of one-shot connect.
-//! - `ws_stream_wasm` wiring: complete `syntra-ws::wasm::connect`
-//!   (`WsMeta::connect`, binary-only pumps via `wasm-bindgen-futures`).
+//!
+//! Transport note: the published `syntra-ws =1.0.0-rc.1` `wasm` adapter is
+//! fully implemented (`ws_stream_wasm::WsMeta::connect`, binary-only pumps
+//! via `wasm-bindgen-futures::spawn_local`, handshake). WASM is still
+//! compile-verified only for `libtinkle`: `Client::connect` spawns its
+//! notification pump with `tokio::spawn` (`crates/libtinkle/src/client.rs`),
+//! which has no browser runtime driver yet (browser needs `spawn_local`
+//! adaptation). Browser runtime smoke tests remain separate.
 
 use libtinkle::{Client, ClientConfig, Credential, InMemoryCursorStore};
 use wasm_bindgen::prelude::*;
@@ -23,10 +29,13 @@ use wasm_bindgen::prelude::*;
 /// Minimal proof: construct a `Client` with an in-memory cursor store,
 /// run the Syntra handshake over the browser WebSocket, and resolve.
 ///
-/// On wasm32-unknown-unknown `syntra-ws::wasm::connect` is currently a stub
-/// returning a descriptive `TransportError` at runtime — that is expected
-/// until `ws_stream_wasm` wiring lands. This function must still COMPILE for
-/// wasm32-unknown-unknown; runtime failure is acceptable for now.
+/// Transport uses the published `syntra-ws::wasm::connect`
+/// (`ws_stream_wasm::WsMeta::connect`, fully implemented in
+/// `syntra-ws =1.0.0-rc.1`). This function must COMPILE for
+/// wasm32-unknown-unknown; browser runtime acceptance is NOT established
+/// here because `libtinkle::Client` still drives its notification pump
+/// with `tokio::spawn` instead of `spawn_local` — browser runtime smoke
+/// tests remain separate.
 ///
 /// `url` must be `wss://host/syntra/v1/ws` (production) or an explicitly
 /// allowed insecure dev URL. `token` is presented only as
@@ -43,7 +52,7 @@ pub async fn tinkle_connect(url: String, token: String) -> Result<(), JsValue> {
         .connect()
         .await
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    // Proof only: connection established (or stub error propagated above).
+    // Proof only: connection established.
     // Intentionally drop here; follow-up will retain the client for
     // subsequent RPC/subscribe calls.
     Ok(())

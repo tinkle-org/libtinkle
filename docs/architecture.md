@@ -63,8 +63,13 @@ Apps depend only on `libtinkle` (Rust),
 `tinkle-ffi` (Swift/Kotlin via UniFFI), or `libtinkle-web` (browser).
 `Frame`, `Connection`, `RpcRequest`/`RpcResult`, `request_id`,
 `WsConfig`/`WsHandle`, `ALL_METHODS`, and validators never appear in
-public signatures; `TinkleError::Syntra` is mapped to `FfiError` at the
-FFI boundary.
+public signatures. Two deliberate exceptions: `Client::call_raw_cancellable`
+publicly takes `&syntra_runtime::CancelToken` (re-exported as
+`libtinkle::CancelToken`, so apps need not add a direct `syntra-runtime`
+dependency — `syntra-runtime` remains a public dependency of `libtinkle`
+for cancellable calls), and `TinkleError::Syntra` transparently wraps
+`syntra_core::error::SyntraError` (mapped to `FfiError` at the FFI
+boundary).
 
 Syntra comes from crates.io (`syntra-core`/`syntra-runtime`/`syntra-ws`
 `=1.0.0-rc.1`); the local `crates/syntra-core` and `crates/syntra-ws`
