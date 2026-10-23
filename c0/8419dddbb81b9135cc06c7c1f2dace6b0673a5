@@ -1,0 +1,78 @@
+bindings/kotlin/com/tinkle/sdk/tinkle_ffi.kt
+  s_4cf81a9d739bf2::t_301251f3a3909f 950
+rust-toolchain.toml
+  s_4cf81a9d739bf2::t_facd4b0762e960 5-14
+bindings/swift/TinkleSDK.swift
+  s_4cf81a9d739bf2::t_60dc4c0d02d3fe 243
+  s_4cf81a9d739bf2::t_301251f3a3909f 2223
+  s_4cf81a9d739bf2::t_f88bfc185be7e5 456
+scripts/build-android.sh
+  s_4cf81a9d739bf2::t_f60d4b4ad8afed 146-148
+scripts/sdk-release.py
+  s_4cf81a9d739bf2::t_a95a07971d698b 70,72
+  s_4cf81a9d739bf2::t_294a3f146f71fc 385-387,391
+  s_4cf81a9d739bf2::t_dd7b17dc825499 65-69,71,73-85
+  s_4cf81a9d739bf2::t_54ceb608f4d138 388-390
+  s_4cf81a9d739bf2::t_c32774bc9205a6 257-258
+  s_4cf81a9d739bf2::t_be93f74dacdb14 411-413
+  s_4cf81a9d739bf2::t_9e89c782af49a2 442-444
+scripts/verify-android.sh
+  s_4cf81a9d739bf2::t_b504f695218ec7 23-24
+crates/tinkle-ffi/src/client.rs
+  s_4cf81a9d739bf2::t_99d31a26cbb3d4 243-245
+.github/dependabot.yml
+  s_4cf81a9d739bf2::t_9755c2c96fe22d 2-4
+.github/workflows/release-plz.yml
+  s_4cf81a9d739bf2::t_662de9866c6186 44-50
+scripts/generate-bindings.sh
+  s_4cf81a9d739bf2::t_77310765bc9d07 46-49,51-73
+crates/tinkle-ffi/src/error.rs
+  s_4cf81a9d739bf2::t_1792fec46c7a9f 79-82
+  s_4cf81a9d739bf2::t_aa34506015ddb3 1,3-6
+.github/workflows/ci.yml
+  s_9fae1eea669ea8::t_fd52c1ef9345f3 15-28,38,43-57,59-62
+  s_9fae1eea669ea8::t_79e24b5e492483 77-82
+tests/test_sdk_release.py
+  s_4cf81a9d739bf2::t_a71635bbd8b12b 33-35
+  s_4cf81a9d739bf2::t_021fa510ebd66a 257,260-263,266
+  s_9fae1eea669ea8::t_c9695865795396 409-410,414-415
+  s_4cf81a9d739bf2::t_cc37c7b9063b6e 236-237
+  s_9fae1eea669ea8::t_fcf8372cc1883f 393-395
+  s_9fae1eea669ea8::t_c50acd87339fa3 376-378
+.github/pull_request_template.md
+  s_4cf81a9d739bf2::t_ef365b38527be0 76-80,84-88
+scripts/build-ios.sh
+  s_4cf81a9d739bf2::t_9a27720eb925dc 76-79,83
+scripts/sdk-ci.py
+  s_9fae1eea669ea8::t_46d78fccf1850b 182-184,186
+  s_9fae1eea669ea8::t_ee67c175a24740 61-77
+  s_4cf81a9d739bf2::t_85685f326a958a 194-195
+  s_4cf81a9d739bf2::t_95545d845bf25b 291-295
+  s_9fae1eea669ea8::t_457e096b126852 114-117
+  s_9fae1eea669ea8::t_6543d2c16cd1af 303-306
+  s_9fae1eea669ea8::t_eb5cc3c1e5d835 144-150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c08419dddbb81b9135cc06c7c1f2dace6b0673a5",
+  "prompts": {},
+  "sessions": {
+    "s_4cf81a9d739bf2": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e98c5faf3ffe4xd5druveACZ0H",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_9fae1eea669ea8": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e98bb5ea3ffeVJ175L5V1zMDF7",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    }
+  }
+}
