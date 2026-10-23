@@ -1,0 +1,54 @@
+.github/workflows/native-sdk.yml
+  s_043b74c39549dd::t_010b463088ac35 16,19,34,36,38,40,94,97-98,101
+  s_043b74c39549dd::t_ff82c352bc99df 108-110,116-117,190,197-198
+scripts/generate-bindings.sh
+  s_6fbfa15362010a::t_df6abb5c187c81 34-49,65,68-69,87-88
+tests/test_binding_patches.py
+  s_6fbfa15362010a::t_fb2ce1f79d64f2 1-113,115-154
+  s_6fbfa15362010a::t_a3f5fddfcfc63d 114
+scripts/sdk-ci.py
+  s_043b74c39549dd::t_5da34d00e1ebcf 119
+  s_043b74c39549dd::t_010b463088ac35 9,23-107,166,203,232,348-351,405-406,434-436
+  s_043b74c39549dd::t_ff82c352bc99df 112-118,120-130,213,403-404,432-433
+tests/test_sdk_release.py
+  s_043b74c39549dd::t_010b463088ac35 377,393,412-432
+.github/workflows/SDK-DISTRIBUTION.md
+  s_043b74c39549dd::t_2b7e15b6dca953 198-230
+  s_043b74c39549dd::t_d73da3e2aeaadf 143-144,146
+  s_043b74c39549dd::t_ff82c352bc99df 232-239
+  s_043b74c39549dd::t_7a5b9a706db37e 231
+tests/test_sdk_consumers.py
+  s_043b74c39549dd::t_2b7e15b6dca953 1-13,15-147,186-188
+  s_043b74c39549dd::t_0d8c4389035366 14
+  s_043b74c39549dd::t_5da34d00e1ebcf 148-185
+.github/pull_request_template.md
+  s_043b74c39549dd::t_ff82c352bc99df 78,86
+.github/workflows/ci.yml
+  s_043b74c39549dd::t_010b463088ac35 60
+scripts/sdk-consumers.json
+  s_043b74c39549dd::t_010b463088ac35 1-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fc3f07ebebc852cd067cd17535c63ef48480dede",
+  "prompts": {},
+  "sessions": {
+    "s_043b74c39549dd": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e98ab200affeDZZhpV5a7FRQfh",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_6fbfa15362010a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e96bc8d0affeHQ1HsOei0QiZdG",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    }
+  }
+}
