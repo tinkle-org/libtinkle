@@ -1,0 +1,19 @@
+crates/libtinkle/src/subscription.rs
+  s_c22811b50f1d08::t_04057b3c337132 15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "42042ccda5bc4d21b857162816717e7651496f2e",
+  "prompts": {},
+  "sessions": {
+    "s_c22811b50f1d08": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e99e3433effesKZG576X8UPUrD",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    }
+  }
+}
