@@ -664,10 +664,11 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures-util",
- "prost",
+ "prost 0.14.4",
  "prost-types",
  "rand 0.8.8",
  "syntra-core",
+ "syntra-runtime",
  "syntra-ws",
  "thiserror",
  "tinkle-schema",
@@ -842,12 +843,35 @@ dependencies = [
 
 [[package]]
 name = "prost"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5"
+dependencies = [
+ "bytes",
+ "prost-derive 0.13.5",
+]
+
+[[package]]
+name = "prost"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "528ac67416ff8646872a3c02cad9cc4ee5dc9f9540c9b10771855c95cb2e5ae1"
 dependencies = [
  "bytes",
- "prost-derive",
+ "prost-derive 0.14.4",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
+dependencies = [
+ "anyhow",
+ "itertools",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -869,7 +893,7 @@ version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f94967dc7688f3054c7fac87473ffae4cc4c3904800e2d9f5b857246d8963b0a"
 dependencies = [
- "prost",
+ "prost 0.14.4",
 ]
 
 [[package]]
@@ -1004,6 +1028,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "once_cell",
+ "ring",
  "rustls-pki-types",
  "rustls-webpki",
  "subtle",
@@ -1294,34 +1319,59 @@ dependencies = [
 
 [[package]]
 name = "syntra-core"
-version = "0.1.0"
+version = "1.0.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8ce24eb1f920f576bfb68ec27575fe104977ac8f802d97a799187b60e1bbad1"
 dependencies = [
  "bytes",
- "futures-channel",
  "futures-util",
- "prost",
- "prost-types",
+ "prost 0.13.5",
  "thiserror",
- "tinklecorp_syntra_community_neoeinstein-prost",
  "tokio",
- "tokio-util",
  "tracing",
 ]
 
 [[package]]
-name = "syntra-ws"
-version = "0.1.0"
+name = "syntra-runtime"
+version = "1.0.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8ebb6cb085483a14f0f4b096ea20abf41da681d8c1dd69e86eba4fae4206821"
 dependencies = [
  "bytes",
  "futures-util",
- "prost",
+ "getrandom 0.2.17",
+ "getrandom 0.3.4",
+ "js-sys",
+ "prost 0.13.5",
  "syntra-core",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "syntra-ws"
+version = "1.0.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5a1a079b537f59d394cd0b370682635bd254c0af59f8cd9626e8debbffbabde"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "js-sys",
+ "prost 0.13.5",
+ "rustls",
+ "rustls-native-certs",
+ "syntra-core",
+ "syntra-runtime",
  "thiserror",
  "tokio",
  "tokio-tungstenite",
  "tracing",
  "tungstenite",
  "url",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
  "ws_stream_wasm",
 ]
@@ -1375,6 +1425,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "libtinkle",
+ "syntra-core",
  "thiserror",
  "tinkle-schema",
  "tokio",
@@ -1386,20 +1437,10 @@ name = "tinkle-schema"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "prost",
+ "prost 0.14.4",
  "prost-types",
  "thiserror",
  "tinklecorp_tinkle-proto_community_neoeinstein-prost",
-]
-
-[[package]]
-name = "tinklecorp_syntra_community_neoeinstein-prost"
-version = "0.5.0-20261020002338-abd0f913f41c.2"
-source = "sparse+https://buf.build/gen/cargo/public/"
-checksum = "d0bc4e45d70de2ddb0bb5479a89b662e2e9f34f31daef197b4added89806e951"
-dependencies = [
- "prost",
- "prost-types",
 ]
 
 [[package]]
@@ -1408,7 +1449,7 @@ version = "0.5.0-20261020173106-64b4706c3194.2"
 source = "sparse+https://buf.build/gen/cargo/public/"
 checksum = "aa192962dfbb5a50135ca4a6414be5d4b55998418a4424d6e25e8c1e62299e51"
 dependencies = [
- "prost",
+ "prost 0.14.4",
  "prost-types",
 ]
 

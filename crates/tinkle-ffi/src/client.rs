@@ -62,6 +62,11 @@ pub enum FfiRealtimeEvent {
         stream: String,
         head: Option<u64>,
     },
+    CheckpointFailed {
+        stream: String,
+        cursor: u64,
+        error: String,
+    },
 }
 
 impl From<libtinkle::RealtimeEvent> for FfiRealtimeEvent {
@@ -105,6 +110,15 @@ impl From<libtinkle::RealtimeEvent> for FfiRealtimeEvent {
             libtinkle::RealtimeEvent::ResetRequired { stream, head } => {
                 Self::ResetRequired { stream, head }
             }
+            libtinkle::RealtimeEvent::CheckpointFailed {
+                stream,
+                cursor,
+                error,
+            } => Self::CheckpointFailed {
+                stream,
+                cursor,
+                error,
+            },
         }
     }
 }
@@ -180,6 +194,9 @@ impl TinkleClient {
 
     /// Subscribe with durable cursor recovery. Returns the confirmation
     /// (interests registered, not replay completion).
+    // TODO(runtime-acceptance-resubscribe): acceptance must assert interests
+    // survive reconnect (fix already hoisted interests to Client; watch ids
+    // preserved). Test: subscribe, reconnect, verify resubscribe replays rooms+watch.
     pub async fn subscribe(
         &self,
         rooms: Vec<RoomSub>,
@@ -207,12 +224,18 @@ impl TinkleClient {
     }
 
     /// Background suspension: graceful close, durable cursors kept.
+    // TODO(runtime-acceptance-ios): Swift background/foreground acceptance —
+    // assert suspend() on backgrounding (no background WS held), then
+    // reconnect+resubscribe on foreground restores events without gaps.
     pub async fn suspend(&self) {
         self.inner.suspend().await;
     }
 
     /// Reconnect + re-handshake + explicit resubscribe from persisted
     /// cursors (network change / wake from push).
+    // TODO(runtime-acceptance-android): FCM/Doze acceptance — wake triggers
+    // fresh handshake, UNAVAILABLE surfaces unknown-outcome (never blindly
+    // retried for non-idempotent ops), WorkManager defers sync under Doze.
     pub async fn reconnect(&self) -> Result<(), FfiError> {
         self.inner.reconnect().await.map_err(FfiError::from)
     }

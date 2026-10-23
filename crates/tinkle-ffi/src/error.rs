@@ -32,13 +32,28 @@ impl From<libtinkle::TinkleError> for FfiError {
     fn from(e: libtinkle::TinkleError) -> Self {
         match e {
             libtinkle::TinkleError::Syntra(s) => {
-                // Classify without naming Syntra types: `code()` returns a
-                // code whose Debug rendering is the stable variant name.
                 let msg = s.to_string();
-                match format!("{:?}", s.code()).as_str() {
-                    "Cancelled" => Self::Cancelled,
-                    "DeadlineExceeded" => Self::Timeout,
-                    _ => Self::Network(msg),
+                // TODO(runtime-acceptance-errors): Unauthenticated currently maps to
+                // Network; add FfiError::AuthExpired variant once mobile auth UX is
+                // defined, plus a 17-code matrix test covering every ErrorCode.
+                match s.code() {
+                    syntra_core::ErrorCode::Cancelled => Self::Cancelled,
+                    syntra_core::ErrorCode::DeadlineExceeded => Self::Timeout,
+                    syntra_core::ErrorCode::Unspecified
+                    | syntra_core::ErrorCode::Unknown
+                    | syntra_core::ErrorCode::InvalidArgument
+                    | syntra_core::ErrorCode::NotFound
+                    | syntra_core::ErrorCode::AlreadyExists
+                    | syntra_core::ErrorCode::PermissionDenied
+                    | syntra_core::ErrorCode::ResourceExhausted
+                    | syntra_core::ErrorCode::FailedPrecondition
+                    | syntra_core::ErrorCode::Aborted
+                    | syntra_core::ErrorCode::OutOfRange
+                    | syntra_core::ErrorCode::Unimplemented
+                    | syntra_core::ErrorCode::Internal
+                    | syntra_core::ErrorCode::Unavailable
+                    | syntra_core::ErrorCode::DataLoss
+                    | syntra_core::ErrorCode::Unauthenticated => Self::Network(msg),
                 }
             }
             libtinkle::TinkleError::NotConnected(_) => Self::NotConnected,

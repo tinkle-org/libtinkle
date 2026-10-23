@@ -3,7 +3,8 @@
 The same logical client runtime (`libtinkle::Client` + `syntra-core` +
 `tinkle-schema`) is reused on all targets. Platform code wraps the async
 core; it never reimplements framing, handshake, correlation, or cursor
-logic.
+logic. Syntra comes from crates.io (`syntra-core`/`syntra-runtime`/
+`syntra-ws` `=1.0.0-rc.1`); the local prototype crates were removed.
 
 ## Runtime compatibility review (before choosing crates)
 
@@ -31,8 +32,14 @@ logic.
   `resume`, `close`. Async via `uniffi` async + Swift `async/await`.
 - Runtime: embed `tokio` current-thread inside the UniFFI scaffolding
   (one runtime per `Client`, driven by Swift's executor; never block the
-  main thread). Cancellation via `CancellationToken` bridged to Swift
-  `Task.cancel()`.
+  main thread). Cancellation: direct Rust `libtinkle` callers use
+  `syntra_runtime::CancelToken` (re-exported as `libtinkle::CancelToken`),
+  where `cancel()` sends best-effort `Cancel{}` for the allocated request
+  id (completion wins races). At the shipped `tinkle-ffi` UniFFI boundary
+  no tokens cross FFI — dropping the Swift `Task`/foreign future cancels
+  the in-flight Rust future. Bridging `Task.cancel()` to an owned
+  `CancelToken::cancel()` per cancellable call remains a planned change
+  and is not yet in the facade.
 - Storage: implement `CursorStore` over Core Data/SQLite (GRDB) or
   Keychain-backed SQLite; persist atomically with message indexes.
 - Push: APNs (including VoIP for calls) wakes the app; call
@@ -45,6 +52,12 @@ logic.
 
 - Expose via UniFFI or `jni-rs`: same surface as iOS, Kotlin coroutines
   bridge `async` calls. One `tokio` runtime per process (shared).
+  Cancellation: direct Rust `libtinkle` callers use `CancelToken::cancel()`
+  for best-effort `Cancel{}`. At the shipped `tinkle-ffi` UniFFI boundary
+  no tokens cross FFI — dropping the coroutine's `Job`/foreign future
+  cancels the in-flight Rust future. Bridging `Job` cancellation to an
+  owned `CancelToken` per cancellable call remains a planned change and is
+  not yet in the facade.
 - Storage: `CursorStore` over Room/SQLite + EncryptedSharedPreferences
   for the session token (never in cleartext prefs).
 - Push: FCM data messages trigger `sync_after_wake`. Respect Doze;
@@ -75,17 +88,18 @@ pub async fn tinkle_connect(url: String, token: String) -> Result<JsValue, JsVal
 }
 ```
 
-## Compilation checks (verified 2026-10-20)
+## Compilation checks (verified 2026-10-23)
 
 ```sh
-cargo check -p syntra-core -p tinkle-schema -p syntra-ws -p libtinkle   # native, passes
-cargo check -p syntra-core --no-default-features --target wasm32-unknown-unknown  # pure core, passes
+cargo check -p tinkle-schema -p libtinkle -p tinkle-ffi   # native, passes (syntra-* build transitively)
 cargo check -p tinkle-schema --target wasm32-unknown-unknown           # pure app, passes
+cargo check -p libtinkle-web --target wasm32-unknown-unknown            # wasm-bindgen wrapper, compile-verified only (no browser runtime)
 ```
 
-Full `syntra-ws` / `libtinkle` wasm builds require the browser transport
-wiring (`ws_stream_wasm`, `wasm-bindgen-futures`, `getrandom_backend="wasm_js"`,
-tokio sync-only shims) and are tracked as follow-up; the `#[cfg(target_arch
-= "wasm32")]` boundary already guarantees native builds never touch browser
-APIs and vice versa. `wasm.rs` currently returns a descriptive error until
-`ws_stream_wasm` is wired.
+WASM is compile-only: `syntra-ws` compiles against the published browser
+transport (`ws_stream_wasm` via `ws_stream_wasm::WsMeta::connect`,
+`wasm-bindgen-futures`, `getrandom` with `js` support, tokio sync-only
+shims); the `#[cfg(target_arch = "wasm32")]` boundary already guarantees
+native builds never touch browser APIs and vice versa. The `libtinkle-web`
+wasm compilation check does not establish browser runtime acceptance;
+browser smoke tests remain separate.

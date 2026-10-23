@@ -17,6 +17,7 @@ path = "uniffi-bindgen.rs"
 
 [dependencies]
 libtinkle = { path = "../libtinkle" }
+syntra-core.workspace = true
 tinkle-schema.workspace = true
 uniffi.workspace = true
 tokio.workspace = true

@@ -12,6 +12,7 @@ publish = false
 
 [dependencies]
 syntra-core.workspace = true
+syntra-runtime.workspace = true
 syntra-ws.workspace = true
 tinkle-schema.workspace = true
 prost.workspace = true
