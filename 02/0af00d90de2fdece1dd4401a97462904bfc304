@@ -1,0 +1,43 @@
+README.md
+  s_cd3b2b0716314f::t_7b5bdaf40772a1 86
+  s_cd3b2b0716314f::t_2e1a36b574ce18 176-177
+docs/platform-ios-android-wasm.md
+  s_cd3b2b0716314f::t_a3e4b6924d4537 86-88,90-91
+crates/libtinkle/src/subscription.rs
+  s_cd3b2b0716314f::t_df4dd27fe50557 84-90
+  s_cd3b2b0716314f::t_1a610ddc3fcdd5 56
+  s_cd3b2b0716314f::t_9c8eb24b6622f1 15
+  s_cd3b2b0716314f::t_23abba83f825ac 172-173
+  s_cd3b2b0716314f::t_7aa82ffd2a4047 102,105
+  s_cd3b2b0716314f::t_45ec7c619bbae8 75
+  s_cd3b2b0716314f::t_2faa2c80c96f6d 127-128
+crates/libtinkle/src/client.rs
+  s_cd3b2b0716314f::t_9edf10439613c6 257-259,261
+  s_03028c1fdfb5a5::t_79784faf5c0dde 262,265
+  s_03028c1fdfb5a5::t_19512006866596 199-214,224-227,230-236
+  s_cd3b2b0716314f::t_0b90fb6f6666b2 314-344
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "020af00d90de2fdece1dd4401a97462904bfc304",
+  "prompts": {},
+  "sessions": {
+    "s_03028c1fdfb5a5": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e99f3801fffes7uKFlFr5HPEdM",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_cd3b2b0716314f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e9a0fbcbeffeXvNC98ScpzAg2C",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    }
+  }
+}
