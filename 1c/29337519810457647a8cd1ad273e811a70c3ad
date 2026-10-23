@@ -1,0 +1,76 @@
+crates/libtinkle-web/src/lib.rs
+  s_9bef37cb159d58::t_e8612f4f197b6e 17-24
+  s_9bef37cb159d58::t_a0187dd112386a 55
+  s_9bef37cb159d58::t_9b1214e4a2ea18 32-38
+crates/libtinkle/src/subscription.rs
+  s_f42e5ebd6b5a04::t_eb02452700386c 127-132,134-135,137-150,152-153
+  s_f42e5ebd6b5a04::t_822f6b8f24e548 88-91,104-107,109-111,113-114
+  s_f42e5ebd6b5a04::t_2164a0832c6a78 168-175
+  s_f42e5ebd6b5a04::t_98ef518d891a57 53-66,70
+  s_f42e5ebd6b5a04::t_63da75bb6acd41 15
+  s_f42e5ebd6b5a04::t_4aa6da31d60edc 201-231,238,244-246,255,272
+docs/architecture.md
+  s_97fe997498913e::t_5bcb66187323a1 66-72
+crates/libtinkle/src/lib.rs
+  s_97fe997498913e::t_84f9b7701e66e5 32-37
+crates/libtinkle/src/client.rs
+  s_51852a83603674::t_0efdcbb771c3c1 327-334,374-376
+  s_1f6c1921121cd0::t_87db149c4f5b69 315-326,335-344,349-357,362-373
+  s_1f6c1921121cd0::t_3cc3c6034eaa2e 401-409
+docs/platform-ios-android-wasm.md
+  s_9bef37cb159d58::t_ee8d1a07a35ae1 93
+  s_97fe997498913e::t_b46a06c303c2d9 35-40
+  s_51852a83603674::t_af5f3c17697272 88,96-102
+  s_97fe997498913e::t_10fec39dfb4e2e 53-57
+README.md
+  s_97fe997498913e::t_feb765afd13685 146-152
+  s_97fe997498913e::t_198c1c271002ef 34,37-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1c29337519810457647a8cd1ad273e811a70c3ad",
+  "prompts": {},
+  "sessions": {
+    "s_1f6c1921121cd0": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e99b09540ffehWNB932jQM8naO",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_51852a83603674": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e99b9ee51ffe8BYqlm1tJHwUzG",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_97fe997498913e": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e99b09587ffetUFETfyREjEL3v",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_9bef37cb159d58": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e99b0954fffendJ8pJOtsTKdDv",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_f42e5ebd6b5a04": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e99b09504ffe2Fr2wkp7tszFiF",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    }
+  }
+}
