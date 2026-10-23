@@ -63,7 +63,7 @@ class BindingPatchTests(unittest.TestCase):
             destination = self.root / relative
             source.parent.mkdir(parents=True, exist_ok=True)
             destination.parent.mkdir(parents=True, exist_ok=True)
-            source.write_text(swift() if generated.endswith(".swift") else "generated\n")
+            source.write_text(swift() if generated.endswith(".swift") else f"generated {generated}\n")
             destination.write_text("previous binding\n")
 
     def generate(self, text, mode):
@@ -93,7 +93,11 @@ class BindingPatchTests(unittest.TestCase):
         original = swift(OLD_LIFT, OLD_COUNT)
         result = self.generate(original, "--write")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.root / FILES["TinkleSDK.swift"]).read_text(), swift())
+        self.assertEqual(self.bindings(), {
+            relative: (swift() if generated == "TinkleSDK.swift"
+                       else f"generated {generated}\n").encode()
+            for generated, relative in FILES.items()
+        })
         result = self.generate(original, "--check")
         self.assertEqual(result.returncode, 0, result.stderr)
 
