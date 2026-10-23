@@ -32,12 +32,14 @@ logic. Syntra comes from crates.io (`syntra-core`/`syntra-runtime`/
   `resume`, `close`. Async via `uniffi` async + Swift `async/await`.
 - Runtime: embed `tokio` current-thread inside the UniFFI scaffolding
   (one runtime per `Client`, driven by Swift's executor; never block the
-  main thread). Cancellation via `syntra_runtime::CancelToken` (re-exported
-  as `libtinkle::CancelToken`) bridged to Swift `Task.cancel()`: the
-  adapter owns a `CancelToken` per cancellable call and invokes
-  `CancelToken::cancel()` when the Swift task is cancelled, which sends
-  best-effort `Cancel{}` for the allocated request id (completion wins
-  races).
+  main thread). Cancellation: direct Rust `libtinkle` callers use
+  `syntra_runtime::CancelToken` (re-exported as `libtinkle::CancelToken`),
+  where `cancel()` sends best-effort `Cancel{}` for the allocated request
+  id (completion wins races). At the shipped `tinkle-ffi` UniFFI boundary
+  no tokens cross FFI — dropping the Swift `Task`/foreign future cancels
+  the in-flight Rust future. Bridging `Task.cancel()` to an owned
+  `CancelToken::cancel()` per cancellable call remains a planned change
+  and is not yet in the facade.
 - Storage: implement `CursorStore` over Core Data/SQLite (GRDB) or
   Keychain-backed SQLite; persist atomically with message indexes.
 - Push: APNs (including VoIP for calls) wakes the app; call
@@ -50,11 +52,12 @@ logic. Syntra comes from crates.io (`syntra-core`/`syntra-runtime`/
 
 - Expose via UniFFI or `jni-rs`: same surface as iOS, Kotlin coroutines
   bridge `async` calls. One `tokio` runtime per process (shared).
-  Cancellation: Kotlin coroutine cancellation maps to
-  `CancelToken::cancel()` — the adapter owns a
-  `syntra_runtime::CancelToken` (re-exported as
-  `libtinkle::CancelToken`) per cancellable call and invokes `cancel()`
-  when the coroutine's `Job` is cancelled.
+  Cancellation: direct Rust `libtinkle` callers use `CancelToken::cancel()`
+  for best-effort `Cancel{}`. At the shipped `tinkle-ffi` UniFFI boundary
+  no tokens cross FFI — dropping the coroutine's `Job`/foreign future
+  cancels the in-flight Rust future. Bridging `Job` cancellation to an
+  owned `CancelToken` per cancellable call remains a planned change and is
+  not yet in the facade.
 - Storage: `CursorStore` over Room/SQLite + EncryptedSharedPreferences
   for the session token (never in cleartext prefs).
 - Push: FCM data messages trigger `sync_after_wake`. Respect Doze;

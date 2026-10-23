@@ -69,7 +69,9 @@ publicly takes `&syntra_runtime::CancelToken` (re-exported as
 dependency — `syntra-runtime` remains a public dependency of `libtinkle`
 for cancellable calls), and `TinkleError::Syntra` transparently wraps
 `syntra_core::error::SyntraError` (mapped to `FfiError` at the FFI
-boundary).
+boundary; `TinkleError::code()` returns `syntra_core::error::ErrorCode`,
+re-exported as `libtinkle::ErrorCode` so apps need not add a direct
+`syntra-core` dependency).
 
 Syntra comes from crates.io (`syntra-core`/`syntra-runtime`/`syntra-ws`
 `=1.0.0-rc.1`); the local `crates/syntra-core` and `crates/syntra-ws`

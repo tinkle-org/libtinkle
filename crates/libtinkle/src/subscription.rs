@@ -56,7 +56,7 @@ pub enum RealtimeEvent {
 /// persisting under another drops or duplicates checkpoints. A single
 /// `Mutex` ensures `set_principal` atomically swaps both, and every
 /// reader commits/decides under the same lock scope. Store I/O stays
-/// outside the lock (snapshotted principal + version check) so a slow
+/// outside the lock (snapshotted principal) so a slow
 /// store never blocks the notification pump.
 #[derive(Debug, Default)]
 struct PrincipalState {
@@ -207,7 +207,7 @@ impl SubscriptionManager {
         // barrier.
         enum Action {
             Duplicate,
-            Next(String),
+            Next { principal: String, previous: u64 },
             Gap { expected: u64 },
             Stale { applied: u64 },
         }
@@ -216,8 +216,12 @@ impl SubscriptionManager {
             match state.cursors.decision(&stream, cursor) {
                 CursorDecision::Duplicate => Action::Duplicate,
                 CursorDecision::Next => {
+                    let previous = state.cursors.get(&stream);
                     state.cursors.commit(&stream, cursor)?;
-                    Action::Next(state.principal.clone())
+                    Action::Next {
+                        principal: state.principal.clone(),
+                        previous,
+                    }
                 }
                 CursorDecision::Gap => Action::Gap {
                     expected: state.cursors.get(&stream).saturating_add(1),
@@ -235,7 +239,10 @@ impl SubscriptionManager {
                     .try_send(RealtimeEvent::Duplicate { stream, cursor });
                 Ok(())
             }
-            Action::Next(principal) => {
+            Action::Next {
+                principal,
+                previous,
+            } => {
                 // Atomically commit memory + durable store. The caller must
                 // have applied all required effects + refreshes before this
                 // checkpoint; receipt alone is not commit. Here we persist
@@ -244,7 +251,19 @@ impl SubscriptionManager {
                 // Memory already committed under the same barrier as the
                 // snapshot; `principal` is that commit's owning scope even
                 // if a rotation landed in between.
-                self.store.save(&principal, &stream, cursor).await?;
+                if let Err(e) = self.store.save(&principal, &stream, cursor).await {
+                    // Roll memory back so the next `subscribe()` re-requests
+                    // from the durable checkpoint and the replayed batch is
+                    // classified `Next` (not `Duplicate`), allowing its
+                    // effects to be applied. Only roll back when the scope
+                    // and cursor are still ours; a concurrent rotation or a
+                    // newer commit owns the state now and must be preserved.
+                    let mut state = self.state.lock().await;
+                    if state.principal == principal && state.cursors.get(&stream) == cursor {
+                        state.cursors.hydrate(&stream, previous);
+                    }
+                    return Err(e);
+                }
                 let _ = self.event_tx.try_send(RealtimeEvent::BatchApplied {
                     stream,
                     final_cursor: cursor,

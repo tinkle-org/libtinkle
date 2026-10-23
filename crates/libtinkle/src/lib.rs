@@ -29,6 +29,12 @@ pub use cursor::{CursorStore, InMemoryCursorStore};
 pub use errors::TinkleError;
 pub use services::{Auth, Messages, Realtime};
 pub use subscription::RealtimeEvent;
+/// Re-exported error code for [`TinkleError::code`].
+///
+/// `TinkleError::code` returns `syntra_core::error::ErrorCode`; apps can
+/// name the type through this re-export instead of depending on
+/// `syntra-core` directly.
+pub use syntra_core::error::ErrorCode;
 /// Re-exported cancellation token for [`Client::call_raw_cancellable`].
 ///
 /// `Client::call_raw_cancellable` takes `&syntra_runtime::CancelToken`;

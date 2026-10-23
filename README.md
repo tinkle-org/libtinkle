@@ -31,14 +31,16 @@ libtinkle/
   PROTO_PINNING.md            BSR crate versions + upgrade
 ```
 
-Apps never depend on the Syntra crates (`syntra-core`/`syntra-ws`
+Apps never depend on the Syntra crates (`syntra-core`/`syntra-runtime`/`syntra-ws`
 from crates.io) or `tinkle-schema` directly — same rule as TDLib, where
 MTProto internals never leak and clients speak only the stable `Client` /
-UniFFI / web surface. The one exception is cancellation:
-`Client::call_raw_cancellable` takes `&syntra_runtime::CancelToken`
-(re-exported as `libtinkle::CancelToken`, so apps need not add a direct
+UniFFI / web surface. Two deliberate exceptions: cancellation
+(`Client::call_raw_cancellable` takes `&syntra_runtime::CancelToken`,
+re-exported as `libtinkle::CancelToken`, so apps need not add a direct
 `syntra-runtime` dependency), and `TinkleError::Syntra` transparently
-wraps `syntra_core::error::SyntraError`.
+wraps `syntra_core::error::SyntraError` (with `ErrorCode` re-exported as
+`libtinkle::ErrorCode`, so apps need not add a direct `syntra-core`
+dependency).
 
 ## Quick start
 
