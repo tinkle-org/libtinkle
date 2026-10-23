@@ -84,8 +84,17 @@ impl SubscriptionManager {
     /// Update the cursor principal after authenticated subscribe
     /// (`resp.stream`). Room cursor writes and reconnect loads must use
     /// this same principal rather than the initial `unknown` value.
+    /// Clears in-memory cursors only when the principal actually changes;
+    /// same-principal updates preserve existing cursors.
     pub(crate) async fn set_principal(&self, principal: String) {
-        *self.principal.write().await = principal;
+        {
+            let mut current = self.principal.write().await;
+            if *current == principal {
+                return;
+            }
+            *current = principal;
+        }
+        *self.cursors.lock().await = StreamCursors::new();
     }
 
     /// Record interests after a successful `SubscribeBatched`.

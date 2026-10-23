@@ -311,16 +311,46 @@ impl Client {
                         (g.subscribed, g.rooms.clone(), g.watch_user_ids.clone())
                     };
                     if subscribed {
+                        // Identify the authenticated principal on the fresh
+                        // transport before reusing any stored cursors. The
+                        // credential may now map to a different account
+                        // (rotation); old room afters must not leak into the
+                        // new principal's subscription.
+                        let previous = self.principal().await;
+                        let probe = tinkle_schema::proto::SubscribeRequest {
+                            own_cursor: None,
+                            rooms: Vec::new(),
+                            watch_user_ids: Vec::new(),
+                        };
+                        let authenticated = match self.realtime().subscribe_batched(probe).await {
+                            Ok(resp) => resp.stream,
+                            Err(e) => {
+                                self.close().await;
+                                return Err(e);
+                            }
+                        };
+                        *self.principal.write().await = authenticated.clone();
+                        if let Ok(mgr) = self.live_mgr().await {
+                            mgr.set_principal(authenticated.clone()).await;
+                        }
+                        // Retain previous room cursors only when the
+                        // principal is unchanged; discard them after rotation
+                        // to a different principal so `subscribe` cannot reuse
+                        // another account's checkpoints via max(old, stored).
+                        let rooms = if authenticated != previous {
+                            rooms.into_iter().map(|(id, _)| (id, 0)).collect::<Vec<_>>()
+                        } else {
+                            rooms
+                        };
                         // Refresh each room's after-cursor from durable
-                        // storage; use the stored cursor only when it is
-                        // newer than the caller's value. Preserve the
-                        // original when no stored cursor exists or it is
-                        // not newer.
-                        let principal = self.principal().await;
+                        // storage under the authenticated principal; use the
+                        // stored cursor only when it is newer than the
+                        // caller's value. Preserve the original when no
+                        // stored cursor exists or it is not newer.
                         let mut refreshed = Vec::with_capacity(rooms.len());
                         for (room_id, after) in rooms {
                             let stream = format!("room:{room_id}");
-                            match self.store.load(&principal, &stream).await {
+                            match self.store.load(&authenticated, &stream).await {
                                 Ok(Some(stored)) if stored > after => {
                                     refreshed.push((room_id, stored));
                                 }
@@ -364,6 +394,9 @@ impl Client {
     pub async fn rotate_credential(&mut self, next: Credential) -> Result<(), TinkleError> {
         self.close().await;
         self.credential = next;
+        // Reset cursor scope so the next subscribe re-learns the authenticated
+        // principal instead of reusing the previous account's checkpoints.
+        *self.principal.write().await = "unknown".to_string();
         self.connect().await
     }
 
