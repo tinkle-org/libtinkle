@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{RwLock, mpsc, Mutex};
 use tracing::debug;
 
 use tinkle_schema::realtime::{CursorDecision, StreamCursors, ValidatedNotification};
@@ -53,7 +53,7 @@ pub enum RealtimeEvent {
 /// Manages one principal's realtime interests + cursors (crate-internal;
 /// apps observe [`RealtimeEvent`] via [`crate::Client::next_event`]).
 pub(crate) struct SubscriptionManager {
-    principal: String,
+    principal: RwLock<String>,
     store: Arc<dyn CursorStore>,
     cursors: Mutex<StreamCursors>,
     event_tx: mpsc::Sender<RealtimeEvent>,
@@ -72,13 +72,20 @@ impl SubscriptionManager {
     pub(crate) fn new(principal: impl Into<String>, store: Arc<dyn CursorStore>) -> Arc<Self> {
         let (tx, rx) = mpsc::channel(256);
         Arc::new(Self {
-            principal: principal.into(),
+            principal: RwLock::new(principal.into()),
             store,
             cursors: Mutex::new(StreamCursors::new()),
             event_tx: tx,
             event_rx: Mutex::new(rx),
             interests: Mutex::new(Interests::default()),
         })
+    }
+
+    /// Update the cursor principal after authenticated subscribe
+    /// (`resp.stream`). Room cursor writes and reconnect loads must use
+    /// this same principal rather than the initial `unknown` value.
+    pub(crate) async fn set_principal(&self, principal: String) {
+        *self.principal.write().await = principal;
     }
 
     /// Record interests after a successful `SubscribeBatched`.
@@ -92,9 +99,10 @@ impl SubscriptionManager {
     /// Hydrate memory cursors from durable storage (call after connect,
     /// before resubscribe). Absent cursors mean zero, never start-live.
     pub(crate) async fn hydrate_from_store(&self, streams: &[String]) -> Result<(), TinkleError> {
+        let principal = self.principal.read().await.clone();
         let mut curs = self.cursors.lock().await;
         for s in streams {
-            match self.store.load(&self.principal, s).await? {
+            match self.store.load(&principal, s).await? {
                 Some(v) => curs.hydrate(s, v),
                 None => curs.hydrate(s, 0),
             }
@@ -116,7 +124,8 @@ impl SubscriptionManager {
                     let mut c = self.cursors.lock().await;
                     c.on_reset(&stream);
                 }
-                let _ = self.store.remove_stream(&self.principal, &stream).await;
+                let principal = self.principal.read().await.clone();
+                let _ = self.store.remove_stream(&principal, &stream).await;
                 let _ = self
                     .event_tx
                     .try_send(RealtimeEvent::ResetRequired { stream, head });
@@ -160,7 +169,8 @@ impl SubscriptionManager {
                     let mut c = self.cursors.lock().await;
                     c.commit(&stream, cursor)?;
                 }
-                self.store.save(&self.principal, &stream, cursor).await?;
+                let principal = self.principal.read().await.clone();
+                self.store.save(&principal, &stream, cursor).await?;
                 let _ = self.event_tx.try_send(RealtimeEvent::BatchApplied {
                     stream,
                     final_cursor: cursor,

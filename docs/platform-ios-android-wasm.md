@@ -83,9 +83,9 @@ cargo check -p tinkle-schema -p libtinkle -p tinkle-ffi   # native, passes (synt
 cargo check -p tinkle-schema --target wasm32-unknown-unknown           # pure app, passes
 ```
 
-Full `syntra-ws` / `libtinkle` wasm builds require the browser transport
-wiring (`ws_stream_wasm`, `wasm-bindgen-futures`, `getrandom_backend="wasm_js"`,
-tokio sync-only shims) and are tracked as follow-up; the `#[cfg(target_arch
+Full `syntra-ws` / `libtinkle` wasm builds use the published browser transport
+(`ws_stream_wasm` via `ws_stream_wasm::WsMeta::connect`, `wasm-bindgen-futures`,
+`getrandom` with `js` support, tokio sync-only shims); the `#[cfg(target_arch
 = "wasm32")]` boundary already guarantees native builds never touch browser
-APIs and vice versa. `wasm.rs` currently returns a descriptive error until
-`ws_stream_wasm` is wired.
+APIs and vice versa. The `libtinkle-web` wasm compilation check does not
+establish browser runtime acceptance; browser smoke tests remain separate.

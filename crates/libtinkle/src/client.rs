@@ -196,8 +196,22 @@ impl Client {
         watch_user_ids: Vec<i64>,
     ) -> Result<tinkle_schema::proto::SubscribeResponse, TinkleError> {
         let mgr = self.live_mgr().await?;
-        // Hydrate own + room streams. Own stream label is derived after
-        // first subscribe; before that use persisted principal label.
+        // Learn the authenticated principal before any cursor lookup when
+        // it is still `unknown`, so hydrate/load uses the same principal
+        // as checkpoint saving and the first subscription sends the
+        // restored checkpoint instead of zero.
+        if self.principal().await == "unknown" {
+            let probe = tinkle_schema::proto::SubscribeRequest {
+                own_cursor: None,
+                rooms: Vec::new(),
+                watch_user_ids: Vec::new(),
+            };
+            let probe_resp = self.realtime().subscribe_batched(probe).await?;
+            let authenticated = probe_resp.stream.clone();
+            *self.principal.write().await = authenticated.clone();
+            mgr.set_principal(authenticated).await;
+        }
+        // Hydrate own + room streams under the authenticated principal.
         let principal = self.principal().await;
         let mut streams = vec![format!("user:{}", principal_user_suffix(&principal))];
         for (room_id, _) in &rooms {
@@ -207,10 +221,19 @@ impl Client {
         let _ = mgr.hydrate_from_store(&streams).await;
 
         // Build request with per-stream after cursors.
-        // Own cursor: load durable for the own stream if known.
+        // Own cursor: load durable for the own stream.
+        // Room cursors: send the newer of the caller's value and the
+        // durable checkpoint so the first subscription reads the restored
+        // checkpoint.
         let own_stream = streams.first().cloned().unwrap_or_default();
         let own_cursor = self.store.load(&principal, &own_stream).await?.unwrap_or(0);
-        let req_rooms: Vec<tinkle_schema::proto::RealtimeRoomSubscription> = rooms
+        let mut effective_rooms = Vec::with_capacity(rooms.len());
+        for (room_id, after) in &rooms {
+            let stream = format!("room:{room_id}");
+            let stored = self.store.load(&principal, &stream).await?.unwrap_or(0);
+            effective_rooms.push((*room_id, (*after).max(stored)));
+        }
+        let req_rooms: Vec<tinkle_schema::proto::RealtimeRoomSubscription> = effective_rooms
             .iter()
             .map(
                 |(room_id, after)| tinkle_schema::proto::RealtimeRoomSubscription {
@@ -231,11 +254,15 @@ impl Client {
         };
         let resp = self.realtime().subscribe_batched(req).await?;
         // `stream` is user:<verified-user-id> from authenticated identity.
+        // Set the manager's cursor principal before processing
+        // authenticated notifications so room cursor writes and reconnect
+        // loads share it instead of the initial `unknown` value.
         *self.principal.write().await = resp.stream.clone();
-        mgr.on_subscribed(rooms.clone(), watch_user_ids.clone())
+        mgr.set_principal(resp.stream.clone()).await;
+        mgr.on_subscribed(effective_rooms.clone(), watch_user_ids.clone())
             .await;
         *self.interests.lock().await = Interests {
-            rooms,
+            rooms: effective_rooms,
             watch_user_ids,
             subscribed: true,
         };
@@ -284,9 +311,37 @@ impl Client {
                         (g.subscribed, g.rooms.clone(), g.watch_user_ids.clone())
                     };
                     if subscribed {
-                        // Propagate resubscribe failures: reconnect succeeds
-                        // only once subscriptions are active again.
-                        self.subscribe(rooms, watch).await?;
+                        // Refresh each room's after-cursor from durable
+                        // storage; use the stored cursor only when it is
+                        // newer than the caller's value. Preserve the
+                        // original when no stored cursor exists or it is
+                        // not newer.
+                        let principal = self.principal().await;
+                        let mut refreshed = Vec::with_capacity(rooms.len());
+                        for (room_id, after) in rooms {
+                            let stream = format!("room:{room_id}");
+                            match self.store.load(&principal, &stream).await {
+                                Ok(Some(stored)) if stored > after => {
+                                    refreshed.push((room_id, stored));
+                                }
+                                Ok(_) => {
+                                    refreshed.push((room_id, after));
+                                }
+                                Err(e) => {
+                                    self.close().await;
+                                    return Err(e);
+                                }
+                            }
+                        }
+                        // A subscription failure after connecting must not
+                        // leave the new connection half-open: close/reset
+                        // before propagating the original error so
+                        // is_connected() no longer reports success and a
+                        // later connect() can restore subscriptions.
+                        if let Err(e) = self.subscribe(refreshed, watch).await {
+                            self.close().await;
+                            return Err(e);
+                        }
                     }
                     return Ok(());
                 }

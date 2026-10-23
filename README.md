@@ -83,7 +83,7 @@ the specifications in `../syntra/specifications/`:
 7. Request timeouts — per-RPC budget (`timeout_ms==0` selects bounded
    host default), initiator timer ≤ budget, `DEADLINE_EXCEEDED`.
 8. Cancellation — best-effort `Cancel{}`, completion wins, unknown ids
-   ignored; `call_cancellable` with `CancellationToken`.
+   ignored; `call_cancellable` with `CancelToken`.
 9. Error translation — 17-code registry, unknown future codes map to
    `UNKNOWN` with numeric preserved, branch on code not text.
 10. Notification reception — `request_id==0`, never completes an RPC,
@@ -173,7 +173,8 @@ cargo test -p libtinkle --test client_integration -- --nocapture
   handshake/auth, concurrent out-of-order RPCs, cancellation, notification
   interleaving, reconnect + cursor recovery, errors, malformed-frame
   tolerance. Syntra protocol conformance lives upstream in the published
-  crates and is validated here transitively through these integration tests.
+  crates; these integration tests cover only the Syntra paths exercised by
+  libtinkle, not the complete upstream suite.
 - Platform compilation: native `cargo check --workspace`; wasm via
   `cargo check -p libtinkle-web --target wasm32-unknown-unknown` (requires the
   target + `ws_stream_wasm`; native never touches browser APIs; the
