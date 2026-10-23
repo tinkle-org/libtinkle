@@ -1,29 +1,61 @@
 name: Release-plz
-
 on:
   push:
     branches: [main]
-
 permissions:
-  contents: write
-  pull-requests: write
-
+  contents: read
 concurrency:
   group: release-plz
   cancel-in-progress: false
-
 jobs:
   release-plz:
-    name: Release-plz (PR + publish)
+    name: Release-plz (git-only releases + PR)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      native_tag: ${{ steps.native.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Run release-plz
-        uses: release-plz/action@6caa8d34f74d82b0dc76a18edd1cc3d6801c9baf # v0.5
+          persist-credentials: false
+      - run: rustup toolchain install 1.99.1 --profile minimal
         env:
+          RUSTUP_TOOLCHAIN: 1.99.1
+      - name: Run release-plz (publish=false policy in workspace manifests)
+        id: release
+        uses: release-plz/action@8b5bf233ecb5779f63508db7cd050e948ee77cc2 # v0.5.144
+        env:
+          RUSTUP_TOOLCHAIN: 1.99.1
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Select tinkle-ffi release
+        id: native
+        env:
+          RELEASES: ${{ steps.release.outputs.releases }}
+        run: |
+          python3 - <<'PY'
+          import os, subprocess
+          tag = subprocess.check_output(['python3', 'scripts/sdk-release.py', 'release-output'], text=True).strip()
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('tag=' + tag + '\n')
+          PY
+  # Recovery: this job runs only when this run's release-plz step emits a
+  # `tinkle-ffi` entry. If that step fails after the `tinkle-ffi-v<version>` tag
+  # is created, later runs will not re-emit the version and the SDK publish will
+  # never start. In that case manually dispatch the SDK pipeline:
+  # `gh workflow run native-sdk.yml -f source_ref=tinkle-ffi-vX.Y.Z -f publish=true`
+  # (or re-run release-plz to re-create the tag, then dispatch). Do not retag
+  # manually; `native-sdk.yml` authorizes the tag via `authorize-source`.
+  native:
+    needs: release-plz
+    if: needs.release-plz.outputs.native_tag != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/native-sdk.yml
+    with:
+      source_ref: ${{ needs.release-plz.outputs.native_tag }}
+      publish: true
+    secrets:
+      SDK_DISTRIBUTION_TOKEN: ${{ secrets.SDK_DISTRIBUTION_TOKEN }}

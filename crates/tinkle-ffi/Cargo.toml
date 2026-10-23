@@ -9,11 +9,15 @@ publish = false
 
 [lib]
 name = "tinkle_ffi"
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["lib"]
+
+[features]
+cli = ["uniffi/cli"]
 
 [[bin]]
 name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
+required-features = ["cli"]
 
 [dependencies]
 libtinkle = { path = "../libtinkle" }

@@ -1,12 +1,17 @@
-//! Flat FFI error surface.
+//! Structured FFI error surface.
 //!
-//! Foreign code sees variant names plus a Display message only
-//! (`flat_error`). No Syntra, prost, or schema types cross the boundary;
-//! [`FfiError`] is built from [`libtinkle::TinkleError`] via strings.
+//! Foreign sees named variants with message payloads (e.g. `Storage(String)`);
+//! no Syntra, prost, or schema types cross the boundary. [`FfiError`] is built
+//! from [`libtinkle::TinkleError`] via strings, preserving variant structure so
+//! foreign cursor-store failures round-trip instead of panicking.
 
 /// Errors surfaced to Swift/Kotlin.
+///
+/// This must not use `flat_error`: foreign `FfiCursorStore` implementations
+/// return `FfiError`, and UniFFI cannot lift flat errors back into Rust
+/// (`rustPanic("Can't lift flat errors")`). Keeping the message payloads
+/// makes store failures round-trip instead of panicking.
 #[derive(Debug, Clone, thiserror::Error, uniffi::Error)]
-#[uniffi(flat_error)]
 pub enum FfiError {
     #[error("network error: {0}")]
     Network(String),
@@ -71,6 +76,9 @@ impl From<FfiError> for libtinkle::TinkleError {
     /// Folds a foreign store failure back into the core error type. Every
     /// cursor-store operation failure is storage-domain by construction.
     fn from(e: FfiError) -> Self {
-        Self::CursorStore(e.to_string())
+        match e {
+            FfiError::Storage(msg) => Self::CursorStore(msg),
+            other => Self::CursorStore(other.to_string()),
+        }
     }
 }

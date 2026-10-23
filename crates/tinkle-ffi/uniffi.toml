@@ -1,18 +1,12 @@
 # UniFFI binding configuration for the tinkle_ffi namespace.
-# Consumed when generating foreign bindings, e.g.:
-#   cargo run -p tinkle-ffi --bin uniffi-bindgen -- \
-#     generate --library target/debug/libtinkle_ffi.dylib \
-#     --language swift --out-dir out/swift
-#   cargo run -p tinkle-ffi --bin uniffi-bindgen -- \
-#     generate --library target/debug/libtinkle_ffi.dylib \
-#     --language kotlin --out-dir out/kotlin
-
-namespace = "tinkle_ffi"
+# Generate with scripts/generate-bindings.sh --write; never edit generated code.
+# This per-crate config is loaded through uniffi-bindgen.toml's crate root.
 
 [bindings.kotlin]
-package_name = "com.tinkle.lib"
+package_name = "com.tinkle.sdk"
+cdylib_name = "tinkle_ffi"
 
-# Swift module names must be valid identifiers (no dots), so the
-# Kotlin package `com.tinkle.lib` maps to the `TinkleLib` module here.
 [bindings.swift]
-module_name = "TinkleLib"
+module_name = "TinkleSDK"
+ffi_module_name = "TinkleSDKFFI"
+ffi_module_filename = "TinkleSDKFFI"

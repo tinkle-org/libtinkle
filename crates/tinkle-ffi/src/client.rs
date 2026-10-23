@@ -240,8 +240,11 @@ impl TinkleClient {
         self.inner.reconnect().await.map_err(FfiError::from)
     }
 
-    /// Graceful close: stop RPCs, tear down transport.
-    pub async fn close(&self) {
+    // Named `shutdown` instead of `close` because UniFFI generates a
+    // `Disposable`/`AutoCloseable.close()` for every object, which collides
+    // with a user-defined `close()` in Kotlin.
+    /// Graceful shutdown: stop RPCs, tear down transport.
+    pub async fn shutdown(&self) {
         self.inner.close().await;
     }
 }

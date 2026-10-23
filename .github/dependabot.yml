@@ -1,0 +1,24 @@
+version: 2
+# Buf is a public sparse registry (auth-required=false in .cargo/config.toml),
+# so no `registries` entry is needed. Dependabot's `cargo-registry` type requires
+# credentials and fails without them; use the supported public-registry setup.
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      syntra-lockstep:
+        patterns:
+          - syntra-core
+          - syntra-runtime
+          - syntra-ws
+    # .cargo/config.toml remains the source of Cargo's sparse index URL.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+  # Add Gradle only when this repository actually contains a Gradle manifest.
