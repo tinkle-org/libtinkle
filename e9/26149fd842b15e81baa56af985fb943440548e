@@ -1,0 +1,19 @@
+tests/test_binding_patches.py
+  s_043b74c39549dd::t_709f5755642a50 66,96-100
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e926149fd842b15e81baa56af985fb943440548e",
+  "prompts": {},
+  "sessions": {
+    "s_043b74c39549dd": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e98ab200affeDZZhpV5a7FRQfh",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    }
+  }
+}
