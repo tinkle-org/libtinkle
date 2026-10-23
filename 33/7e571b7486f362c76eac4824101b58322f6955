@@ -1,0 +1,19 @@
+scripts/sdk-consumers.json
+  s_043b74c39549dd::t_6e998d9b70168f 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "337e571b7486f362c76eac4824101b58322f6955",
+  "prompts": {},
+  "sessions": {
+    "s_043b74c39549dd": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e98ab200affeDZZhpV5a7FRQfh",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    }
+  }
+}
