@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use tokio::sync::{RwLock, mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::debug;
 
 use tinkle_schema::realtime::{CursorDecision, StreamCursors, ValidatedNotification};
