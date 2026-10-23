@@ -48,6 +48,16 @@ pub enum RealtimeEvent {
     /// Reset: one stream's sequence terminated. Recovery requires a proven
     /// consistent snapshot/checkpoint; head is diagnostic only.
     ResetRequired { stream: String, head: Option<u64> },
+    /// Durable checkpoint save failed after memory commit was rolled back.
+    /// Memory is back at the durable checkpoint, so the next `subscribe()`
+    /// re-requests from there and the replayed batch is classified `Next`.
+    /// Apps should resubscribe promptly instead of waiting for the next
+    /// notification (which would otherwise surface only as a `Gap`).
+    CheckpointFailed {
+        stream: String,
+        cursor: u64,
+        error: String,
+    },
 }
 
 /// Principal-scoped cursor state guarded by a single synchronization
@@ -252,6 +262,7 @@ impl SubscriptionManager {
                 // snapshot; `principal` is that commit's owning scope even
                 // if a rotation landed in between.
                 if let Err(e) = self.store.save(&principal, &stream, cursor).await {
+                    let error = e.to_string();
                     // Roll memory back so the next `subscribe()` re-requests
                     // from the durable checkpoint and the replayed batch is
                     // classified `Next` (not `Duplicate`), allowing its
@@ -262,6 +273,15 @@ impl SubscriptionManager {
                     if state.principal == principal && state.cursors.get(&stream) == cursor {
                         state.cursors.hydrate(&stream, previous);
                     }
+                    drop(state);
+                    // Surface the failure to the app so it can resubscribe
+                    // without waiting for the next notification (which would
+                    // otherwise appear only as a `Gap`).
+                    let _ = self.event_tx.try_send(RealtimeEvent::CheckpointFailed {
+                        stream: stream.clone(),
+                        cursor,
+                        error,
+                    });
                     return Err(e);
                 }
                 let _ = self.event_tx.try_send(RealtimeEvent::BatchApplied {
@@ -309,5 +329,159 @@ impl SubscriptionManager {
     /// survive (they live in the store + memory `applied` map).
     pub(crate) async fn on_disconnect(&self) {
         self.interests.lock().await.subscribed = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use async_trait::async_trait;
+
+    struct FailOnceStore {
+        inner: std::sync::Mutex<HashMap<(String, String), u64>>,
+        fail_next_save: AtomicBool,
+    }
+
+    impl FailOnceStore {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                inner: std::sync::Mutex::new(HashMap::new()),
+                fail_next_save: AtomicBool::new(true),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl CursorStore for FailOnceStore {
+        async fn load(&self, principal: &str, stream: &str) -> Result<Option<u64>, TinkleError> {
+            Ok(self
+                .inner
+                .lock()
+                .unwrap()
+                .get(&(principal.to_string(), stream.to_string()))
+                .copied())
+        }
+
+        async fn save(
+            &self,
+            principal: &str,
+            stream: &str,
+            cursor: u64,
+        ) -> Result<(), TinkleError> {
+            if self.fail_next_save.swap(false, Ordering::SeqCst) {
+                return Err(TinkleError::CursorStore("injected save failure".into()));
+            }
+            self.inner
+                .lock()
+                .unwrap()
+                .insert((principal.to_string(), stream.to_string()), cursor);
+            Ok(())
+        }
+
+        async fn remove_stream(&self, principal: &str, stream: &str) -> Result<(), TinkleError> {
+            self.inner
+                .lock()
+                .unwrap()
+                .remove(&(principal.to_string(), stream.to_string()));
+            Ok(())
+        }
+
+        async fn clear_principal(&self, principal: &str) -> Result<(), TinkleError> {
+            self.inner
+                .lock()
+                .unwrap()
+                .retain(|(p, _), _| p != principal);
+            Ok(())
+        }
+    }
+
+    fn test_batch(stream: &str, cursor: u64) -> tinkle_schema::realtime::ValidatedBatch {
+        use tinkle_schema::proto::{
+            realtime_event::Kind as EK, RealtimeBatch, RealtimeChatPosition, RealtimeEvent,
+            RealtimeEventType, RealtimeMessageSnapshot,
+        };
+        let order = tinkle_schema::realtime::position_order(cursor, None);
+        let uuid = "11111111-1111-4111-8111-111111111111";
+        let batch = RealtimeBatch {
+            stream: stream.into(),
+            events: vec![
+                RealtimeEvent {
+                    event_id: uuid.into(),
+                    stream: stream.into(),
+                    cursor,
+                    occurred_at: None,
+                    source_seq: None,
+                    source_revision: None,
+                    r#type: RealtimeEventType::MessageSnapshot as i32,
+                    kind: Some(EK::MessageSnapshot(RealtimeMessageSnapshot {
+                        message: None,
+                        random_id: None,
+                    })),
+                },
+                RealtimeEvent {
+                    event_id: uuid.into(),
+                    stream: stream.into(),
+                    cursor,
+                    occurred_at: None,
+                    source_seq: None,
+                    source_revision: None,
+                    r#type: RealtimeEventType::ChatPosition as i32,
+                    kind: Some(EK::ChatPosition(RealtimeChatPosition {
+                        chat_key: "room:1".into(),
+                        order,
+                    })),
+                },
+            ],
+            final_cursor: cursor,
+        };
+        tinkle_schema::realtime::validate_batch(&batch).expect("test batch must validate")
+    }
+
+    #[tokio::test]
+    async fn save_failure_rolls_back_and_replay_applies() {
+        let store = FailOnceStore::new();
+        let mgr = SubscriptionManager::new("user:42", store.clone());
+        let batch = test_batch("user:42", 1);
+
+        // First attempt fails at the durable save.
+        let err = mgr
+            .handle_batch(batch.clone())
+            .await
+            .expect_err("save must fail once");
+        assert!(matches!(err, TinkleError::CursorStore(_)));
+
+        // Memory rolled back so the replay is Next, not Duplicate.
+        assert_eq!(mgr.state.lock().await.cursors.get("user:42"), 0);
+        assert_eq!(store.load("user:42", "user:42").await.unwrap(), None);
+
+        // App-visible failure signal (not silent until the next Gap).
+        match mgr.next_event().await.expect("CheckpointFailed event") {
+            RealtimeEvent::CheckpointFailed { stream, cursor, .. } => {
+                assert_eq!(stream, "user:42");
+                assert_eq!(cursor, 1);
+            }
+            other => panic!("expected CheckpointFailed, got {other:?}"),
+        }
+
+        // Replayed batch applies and checkpoints.
+        mgr.handle_batch(batch.clone())
+            .await
+            .expect("replay must succeed");
+        match mgr.next_event().await.expect("BatchApplied event") {
+            RealtimeEvent::BatchApplied {
+                stream,
+                final_cursor,
+                ..
+            } => {
+                assert_eq!(stream, "user:42");
+                assert_eq!(final_cursor, 1);
+            }
+            other => panic!("expected BatchApplied, got {other:?}"),
+        }
+        assert_eq!(mgr.state.lock().await.cursors.get("user:42"), 1);
+        assert_eq!(store.load("user:42", "user:42").await.unwrap(), Some(1));
     }
 }

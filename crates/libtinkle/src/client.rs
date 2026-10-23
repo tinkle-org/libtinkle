@@ -111,7 +111,7 @@ impl Client {
         let pump = tokio::spawn(async move {
             while let Some(payload) = pump_conn.next_notification().await {
                 if let Err(e) = pump_mgr.handle_payload(&payload).await {
-                    tracing::debug!(error = %e, "notification handling reported gap/reset");
+                    tracing::debug!(error = %e, "notification handling reported gap/reset/checkpoint");
                 }
             }
         });
@@ -269,7 +269,7 @@ impl Client {
         Ok(resp)
     }
 
-    /// Next realtime app event (batch/presence/gap/reset).
+    /// Next realtime app event (batch/presence/gap/reset/checkpoint-failure).
     pub async fn next_event(&self) -> Option<RealtimeEvent> {
         let mgr = self.live_mgr().await.ok()?;
         mgr.next_event().await

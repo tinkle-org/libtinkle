@@ -62,6 +62,11 @@ pub enum FfiRealtimeEvent {
         stream: String,
         head: Option<u64>,
     },
+    CheckpointFailed {
+        stream: String,
+        cursor: u64,
+        error: String,
+    },
 }
 
 impl From<libtinkle::RealtimeEvent> for FfiRealtimeEvent {
@@ -105,6 +110,15 @@ impl From<libtinkle::RealtimeEvent> for FfiRealtimeEvent {
             libtinkle::RealtimeEvent::ResetRequired { stream, head } => {
                 Self::ResetRequired { stream, head }
             }
+            libtinkle::RealtimeEvent::CheckpointFailed {
+                stream,
+                cursor,
+                error,
+            } => Self::CheckpointFailed {
+                stream,
+                cursor,
+                error,
+            },
         }
     }
 }
