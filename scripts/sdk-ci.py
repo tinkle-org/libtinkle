@@ -58,6 +58,23 @@ def stage(args):
     destination = args.destination.resolve()
     artifacts = args.artifacts.resolve()
     sdk = args.sdk
+    release.require(destination.is_dir(),
+                    f"missing consumer checkout at {destination}")
+    if sdk == "swift":
+        release.require((destination / "Package.swift").is_file(),
+                        "BLOCKED: Swift consumer checkout has no Package.swift "
+                        f"(got {[p.name for p in destination.iterdir()] if destination.is_dir() else 'missing dir'}). "
+                        "tinkle-sdk-swift main is README-only until its bootstrap PR merges; "
+                        "re-run with swift_ref=feat/bootstrap-sdk.")
+    else:
+        release.require((destination / "settings.gradle.kts").is_file(),
+                        "BLOCKED: Kotlin consumer checkout has no settings.gradle.kts. "
+                        "tinkle-sdk-kotlin main is README-only until its bootstrap PR merges; "
+                        "re-run with kotlin_ref=feat/bootstrap-sdk.")
+        release.require((destination / "gradlew").is_file(),
+                        "BLOCKED: Kotlin consumer checkout has no gradlew. "
+                        "tinkle-sdk-kotlin main is README-only until its bootstrap PR merges; "
+                        "re-run with kotlin_ref=feat/bootstrap-sdk.")
     native = "ios" if sdk == "swift" else "android"
     bindings, source, target = release.BINDINGS[sdk]
     if args.bootstrap:
@@ -94,6 +111,10 @@ def stage(args):
 
 
 def swift_test(destination):
+    release.require((destination / "Package.swift").is_file(),
+                    "BLOCKED: Swift consumer checkout has no Package.swift. "
+                    "tinkle-sdk-swift main is README-only until its bootstrap PR merges; "
+                    "re-run with swift_ref=feat/bootstrap-sdk.")
     call("xcodebuild", "-version")
     call("swift", "--version")
     devices = json.loads(release.run("xcrun", "simctl", "list", "devices", "available", "--json"))
@@ -120,8 +141,13 @@ def android_env(artifacts):
 
 def android_build(destination, artifacts):
     env = android_env(artifacts)
-    call("bash", "gradlew", "-p", "buildSrc", "test", cwd=destination, env=env)
-    call("bash", "gradlew", "--no-daemon", "assembleRelease", "testReleaseUnitTest",
+    gradlew = destination / "gradlew"
+    release.require(gradlew.is_file(),
+                    "BLOCKED: Kotlin consumer checkout has no gradlew. "
+                    "tinkle-sdk-kotlin main is README-only until its bootstrap PR merges; "
+                    "re-run with kotlin_ref=feat/bootstrap-sdk.")
+    call("bash", gradlew, "-p", "buildSrc", "test", cwd=destination, env=env)
+    call("bash", gradlew, "--no-daemon", "assembleRelease", "testReleaseUnitTest",
          cwd=destination, env=env)
     aars = list((destination / "build/outputs/aar").glob("*-release.aar"))
     release.require(len(aars) == 1, "expected one final release AAR")
@@ -153,8 +179,11 @@ def android_test(destination, artifacts, page_size, api_level):
     proof = json.loads((destination / "build/sdk-ci-aar.json").read_text())
     release.require(release.digest(proof["path"]) == proof["sha256"], "AAR changed before consumer test")
     env = dict(android_env(artifacts), TINKLE_SDK_TEST_AAR=proof["path"])
+    gradlew = destination / "gradlew"
+    release.require(gradlew.is_file(),
+                    "BLOCKED: Kotlin consumer checkout has no gradlew.")
     # The sample's CI mode consumes this file AAR, never project(':') or jniLibs.
-    call("bash", "gradlew", "--no-daemon", ":sample:connectedDebugAndroidTest",
+    call("bash", gradlew, "--no-daemon", ":sample:connectedDebugAndroidTest",
          "-PtinkleSdkTestAar=" + proof["path"], cwd=destination, env=env)
     release.require(release.digest(proof["path"]) == proof["sha256"], "AAR changed during consumer test")
     apks = list((destination / "sample/build/outputs/apk/debug").glob("*.apk"))
@@ -162,7 +191,8 @@ def android_test(destination, artifacts, page_size, api_level):
     for apk in apks:
         release.inspect_zip(apk)
         call("bash", Path(__file__).with_name("verify-android.sh"), apk, env=env)
-        sdk = Path(os.environ["ANDROID_HOME"])
+        sdk = Path(os.environ.get("ANDROID_HOME", os.environ.get("ANDROID_SDK_ROOT", "")))
+        release.require(sdk.is_dir() and str(sdk) != ".", "ANDROID_HOME or ANDROID_SDK_ROOT must name the installed SDK")
         call(sdk / "build-tools/36.0.0/zipalign", "-c", "-P", "16", "-v", "4", apk, env=env)
 
 
@@ -258,6 +288,11 @@ def jitpack(tag, destination):
                             shutil.copyfileobj(output, target)
         release.retry(fetch, attempts=20, delay=15)
     release.inspect_zip(aar)
+    # Trust model: JitPack builds the AAR from the GitHub tag `v<version>` (authorized
+    # via the sdk-tag flow). No independently published digest exists for JitPack
+    # artifacts, so JitPack is trusted as-is to build from that tag. The digest below
+    # only proves Gradle resolved the same bytes as this direct download (consistency),
+    # not independent provenance.
     proof = {"path": str(aar), "sha256": release.digest(aar)}
     release.write_scoped(destination, "build/sdk-ci-aar.json", (json.dumps(proof) + "\n").encode())
     env = dict(os.environ, TINKLE_EXPECTED_SDK_VERSION=tag,
@@ -265,7 +300,10 @@ def jitpack(tag, destination):
     # Use the published coordinate without the file-AAR override so its POM must
     # supply JNA/coroutines. Compare Gradle's resolved AAR with the runtime input.
     env.pop("TINKLE_SDK_TEST_AAR", None)
-    call("bash", "gradlew", "--no-daemon", "--init-script",
+    gradlew = destination.resolve() / "gradlew"
+    release.require(gradlew.is_file(),
+                    "BLOCKED: Kotlin consumer checkout has no gradlew.")
+    call("bash", gradlew, "--no-daemon", "--init-script",
          Path(__file__).with_name("sdk-consumer.init.gradle"),
          ":sample:verifyPublishedSdkCoordinate",
          "-PtinkleSdkCoordinate=com.github.tinklehq:tinkle-sdk-kotlin:" + tag,

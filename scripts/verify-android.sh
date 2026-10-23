@@ -20,7 +20,8 @@ machines = {"arm64-v8a": ("AArch64", "ELF64"), "armeabi-v7a": ("ARM", "ELF32"),
 abis = args.abis.split(",")
 if len(set(abis)) != len(abis) or any(a not in machines for a in abis):
     parser.error("invalid ABI set")
-sdk = Path(os.environ.get("ANDROID_HOME", str(Path.home() / "Library/Android/sdk")))
+default_sdk = Path.home() / ("Library/Android/sdk" if platform.system() == "Darwin" else "Android/Sdk")
+sdk = Path(os.environ.get("ANDROID_HOME", os.environ.get("ANDROID_SDK_ROOT", str(default_sdk))))
 ndk = Path(os.environ.get("ANDROID_NDK_HOME", str(sdk / "ndk/30.0.16248370")))
 host = {"Darwin": "darwin-x86_64", "Linux": "linux-x86_64"}.get(platform.system())
 if not host:

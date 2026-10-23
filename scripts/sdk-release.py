@@ -62,6 +62,27 @@ def version_valid(value):
                                for p in (match[4] or "").split("."))
 
 
+def version_order(value):
+    # SemVer precedence (build metadata ignored): major/minor/patch numerically,
+    # then release > prerelease, with prerelease identifiers compared per spec
+    # (numeric < alphanumeric, numeric numerically, alphanumeric lexically,
+    # longer prefix-equal sets sort higher).
+    require(version_valid(value), "invalid SemVer version")
+    match = SEMVER.fullmatch(value)
+    assert match is not None  # validated above
+    major, minor, patch = int(match[1]), int(match[2]), int(match[3])
+    pre = match[4]
+    if pre is None:
+        return (major, minor, patch, 1, ())
+    identifiers = []
+    for part in pre.split("."):
+        if part.isdigit():
+            identifiers.append((0, int(part), ""))
+        else:
+            identifiers.append((1, 0, part))
+    return (major, minor, patch, 0, tuple(identifiers))
+
+
 def validate(manifest):
     require(isinstance(manifest, dict), "manifest must be an object")
     require(set(manifest) == {"schema_version", "version", "source_revision",
@@ -233,7 +254,8 @@ def inspect_zip(path):
 def extract_zip(path, destination):
     inspect_zip(path)
     destination = Path(destination)
-    require(not destination.is_symlink(), "symlink extraction directory")
+    require(not any(p.is_symlink() for p in [destination, *destination.parents]),
+            "symlink extraction directory")
     destination = destination.resolve()
     destination.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(path) as archive:
@@ -360,8 +382,13 @@ def verify_debug_assets(manifest, directory):
 
 
 def write_scoped(root, relative, content):
-    require(not Path(root).is_symlink(), "symlink promotion root")
-    target = Path(root).resolve() / relative
+    root_path = Path(root)
+    require(not any(p.is_symlink() for p in [root_path, *root_path.parents]),
+            "symlink promotion root")
+    parts = PurePosixPath(str(relative)).parts
+    require(not PurePosixPath(str(relative)).is_absolute() and ".." not in parts
+            and all(p not in ("", ".") for p in parts), "unsafe promotion target")
+    target = root_path.resolve() / relative
     require(not any(p.is_symlink() for p in [target, *target.parents]),
             f"symlink in promotion target: {relative}")
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -381,6 +408,9 @@ def promote(manifest, artifacts, sdk, destination, check=False):
         previous = load(metadata)
         if previous["version"] == manifest["version"]:
             require(previous == manifest, "refusing to rewrite an existing version's provenance")
+        else:
+            require(version_order(manifest["version"]) > version_order(previous["version"]),
+                    f"refusing downgrade from {previous['version']} to {manifest['version']}")
     if check:
         require((Path(destination) / target).read_bytes() == binding, "generated binding drift")
         return False
@@ -409,7 +439,9 @@ def open_pr(manifest, artifacts, sdk, repo):
     prs = same_repository_prs(json.loads(retry(lambda: run(*pr_args, env=env))), repo)
     require(not any(p["state"] == "CLOSED" for p in prs), "promotion PR was closed; human review required")
     with tempfile.TemporaryDirectory() as tmp:
-        checkout = Path(tmp) / "sdk"
+        # Resolve system symlinks (e.g. /var -> /private/var on macOS) so the
+        # strict symlink-ancestor checks in promote/write_scoped see canonical paths.
+        checkout = Path(tmp).resolve() / "sdk"
         retry(lambda: run("gh", "repo", "clone", repo, checkout, "--", "--branch", "main", env=env))
         # Never run downstream build scripts with the distribution credential.
         _, _, target = BINDINGS[sdk]

@@ -947,7 +947,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_send_message() and 0xFFFF) != 3916) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_shutdown() and 0xFFFF) != 34843) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_shutdown() and 0xFFFF) != 52153) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_subscribe() and 0xFFFF) != 8425) {
@@ -2361,10 +2361,6 @@ public interface TinkleClientInterface {
 
     /**
      * Graceful shutdown: stop RPCs, tear down transport.
-     *
-     * Named `shutdown` instead of `close` because UniFFI generates a
-     * `Disposable`/`AutoCloseable.close()` for every object, which collides
-     * with a user-defined `close()` in Kotlin.
      */
     suspend fun `shutdown`()
 
@@ -2606,10 +2602,6 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
     /**
      * Graceful shutdown: stop RPCs, tear down transport.
-     *
-     * Named `shutdown` instead of `close` because UniFFI generates a
-     * `Disposable`/`AutoCloseable.close()` for every object, which collides
-     * with a user-defined `close()` in Kotlin.
      */
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `shutdown`() {

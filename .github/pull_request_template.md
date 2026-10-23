@@ -73,15 +73,19 @@ If any box cannot be checked, explain:
 ```sh
 # paste actual runs, e.g.:
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --no-deps -- -D warnings
-cargo test --workspace --verbose
-cargo check -p syntra-ws -p libtinkle-web --target wasm32-unknown-unknown
+cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings
+cargo test --locked --workspace --all-features --verbose
+python3 -m unittest discover -s tests -p 'test_sdk_release.py' -v
+bash scripts/generate-bindings.sh --check
+cargo check --locked -p syntra-ws -p libtinkle-web --target wasm32-unknown-unknown
 ```
 
 - [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy --workspace --all-targets --no-deps -- -D warnings`
-- [ ] `cargo test --workspace --verbose` (incl. `client_integration` live mock gateway if touched)
-- [ ] `cargo check -p syntra-ws -p libtinkle-web --target wasm32-unknown-unknown` (if `syntra-ws` / web / `cfg(wasm32)` touched)
+- [ ] `cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings`
+- [ ] `cargo test --locked --workspace --all-features --verbose` (incl. `client_integration` live mock gateway if touched)
+- [ ] `python3 -m unittest discover -s tests -p 'test_sdk_release.py' -v` (release-test)
+- [ ] `bash scripts/generate-bindings.sh --check` (bindings parity, if `tinkle-ffi` touched)
+- [ ] `cargo check --locked -p syntra-ws -p libtinkle-web --target wasm32-unknown-unknown` (if `syntra-ws` / web / `cfg(wasm32)` touched)
 - [ ] UniFFI bindings regen / Swift+Kotlin smoke (if `tinkle-ffi` touched)
 - [ ] WASM browser smoke (if `libtinkle-web` touched)
 

@@ -41,6 +41,13 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('tag=' + tag + '\n')
           PY
+  # Recovery: this job runs only when this run's release-plz step emits a
+  # `tinkle-ffi` entry. If that step fails after the `tinkle-ffi-v<version>` tag
+  # is created, later runs will not re-emit the version and the SDK publish will
+  # never start. In that case manually dispatch the SDK pipeline:
+  # `gh workflow run native-sdk.yml -f source_ref=tinkle-ffi-vX.Y.Z -f publish=true`
+  # (or re-run release-plz to re-create the tag, then dispatch). Do not retag
+  # manually; `native-sdk.yml` authorizes the tag via `authorize-source`.
   native:
     needs: release-plz
     if: needs.release-plz.outputs.native_tag != ''

@@ -1,16 +1,10 @@
 version: 2
-registries:
-  buf-public:
-    type: cargo-registry
-    registry: buf
-    url: https://buf.build/gen/cargo/public/
-    # Anonymous registry: declare the host for Dependabot's egress allowlist,
-    # but do not invent a token (config.json has auth-required=false).
+# Buf is a public sparse registry (auth-required=false in .cargo/config.toml),
+# so no `registries` entry is needed. Dependabot's `cargo-registry` type requires
+# credentials and fails without them; use the supported public-registry setup.
 updates:
   - package-ecosystem: cargo
     directory: /
-    registries:
-      - buf-public
     schedule:
       interval: weekly
     groups:

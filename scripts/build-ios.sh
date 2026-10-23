@@ -73,9 +73,14 @@ for entry in 'arm64 iphoneos' 'arm64 iphonesimulator' 'x86_64 iphonesimulator'; 
     -I "$STAGE/device/headers" "$ROOT/bindings/swift/TinkleSDK.swift"
 done
 
+# Normalize mtimes for byte-reproducible ZIPs (match Android's fixed 1980 timestamps).
+# ditto stores build-time mtimes from the cp'd staging files, so every run would
+# otherwise produce a different SHA-256 and fail the immutable-asset digest check.
+find "$STAGE/TinkleSDKFFI.xcframework" -exec touch -h -t 198001010000 {} +
 ditto -c -k --norsrc --keepParent "$STAGE/TinkleSDKFFI.xcframework" "$STAGE/TinkleSDKFFI.xcframework.zip"
 cp "$ROOT/bindings/swift/TinkleSDK.swift" "$ROOT/bindings/swift/TinkleSDKFFI.h" \
   "$ROOT/bindings/swift/module.modulemap" "$STAGE/bindings/"
+find "$STAGE/bindings" -exec touch -h -t 198001010000 {} +
 # No --keepParent here: the three generated files must be at the ZIP root.
 ditto -c -k --norsrc "$STAGE/bindings" "$STAGE/swift-bindings.zip"
 python3 - "$STAGE" <<'PY'

@@ -43,8 +43,34 @@ for generated, relative in files.items():
     source, destination = stage / generated, root / relative
     if not source.is_file():
         raise SystemExit(f"error: generator did not produce {generated}")
-    # Normalize only whitespace, never generated API behavior.
+    # Normalize only whitespace, plus two upstream UniFFI Swift template fixes
+    # (Kotlin already correct): free RustBuffer on decode failure, and read
+    # handle-map count under its lock. Patches are re-applied on every regen so
+    # --check passes with the fixed runtime.
     text = "\n".join(line.rstrip() for line in source.read_text().splitlines()) + "\n"
+    if generated == "TinkleSDK.swift":
+        text = text.replace(
+            "public static func lift(_ buf: RustBuffer) throws -> SwiftType {\n"
+            "        var reader = createReader(data: Data(rustBuffer: buf))\n"
+            "        let value = try read(from: &reader)\n"
+            "        if hasRemaining(reader) {\n"
+            "            throw UniffiInternalError.incompleteData\n"
+            "        }\n"
+            "        buf.deallocate()\n"
+            "        return value",
+            "public static func lift(_ buf: RustBuffer) throws -> SwiftType {\n"
+            "        defer { buf.deallocate() }\n"
+            "        var reader = createReader(data: Data(rustBuffer: buf))\n"
+            "        let value = try read(from: &reader)\n"
+            "        if hasRemaining(reader) {\n"
+            "            throw UniffiInternalError.incompleteData\n"
+            "        }\n"
+            "        return value",
+        )
+        text = text.replace(
+            "var count: Int {\n        get {\n            map.count\n        }\n    }",
+            "var count: Int {\n        get {\n            lock.withLock { map.count }\n        }\n    }",
+        )
     previous = destination.read_text() if destination.is_file() else ""
     if previous == text:
         continue

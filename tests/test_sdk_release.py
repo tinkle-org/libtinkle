@@ -30,7 +30,9 @@ class ReleaseTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        # Resolve system symlinks (e.g. /var -> /private/var on macOS) so the
+        # strict symlink-ancestor checks see canonical paths.
+        self.root = Path(self.temp.name).resolve()
         self.artifacts = self.root / "artifacts"
         self.artifacts.mkdir()
         for key, name in release.ARTIFACTS.items():
@@ -231,6 +233,8 @@ class ReleaseTests(unittest.TestCase):
                 return "sdk-artifact.json\nsrc/main/kotlin/com/tinkle/sdk/tinkle_ffi.kt"
             return ""
         def remote_file(checkout, revision, relative):
+            self.assertEqual(revision, "FETCH_HEAD")
+            self.assertIn(relative, {"sdk-artifact.json", release.BINDINGS["kotlin"][2]})
             return release.encoded(self.manifest) if relative == "sdk-artifact.json" else binding
         with patch.dict(release.os.environ, {"SDK_DISTRIBUTION_TOKEN": "test-placeholder"}), \
                 patch.object(release, "run", side_effect=command), \
@@ -250,11 +254,16 @@ class ReleaseTests(unittest.TestCase):
                 # main has advanced; replay must not attempt a downgrade.
                 (Path(args[4]) / "sdk-artifact.json").write_text("newer main release")
             if args[:2] == ("git", "show"):
+                self.assertEqual(args[2], "c" * 40 + ":sdk-artifact.json")
                 return json.dumps(self.manifest)
             return ""
+        def historical_file(checkout, revision, relative):
+            self.assertEqual(revision, "c" * 40)
+            self.assertEqual(relative, release.BINDINGS["kotlin"][2])
+            return b"generated Kotlin"
         with patch.dict(release.os.environ, {"SDK_DISTRIBUTION_TOKEN": "test-placeholder"}), \
                 patch.object(release, "run", side_effect=command), \
-                patch.object(release, "git_file", return_value=b"generated Kotlin"):
+                patch.object(release, "git_file", side_effect=historical_file):
             release.open_pr(self.manifest, self.artifacts, "kotlin", "tinklehq/tinkle-sdk-kotlin")
         self.assertFalse(any("commit" in c or "push" in c or "checkout" in c or "create" in c for c in calls))
 
@@ -364,6 +373,9 @@ class ReleaseTests(unittest.TestCase):
 
     def test_sdk_ci_rejects_binding_drift_without_replacing_it(self):
         destination = self.root / "kotlin"
+        destination.mkdir()
+        (destination / "settings.gradle.kts").write_text("// stub consumer\n")
+        (destination / "gradlew").write_text("#!/bin/sh\nexit 0\n")
         release.promote(self.manifest, self.artifacts, "kotlin", destination)
         binding = destination / release.BINDINGS["kotlin"][2]
         binding.write_text("drift must remain visible")
@@ -378,6 +390,9 @@ class ReleaseTests(unittest.TestCase):
 
     def test_candidate_allows_same_version_without_mutating_release_rules(self):
         destination = self.root / "candidate"
+        destination.mkdir()
+        (destination / "settings.gradle.kts").write_text("// stub consumer\n")
+        (destination / "gradlew").write_text("#!/bin/sh\nexit 0\n")
         release.promote(self.manifest, self.artifacts, "kotlin", destination)
         candidate = copy.deepcopy(self.manifest)
         candidate["source_revision"] = "b" * 40
@@ -391,10 +406,13 @@ class ReleaseTests(unittest.TestCase):
 
     def test_android_build_runs_buildsrc_tests_separately(self):
         destination = self.root / "android"
+        destination.mkdir()
+        (destination / "gradlew").write_text("#!/bin/sh\nexit 0\n")
         with patch.object(ci, "call") as command:
             with self.assertRaisesRegex(ValueError, "one final release AAR"):
                 ci.android_build(destination, self.artifacts)
-            self.assertEqual(command.call_args_list[0].args, ("bash", "gradlew", "-p", "buildSrc", "test"))
+            self.assertEqual(command.call_args_list[0].args[0:2], ("bash", destination / "gradlew"))
+            self.assertEqual(command.call_args_list[0].args[2:5], ("-p", "buildSrc", "test"))
 
     def test_android_runtime_requires_exact_api_and_page_size(self):
         # API is validated before any page-size probing.

@@ -143,6 +143,8 @@ with tempfile.TemporaryDirectory(prefix="tinkle-android-") as temporary:
     archive("android-native-debug-symbols-dev.zip" if args.abis else "android-native-debug-symbols.zip",
             [(p, p.relative_to(stage / "symbols").as_posix()) for p in (stage / "symbols").rglob("*.dbg")])
     archive("kotlin-bindings.zip", [(bindings, "com/tinkle/sdk/tinkle_ffi.kt")])
-    shutil.copyfile(stage / "android-build-metadata.json", output / "android-build-metadata.json")
+    # Subset runs must not overwrite the canonical release manifest either.
+    metadata_name = "android-build-metadata-dev.json" if args.abis else "android-build-metadata.json"
+    shutil.copyfile(stage / "android-build-metadata.json", output / metadata_name)
 print("Native ELF and binding parity checks passed; installed APK checks are separate.")
 PY

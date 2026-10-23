@@ -12,8 +12,20 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  rust:
-    name: Rust (${{ matrix.os }})
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-on-failure: true
+      - run: cargo fmt --all -- --check
+  clippy:
+    name: clippy (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -23,15 +35,31 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+      - run: rustup toolchain install 1.99.1 --profile minimal --component clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           cache-on-failure: true
-      - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install 1.99.1 --profile minimal
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-on-failure: true
       - run: cargo test --locked --workspace --all-features --verbose
-      - run: python3 -m unittest discover -s tests -p 'test_sdk_release.py' -v
-      - name: Generated binding parity
+      - if: matrix.os == 'ubuntu-latest'
+        run: python3 -m unittest discover -s tests -p 'test_sdk_release.py' -v
+      - if: matrix.os == 'ubuntu-latest'
+        name: Generated binding parity
         run: bash scripts/generate-bindings.sh --check
   wasm:
     name: wasm32 check
@@ -46,7 +74,12 @@ jobs:
           cache-on-failure: true
       - run: cargo check --locked -p syntra-ws -p libtinkle-web --target wasm32-unknown-unknown
   msrv:
-    name: Declared MSRV
+    # Required context is still `msrv (cargo-hack)` (see branch ruleset
+    # `Protect main - require PR + CI`). Implementation checks the declared
+    # workspace MSRV with that exact compiler instead of only `cargo hack
+    # --rust-version`; keep the legacy name until the ruleset is migrated to
+    # `Declared MSRV`.
+    name: msrv (cargo-hack)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

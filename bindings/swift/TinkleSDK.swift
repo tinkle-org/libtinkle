@@ -240,12 +240,12 @@ extension FfiConverterRustBuffer {
     @_documentation(visibility: private)
 #endif
     public static func lift(_ buf: RustBuffer) throws -> SwiftType {
+        defer { buf.deallocate() }
         var reader = createReader(data: Data(rustBuffer: buf))
         let value = try read(from: &reader)
         if hasRemaining(reader) {
             throw UniffiInternalError.incompleteData
         }
-        buf.deallocate()
         return value
     }
 
@@ -453,7 +453,7 @@ fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
 
     var count: Int {
         get {
-            map.count
+            lock.withLock { map.count }
         }
     }
 }
@@ -1165,10 +1165,6 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
 
     /**
      * Graceful shutdown: stop RPCs, tear down transport.
-     *
-     * Named `shutdown` instead of `close` because UniFFI generates a
-     * `Disposable`/`AutoCloseable.close()` for every object, which collides
-     * with a user-defined `close()` in Kotlin.
      */
     func shutdown() async
 
@@ -1336,10 +1332,6 @@ open func sendMessage(roomId: Int64, text: String, randomId: UInt64)async throws
 
     /**
      * Graceful shutdown: stop RPCs, tear down transport.
-     *
-     * Named `shutdown` instead of `close` because UniFFI generates a
-     * `Disposable`/`AutoCloseable.close()` for every object, which collides
-     * with a user-defined `close()` in Kotlin.
      */
 open func shutdown()async   {
     return
@@ -2228,7 +2220,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_send_message() != 3916) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_shutdown() != 34843) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_shutdown() != 52153) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_subscribe() != 8425) {
