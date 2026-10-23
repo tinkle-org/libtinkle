@@ -1,0 +1,30 @@
+scripts/sdk-ci.py
+  s_01684495b6aaaf::t_362d0e3a17f51b 137-139,142-151
+  s_01684495b6aaaf::t_439afd9724009d 41-48
+.github/workflows/pr-validate.yml
+  s_01684495b6aaaf::t_a1145fc739bfaf 35-36
+  s_01684495b6aaaf::t_b9ef438a8f02e4 8-12,14
+.github/workflows/native-sdk.yml
+  s_01684495b6aaaf::t_0f1d5832144a4b 124-125,127-133
+  s_01684495b6aaaf::t_5c5e76d914edb8 126,209
+  s_01684495b6aaaf::t_497270ec71aae6 207-208,210-215
+  s_01684495b6aaaf::t_f36de0ce5c9d8a 157-160
+tests/test_sdk_release.py
+  s_01684495b6aaaf::t_16e1c89e1f26e4 400-402,405-406,408-411,414-415
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "44acbdae1cde410e3d6b74fa6348e693b2c6f1f6",
+  "prompts": {},
+  "sessions": {
+    "s_01684495b6aaaf": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e99fadca2ffe8J7suy20FLbfIZ",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    }
+  }
+}
