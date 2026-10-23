@@ -162,6 +162,13 @@ Kotlin package integration:
 * The instrumentation test calls the adapter initializer, explicitly invokes
   `uniffiEnsureInitialized()` for UniFFI 0.32.2, and makes a stable generated API
   call. Alignment checks must include all bundled JNA/native libraries.
+* R8 stays enabled for both the sample app and its instrumentation APK. The SDK
+  AAR ships its JNA native/reflection keep rules plus narrow exclusions for the
+  four unavailable desktop-only AWT types referenced by JNA's optional helpers.
+  These follow [JNA's Android guidance](https://github.com/java-native-access/jna/blob/5.18.1/www/FrequentlyAskedQuestions.md#jna-on-android),
+  not blanket missing-class suppression. AndroidX Test's Error Prone annotation
+  types are supplied on `androidTestCompileOnly`, so R8 can resolve the
+  CLASS-retained references without shipping Java compiler APIs in the APK.
 * minSdk **24**, compileSdk **36**, sample targetSdk **36**; read actual producer
   plugin/Kotlin/JNA versions from the SDK's Gradle configuration. CI does not
   override them. CI uses JDK 17; change the lane if the checked-in tuple requires
@@ -172,8 +179,8 @@ Kotlin package integration:
   dependency `.so` files such as JNA in the final consumer APK.
 * Runtime lanes: API 24/default/x86_64/4096-byte pages (minimum floor),
   API 36/google_apis/x86_64/4096-byte pages (current runtime), and API
-  36/google_apis_ps16k/x86_64/16384-byte pages (current 16 KB runtime). Both the
-  API level and the page size are asserted inside the emulator; a mismatch fails
+  36/google_apis_ps16k/x86_64/16384-byte pages (current 16 KB runtime). The API
+  level, primary ABI, and application page size are asserted; a mismatch fails
   the lane. An unavailable 16 KB image fails/blocks the lane, never falls back
   to 4 KB. Authoritative Google SDK indexes list
   `system-images;android-36;google_apis;x86_64` (rev 7),
@@ -182,6 +189,14 @@ Kotlin package integration:
   `reactivecircus/android-emulator-runner` lane provisions these images; a
   missing runner/image is blocked evidence, not a pass. ARM runtime execution
   and physical device proof are not claimed by x86_64 CI.
+* Runtime page size is measured with `getconf PAGE_SIZE` (or `PAGESIZE`). API 24,
+  which may lack `getconf`, uses the same `AT_PAGESZ` value from the device-side
+  `/proc/self/auxv`, transported via binary-safe `adb exec-out`. The fallback
+  parser is restricted to the matrix's native little-endian x86_64 utilities.
+  A successful numeric result never falls back just because it differs from the
+  expected lane size. `/proc/self/smaps` is not used as page-size proof: Android's
+  [x86_64 16 KB simulation](https://source.android.com/docs/core/architecture/16kb-page-size/getting-started-cf-x86-64-pgagnostic)
+  can expose 16 KB application pages while mappings still use 4 KB kernel pages.
 * JitPack coordinate: `com.github.tinklehq:tinkle-sdk-kotlin:vX.Y.Z`. JitPack
   downloads the pinned Rust bundle and packages it; it must never build Rust.
 

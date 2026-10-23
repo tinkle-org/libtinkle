@@ -440,14 +440,16 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(probed.call_args_list[0].args,
                              ("adb", "shell", "getprop", "ro.build.version.sdk"))
             command.assert_not_called()
-        # Page size comes from /proc/self/smaps, supported back to API 24.
-        smaps_4k = "Size: 4 kB\nKernelPageSize: 4 kB\nKernelPageSize: 4 kB\n"
-        with patch.object(ci.release, "run", side_effect=["36", smaps_4k]) as probed, \
+        # A real 4 KB runtime must not pass the 16 KB lane or trigger a fallback.
+        with patch.object(ci.release, "run", side_effect=["36", "x86_64", "4096"]) as probed, \
+                patch.object(ci.subprocess, "run") as binary_probe, \
                 patch.object(ci, "call") as command:
             with self.assertRaisesRegex(ValueError, "wrong emulator page size"):
                 ci.android_test(self.root, self.artifacts, 16384, 36)
-            self.assertEqual(probed.call_args_list[1].args,
-                             ("adb", "shell", "cat", "/proc/self/smaps"))
+            self.assertEqual(probed.call_args_list[2].args,
+                             ("adb", "shell", "getconf", "PAGE_SIZE"))
+            self.assertEqual(probed.call_count, 3)
+            binary_probe.assert_not_called()
             command.assert_not_called()
 
     def debug_candidate(self):

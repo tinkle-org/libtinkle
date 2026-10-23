@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -243,22 +244,49 @@ def android_build(destination, artifacts):
     release.write_scoped(destination, "build/sdk-ci-aar.json", (json.dumps(proof) + "\n").encode())
 
 
+def android_auxv_page_size(raw):
+    """Read AT_PAGESZ from native x86_64 system utilities in our emulator matrix."""
+    release.require(bool(raw) and len(raw) % 16 == 0, "invalid x86_64 auxv length")
+    entries = list(struct.iter_unpack("<QQ", raw))
+    end = next((i for i, (tag, _) in enumerate(entries) if tag == 0), None)
+    release.require(end is not None and all(entry == (0, 0) for entry in entries[end:]),
+                    "invalid auxv terminator")
+    pages = [value for tag, value in entries[:end] if tag == 6]  # AT_PAGESZ
+    release.require(len(pages) == 1 and pages[0] > 0 and pages[0] & (pages[0] - 1) == 0,
+                    "missing, duplicate, or invalid AT_PAGESZ")
+    return pages[0]
+
+
+def android_runtime_page_size():
+    # Android's x86_64 ps16k image simulates 16 KB application pages on 4 KB
+    # kernel mappings. smaps/KernelPageSize measures the latter, not sysconf().
+    # A successful getconf result is authoritative even when it is the WRONG
+    # size for this lane; never fall back in search of the expected value.
+    for key in ("PAGE_SIZE", "PAGESIZE"):
+        try:
+            value = release.run("adb", "shell", "getconf", key).strip()
+        except subprocess.CalledProcessError:
+            continue
+        release.require(re.fullmatch(r"[1-9][0-9]*", value), f"invalid getconf {key} output: {value!r}")
+        return int(value), f"getconf {key}"
+    # API 24's toybox lacks getconf. Read the same AT_PAGESZ supplied by the
+    # device kernel to Bionic. exec-out is binary-safe; release.run is not.
+    result = subprocess.run(["adb", "exec-out", "cat", "/proc/self/auxv"],
+                            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return android_auxv_page_size(result.stdout), "AT_PAGESZ"
+
+
 def android_test(destination, artifacts, page_size, api_level):
-    # Validate the emulator API first: a wrong image must fail before any
-    # page-size probing, and the probe below must work on the minimum lane
-    # (API 24), where toybox `getconf PAGE_SIZE` is not reliably present.
+    # A wrong API or ABI must fail before probing or executing the consumer.
     actual_api = release.run("adb", "shell", "getprop", "ro.build.version.sdk").strip()
     release.require(actual_api == str(api_level), f"wrong emulator API: expected {api_level}, got {actual_api}")
-    # Page size from /proc/self/smaps KernelPageSize lines (e.g. "4 kB" for
-    # 4096, "16 kB" for 16384). `cat` exists on every API level; parsing the
-    # full set rejects mixed-page images instead of sampling one mapping.
-    smaps = release.run("adb", "shell", "cat", "/proc/self/smaps")
-    sizes = {line.split(":", 1)[1].strip() for line in smaps.splitlines()
-             if line.startswith("KernelPageSize:")}
-    release.require(bool(sizes), "no KernelPageSize entries in /proc/self/smaps")
-    expected = f"{page_size // 1024} kB"
-    release.require(sizes == {expected}, f"wrong emulator page size: expected {expected}, got {sorted(sizes)}")
-    print(f"Runtime proof: Android API {actual_api}, KernelPageSize={expected}", flush=True)
+    abi = release.run("adb", "shell", "getprop", "ro.product.cpu.abi").strip()
+    release.require(abi == "x86_64", f"wrong emulator ABI: expected x86_64, got {abi}")
+    actual_pages, probe = android_runtime_page_size()
+    release.require(actual_pages == page_size,
+                    f"wrong emulator page size: expected {page_size}, got {actual_pages} via {probe}")
+    print(f"Runtime proof: Android API {actual_api}, ABI={abi}, "
+          f"application page size={actual_pages} bytes via {probe}", flush=True)
     call("adb", "shell", "getprop", "ro.product.cpu.abilist")
     proof = json.loads((destination / "build/sdk-ci-aar.json").read_text())
     release.require(release.digest(proof["path"]) == proof["sha256"], "AAR changed before consumer test")
