@@ -374,8 +374,7 @@ class ReleaseTests(unittest.TestCase):
     def test_sdk_ci_rejects_binding_drift_without_replacing_it(self):
         destination = self.root / "kotlin"
         destination.mkdir()
-        (destination / "settings.gradle.kts").write_text("// stub consumer\n")
-        (destination / "gradlew").write_text("#!/bin/sh\nexit 0\n")
+        self.consumer_scaffold("kotlin", destination)
         release.promote(self.manifest, self.artifacts, "kotlin", destination)
         binding = destination / release.BINDINGS["kotlin"][2]
         binding.write_text("drift must remain visible")
@@ -391,8 +390,7 @@ class ReleaseTests(unittest.TestCase):
     def test_candidate_allows_same_version_without_mutating_release_rules(self):
         destination = self.root / "candidate"
         destination.mkdir()
-        (destination / "settings.gradle.kts").write_text("// stub consumer\n")
-        (destination / "gradlew").write_text("#!/bin/sh\nexit 0\n")
+        self.consumer_scaffold("kotlin", destination)
         release.promote(self.manifest, self.artifacts, "kotlin", destination)
         candidate = copy.deepcopy(self.manifest)
         candidate["source_revision"] = "b" * 40
@@ -411,8 +409,27 @@ class ReleaseTests(unittest.TestCase):
         with patch.object(ci, "call") as command:
             with self.assertRaisesRegex(ValueError, "one final release AAR"):
                 ci.android_build(destination, self.artifacts)
-            self.assertEqual(command.call_args_list[0].args[0:2], ("bash", destination / "gradlew"))
-            self.assertEqual(command.call_args_list[0].args[2:5], ("-p", "buildSrc", "test"))
+            self.assertEqual(command.call_args_list[0].args,
+                             ("bash", destination / "gradlew", "-p", "buildSrc", "test"))
+
+    def consumer_scaffold(self, sdk, destination):
+        for name in ci.CONSUMER_FILES[sdk]:
+            path = destination / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("test scaffold\n")
+
+    def test_jitpack_missing_wrapper_fails_before_fetch_or_retry(self):
+        destination = self.root / "kotlin"
+        destination.mkdir()
+        (destination / "sdk-artifact.json").write_bytes(release.encoded(self.manifest))
+        with patch.object(ci.urllib.request, "urlopen") as network, \
+                patch.object(ci.release, "retry") as retry, patch.object(ci, "call") as command:
+            with self.assertRaisesRegex(ValueError, "no gradlew"):
+                ci.jitpack("v" + self.manifest["version"], destination)
+            network.assert_not_called()
+            retry.assert_not_called()
+            command.assert_not_called()
+        self.assertFalse((destination / "build").exists())
 
     def test_android_runtime_requires_exact_api_and_page_size(self):
         # API is validated before any page-size probing.

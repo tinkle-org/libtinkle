@@ -140,9 +140,10 @@ Swift package integration:
 * Scheme/test target: `TinkleSDK` / `TinkleSDKTests`. The test must import
   `TinkleSDK` and make a deterministic generated binding call, triggering UniFFI
   contract/checksum validation.
-* Xcode **27.1**, runner `macos-26`, deployment target **iOS 15.0**. The helper
+* Release Xcode **27.1**; PR/validation Xcode **26.6** on hosted `macos-26`;
+  deployment target **iOS 15.0**. The helper
   chooses an actually available simulator and records its runtime/device ID.
-  This is current-runtime proof only. Xcode 27.1 cannot run iOS 15; minimum-OS
+  This is current-runtime proof only. These Xcode versions cannot run iOS 15; minimum-OS
   device/runtime proof needs separate evidence. No CI result claims otherwise.
 
 Kotlin package integration:
@@ -194,11 +195,48 @@ before building. For the current stacked bootstrap, an operator may choose
 `feat/native-sdk-distribution`; it is not baked into the permanent dependency.
 Once metadata exists, SDK CI exclusively uses its `source_revision`.
 
-For a core validation-only run, dispatch `native-sdk.yml` with `publish=false`,
-an exact `source_ref`, and the SDK feature refs if their bootstrap changes have
-not merged yet. All native and consumer validation uses read-only permissions.
-Before real publication, merge matching producer/consumer contracts to main and
-use main SDK consumer revisions.
+Core PR and validation-only runs default to the full SDK commit SHAs checked in
+at `scripts/sdk-consumers.json`, not the downstream `main` branches. These are
+test dependencies: update them deliberately alongside core/consumer contract
+changes, including after the bootstrap PRs merge. An SDK bootstrap need not be
+merged to validate a core PR. Optional `swift_ref` and `kotlin_ref` dispatch/call
+overrides must be full lowercase commit SHAs; mutable branches/tags are rejected.
+For a manual validation run, use `publish=false` and an exact `source_ref`.
+
+The `source` job resolves each consumer commit and inspects its immutable Git
+tree before any native builds. Both the package scaffolding and the build/test
+sources must exist, including the Kotlin `buildSrc` implementation and tests.
+Missing files fail with their SDK/revision and complete missing-file list; no
+placeholder manifests, skipped tests, or `continue-on-error` are used. Candidate
+staging repeats the scaffold check before reading artifacts. Do not use a dirty
+local checkout as proof: untracked/ignored files are absent from CI. In
+particular, Kotlin's package directory `com/tinkle/build` must not be lost to a
+blanket `**/build/` ignore rule.
+
+Publishing does not use these validation pins. It resolves each SDK's `main`
+once to an immutable SHA and requires the same complete scaffold. Release input
+overrides may be empty or `main` only. Before publication, merge the matching
+producer/consumer contracts to main. All PR validation remains read-only, and
+the existing protected-main/tag, artifact checksum, and consumer-test gates
+remain mandatory for publication.
+
+This follows the explicit multi-repository `repository`/`ref` checkout pattern
+in [actions/checkout](https://github.com/actions/checkout#checkout-multiple-repos-side-by-side).
+[Ferrostar](https://stadiamaps.github.io/ferrostar/dev-env-setup.html) avoids
+cross-repository bootstrap ordering by keeping platform packages in its
+monorepo. We retain separate SDK repositories and instead version their CI
+dependency revisions explicitly. GitHub's [inputs context](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#inputs-context)
+exists for manual/reusable workflows, not ordinary PR events; input defaults
+alone cannot configure a PR's downstream dependencies.
+
+PR/validation builds explicitly select Xcode 26.6, present on the
+[hosted image used by the failing runs](https://github.com/actions/runner-images/blob/macos-26-arm64/20261013.0424/images/macos/macos-26-arm64-Readme.md).
+Publication retains the Xcode 27.1 requirement. Both producer and Swift consumer
+use the same mode-specific version and verify `xcodebuild -version` under the
+selected `DEVELOPER_DIR` before exporting it for later steps. `Xcode.app` is
+accepted only if its actual version exactly matches the pin. An unavailable or
+wrong version is a hard failure, not a fallback to an arbitrary runner default.
+Validation under 26.6 does not claim release qualification under 27.1.
 
 Main/operator follow-up (not performed by these changes):
 

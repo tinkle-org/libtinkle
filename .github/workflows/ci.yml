@@ -57,7 +57,7 @@ jobs:
           cache-on-failure: true
       - run: cargo test --locked --workspace --all-features --verbose
       - if: matrix.os == 'ubuntu-latest'
-        run: python3 -m unittest discover -s tests -p 'test_sdk_release.py' -v
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
       - if: matrix.os == 'ubuntu-latest'
         name: Generated binding parity
         run: bash scripts/generate-bindings.sh --check

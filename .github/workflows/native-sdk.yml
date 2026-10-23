@@ -13,10 +13,10 @@ on:
         default: false
       swift_ref:
         type: string
-        default: main
+        default: ''
       kotlin_ref:
         type: string
-        default: main
+        default: ''
     secrets:
       SDK_DISTRIBUTION_TOKEN:
         required: false
@@ -31,13 +31,13 @@ on:
         type: boolean
         default: false
       swift_ref:
-        description: 'Swift consumer revision (bootstrap can use a feature branch)'
+        description: 'Validation: full Swift consumer SHA (default: checked-in pin). Publish: main only.'
         type: string
-        default: main
+        default: ''
       kotlin_ref:
-        description: 'Kotlin consumer revision (bootstrap can use a feature branch)'
+        description: 'Validation: full Kotlin consumer SHA (default: checked-in pin). Publish: main only.'
         type: string
-        default: main
+        default: ''
 permissions:
   contents: read
 env:
@@ -91,46 +91,30 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'sha={sha}\nref={ref}\npublish={str(publish).lower()}\n')
           PY
-      - name: Pin consumer revisions for this run
+      - name: Pin consumers and validate complete SDK scaffolds before native builds
         id: consumers
         env:
-          SWIFT_REF: ${{ inputs.swift_ref || 'main' }}
-          KOTLIN_REF: ${{ inputs.kotlin_ref || 'main' }}
+          SWIFT_REF: ${{ inputs.swift_ref }}
+          KOTLIN_REF: ${{ inputs.kotlin_ref }}
           PUBLISH: ${{ steps.source.outputs.publish }}
           GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 - <<'PY'
-          import json, os, re, subprocess, urllib.parse
-          if os.environ['PUBLISH'] == 'true':
-              assert os.environ['SWIFT_REF'] == os.environ['KOTLIN_REF'] == 'main', 'Release consumers must be main revisions'
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              for sdk in ('swift', 'kotlin'):
-                  ref = urllib.parse.quote(os.environ[sdk.upper() + '_REF'], safe='')
-                  commit = json.loads(subprocess.check_output(['gh', 'api', f'repos/tinklehq/tinkle-sdk-{sdk}/commits/{ref}']))['sha']
-                  assert re.fullmatch('[0-9a-f]{40}', commit)
-                  output.write(f'{sdk}_sha={commit}\n')
-          PY
+        run: python3 scripts/sdk-ci.py pin-consumers
   ios:
     needs: source
     runs-on: macos-26
     env:
       IPHONEOS_DEPLOYMENT_TARGET: '15.0'
       SDK_OUTPUT_DIR: ${{ github.workspace }}/target/sdk
+      # Hosted macos-26 currently ships 26.6. Publication retains the 27.1
+      # contract and fails closed until that version is provisioned.
+      XCODE_VERSION: ${{ needs.source.outputs.publish == 'true' && '27.1' || '26.6' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
-      - name: Select Xcode (27.1 when present, otherwise runner default)
-        run: |
-          for app in /Applications/Xcode*.app; do [ -d "$app" ] && echo "${app##*/}"; done || true
-          if [ -d /Applications/Xcode_27.1.app/Contents/Developer ]; then
-            echo "DEVELOPER_DIR=/Applications/Xcode_27.1.app/Contents/Developer" >> "$GITHUB_ENV"
-          elif [ -d /Applications/Xcode.app/Contents/Developer ]; then
-            echo "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer" >> "$GITHUB_ENV"
-          fi
-          xcodebuild -version
-          xcrun --show-sdk-path
+      - name: Select and verify pinned Xcode
+        run: python3 scripts/sdk-ci.py select-xcode --version "$XCODE_VERSION"
       - run: rustup toolchain install 1.99.1 --profile minimal --target aarch64-apple-ios --target aarch64-apple-ios-sim --target x86_64-apple-ios
       - name: Verify pinned generator
         run: python3 scripts/sdk-ci.py toolchain
@@ -203,21 +187,15 @@ jobs:
     runs-on: macos-26
     env:
       IPHONEOS_DEPLOYMENT_TARGET: '15.0'
+      XCODE_VERSION: ${{ needs.source.outputs.publish == 'true' && '27.1' || '26.6' }}
     steps:
-      - name: Select Xcode (27.1 when present, otherwise runner default)
-        run: |
-          for app in /Applications/Xcode*.app; do [ -d "$app" ] && echo "${app##*/}"; done || true
-          if [ -d /Applications/Xcode_27.1.app/Contents/Developer ]; then
-            echo "DEVELOPER_DIR=/Applications/Xcode_27.1.app/Contents/Developer" >> "$GITHUB_ENV"
-          elif [ -d /Applications/Xcode.app/Contents/Developer ]; then
-            echo "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer" >> "$GITHUB_ENV"
-          fi
-          xcodebuild -version
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.source.outputs.sha }}
           path: core
           persist-credentials: false
+      - name: Select and verify pinned Xcode
+        run: python3 core/scripts/sdk-ci.py select-xcode --version "$XCODE_VERSION"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: tinklehq/tinkle-sdk-swift

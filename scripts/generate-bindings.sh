@@ -31,6 +31,22 @@ import difflib
 from pathlib import Path
 import sys
 
+
+def apply_patch(text, name, old, replacement):
+    # Accept only a single known original or an exact upstream-fixed fragment.
+    # Template drift must fail in both modes before any bindings are written.
+    counts = (text.count(old), text.count(replacement))
+    if counts == (1, 0):
+        return text.replace(old, replacement, 1)
+    if counts == (0, 1):
+        return text
+    raise SystemExit(
+        f"error: unexpected Swift template for {name}: expected exactly one original "
+        f"or fixed fragment, found {counts[0]} original and {counts[1]} fixed; "
+        "review scripts/generate-bindings.sh against the generated template"
+    )
+
+
 root, stage, mode = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 files = {
     "TinkleSDK.swift": "bindings/swift/TinkleSDK.swift",
@@ -46,10 +62,11 @@ for generated, relative in files.items():
     # Normalize only whitespace, plus two upstream UniFFI Swift template fixes
     # (Kotlin already correct): free RustBuffer on decode failure, and read
     # handle-map count under its lock. Patches are re-applied on every regen so
-    # --check passes with the fixed runtime.
+    # --check passes with the fixed runtime. Unknown templates fail closed.
     text = "\n".join(line.rstrip() for line in source.read_text().splitlines()) + "\n"
     if generated == "TinkleSDK.swift":
-        text = text.replace(
+        text = apply_patch(
+            text, "RustBuffer cleanup",
             "public static func lift(_ buf: RustBuffer) throws -> SwiftType {\n"
             "        var reader = createReader(data: Data(rustBuffer: buf))\n"
             "        let value = try read(from: &reader)\n"
@@ -67,7 +84,8 @@ for generated, relative in files.items():
             "        }\n"
             "        return value",
         )
-        text = text.replace(
+        text = apply_patch(
+            text, "handle-map locking",
             "var count: Int {\n        get {\n            map.count\n        }\n    }",
             "var count: Int {\n        get {\n            lock.withLock { map.count }\n        }\n    }",
         )

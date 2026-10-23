@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -19,8 +20,112 @@ release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
 
 
+CONSUMER_FILES = {
+    "swift": (
+        "Package.swift", "Sources/TinkleSDK/Bootstrap.swift",
+        "Tests/TinkleSDKTests/TinkleSDKTests.swift",
+        "Tests/TinkleSDKTests/LoopbackGateway.swift",
+    ),
+    "kotlin": (
+        "settings.gradle.kts", "build.gradle.kts", "gradle.properties", "gradlew",
+        "gradle/wrapper/gradle-wrapper.jar", "gradle/wrapper/gradle-wrapper.properties",
+        "consumer-rules.pro", "src/main/AndroidManifest.xml",
+        "src/main/kotlin/com/tinkle/sdk/TinkleSdk.kt",
+        "buildSrc/build.gradle", "buildSrc/settings.gradle",
+        "buildSrc/src/main/groovy/com/tinkle/build/PrepareSdkArtifacts.groovy",
+        "buildSrc/src/main/groovy/com/tinkle/build/SdkArtifacts.groovy",
+        "buildSrc/src/test/groovy/com/tinkle/build/PrepareSdkArtifactsTest.groovy",
+        "buildSrc/src/test/groovy/com/tinkle/build/SdkArtifactsTest.groovy",
+        "sample/build.gradle.kts", "sample/smoke-rules.pro",
+        "sample/src/main/AndroidManifest.xml",
+        "sample/src/main/kotlin/com/tinkle/sdk/smoke/SmokeChecks.kt",
+        "sample/src/main/kotlin/com/tinkle/sdk/smoke/LoopbackGateway.kt",
+        "sample/src/androidTest/kotlin/com/tinkle/sdk/smoke/NativeSmokeTest.kt",
+    ),
+}
+
+
+def consumer_refs(pins, publish=False, swift_ref="", kotlin_ref=""):
+    overrides = {"swift": swift_ref, "kotlin": kotlin_ref}
+    if publish:
+        release.require(all(ref in ("", "main") for ref in overrides.values()),
+                        "Release consumers must be main revisions")
+        return dict.fromkeys(CONSUMER_FILES, "main")
+    data = json.loads(Path(pins).read_text(), object_pairs_hook=release.unique_object)
+    release.require(isinstance(data, dict) and set(data) == {"schema_version", *CONSUMER_FILES},
+                    "consumer pins must contain schema_version, swift, and kotlin only")
+    release.require(type(data["schema_version"]) is int and data["schema_version"] == 1,
+                    "unsupported consumer pin schema_version")
+    for sdk in CONSUMER_FILES:
+        for ref in (data[sdk], overrides[sdk] or data[sdk]):
+            release.require(isinstance(ref, str) and re.fullmatch("[0-9a-f]{40}", ref),
+                            f"{sdk} validation consumer must be a full lowercase commit SHA")
+    return {sdk: overrides[sdk] or data[sdk] for sdk in CONSUMER_FILES}
+
+
+def require_consumer_files(sdk, present, revision):
+    missing = sorted(set(CONSUMER_FILES[sdk]) - set(present))
+    release.require(not missing,
+                    f"BLOCKED: {sdk} consumer at {revision} is incomplete; missing files: "
+                    + ", ".join(missing)
+                    + ". Commit the SDK scaffold/build logic, then update scripts/sdk-consumers.json "
+                    "for validation. Publishing requires the complete scaffold on SDK main.")
+
+
+def consumer_checkout(sdk, destination):
+    destination = Path(destination)
+    require_consumer_files(sdk, (name for name in CONSUMER_FILES[sdk]
+                                if (destination / name).is_file()), destination)
+
+
+def pin_consumers(pins, publish=False, swift_ref="", kotlin_ref=""):
+    refs = consumer_refs(pins, publish, swift_ref, kotlin_ref)
+    resolved = {}
+    for sdk, ref in refs.items():
+        repo = f"tinklehq/tinkle-sdk-{sdk}"
+        commit = json.loads(release.run("gh", "api", f"repos/{repo}/commits/{ref}"))["sha"]
+        release.require(isinstance(commit, str) and re.fullmatch("[0-9a-f]{40}", commit),
+                        f"invalid {sdk} consumer commit")
+        release.require(ref == "main" or commit == ref, f"{sdk} consumer revision mismatch")
+        # Inspect the immutable tree without running consumer build code. A partial
+        # tree must not be accepted as evidence of a missing (or complete) scaffold.
+        tree = json.loads(release.run("gh", "api", f"repos/{repo}/git/trees/{commit}?recursive=1"))
+        release.require(tree.get("truncated") is False, f"truncated {sdk} consumer tree")
+        present = [entry["path"] for entry in tree["tree"]
+                   if entry["type"] == "blob" and entry["mode"] in ("100644", "100755")]
+        require_consumer_files(sdk, present, f"{repo}@{commit}")
+        resolved[sdk] = commit
+        print(f"Validated {repo}@{commit} (requested {ref})", flush=True)
+    # Publish outputs atomically with respect to validation: never export a
+    # partially validated pair or let downstream builds start on missing inputs.
+    if "GITHUB_OUTPUT" in os.environ:
+        with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+            for sdk, commit in resolved.items():
+                output.write(f"{sdk}_sha={commit}\n")
+    return resolved
+
+
 def call(*args, cwd=None, env=None):
     subprocess.run([str(a) for a in args], cwd=cwd, env=env, check=True)
+
+
+def select_xcode(version, applications=Path("/Applications")):
+    candidates = [applications / f"Xcode_{version}.app/Contents/Developer",
+                  applications / "Xcode.app/Contents/Developer"]
+    developer = next((path for path in candidates if path.is_dir()), None)
+    release.require(developer is not None, f"BLOCKED: Xcode {version} is not installed")
+    env = dict(os.environ, DEVELOPER_DIR=str(developer))
+    actual = release.run("xcodebuild", "-version", env=env)
+    release.require(actual.splitlines() and actual.splitlines()[0] == f"Xcode {version}",
+                    f"BLOCKED: expected Xcode {version} at {developer}, got {actual}")
+    # Probe the selected toolchain in this process, not just a GITHUB_ENV value
+    # which only takes effect in later workflow steps. Aliases are accepted only
+    # after the exact version assertion; never silently use the runner default.
+    sdk = release.run("xcrun", "--show-sdk-path", env=env)
+    if "GITHUB_ENV" in os.environ:
+        with open(os.environ["GITHUB_ENV"], "a") as output:
+            output.write(f"DEVELOPER_DIR={developer}\n")
+    print(f"{actual}\nDeveloper directory: {developer}\nSDK: {sdk}", flush=True)
 
 
 def toolchain():
@@ -58,23 +163,7 @@ def stage(args):
     destination = args.destination.resolve()
     artifacts = args.artifacts.resolve()
     sdk = args.sdk
-    release.require(destination.is_dir(),
-                    f"missing consumer checkout at {destination}")
-    if sdk == "swift":
-        release.require((destination / "Package.swift").is_file(),
-                        "BLOCKED: Swift consumer checkout has no Package.swift "
-                        f"(got {[p.name for p in destination.iterdir()] if destination.is_dir() else 'missing dir'}). "
-                        "tinkle-sdk-swift main is README-only until its bootstrap PR merges; "
-                        "re-run with swift_ref=feat/bootstrap-sdk.")
-    else:
-        release.require((destination / "settings.gradle.kts").is_file(),
-                        "BLOCKED: Kotlin consumer checkout has no settings.gradle.kts. "
-                        "tinkle-sdk-kotlin main is README-only until its bootstrap PR merges; "
-                        "re-run with kotlin_ref=feat/bootstrap-sdk.")
-        release.require((destination / "gradlew").is_file(),
-                        "BLOCKED: Kotlin consumer checkout has no gradlew. "
-                        "tinkle-sdk-kotlin main is README-only until its bootstrap PR merges; "
-                        "re-run with kotlin_ref=feat/bootstrap-sdk.")
+    consumer_checkout(sdk, destination)
     native = "ios" if sdk == "swift" else "android"
     bindings, source, target = release.BINDINGS[sdk]
     if args.bootstrap:
@@ -111,10 +200,7 @@ def stage(args):
 
 
 def swift_test(destination):
-    release.require((destination / "Package.swift").is_file(),
-                    "BLOCKED: Swift consumer checkout has no Package.swift. "
-                    "tinkle-sdk-swift main is README-only until its bootstrap PR merges; "
-                    "re-run with swift_ref=feat/bootstrap-sdk.")
+    consumer_checkout("swift", destination)
     call("xcodebuild", "-version")
     call("swift", "--version")
     devices = json.loads(release.run("xcrun", "simctl", "list", "devices", "available", "--json"))
@@ -124,7 +210,7 @@ def swift_test(destination):
     release.require(bool(candidates), "BLOCKED: no available iOS simulator runtime")
     runtime, device = sorted(candidates, key=lambda item: item[0])[-1]
     print(f"Runtime proof: {runtime}/{device['name']}; deployment target: iOS 15.0.", flush=True)
-    print("iOS 15 runtime proof remains unverified on Xcode 27.1.", flush=True)
+    print("iOS 15 runtime proof remains unverified; the installed simulator is not a minimum-OS test.", flush=True)
     env = dict(os.environ, TINKLE_SDK_LOCAL="1", IPHONEOS_DEPLOYMENT_TARGET="15.0")
     call("xcodebuild", "-scheme", "TinkleSDK", "-destination", f"platform=iOS Simulator,id={device['udid']}",
          "-derivedDataPath", str(destination / ".build/ci-derived"),
@@ -143,9 +229,7 @@ def android_build(destination, artifacts):
     env = android_env(artifacts)
     gradlew = destination / "gradlew"
     release.require(gradlew.is_file(),
-                    "BLOCKED: Kotlin consumer checkout has no gradlew. "
-                    "tinkle-sdk-kotlin main is README-only until its bootstrap PR merges; "
-                    "re-run with kotlin_ref=feat/bootstrap-sdk.")
+                    "BLOCKED: Kotlin consumer checkout has no gradlew.")
     call("bash", gradlew, "-p", "buildSrc", "test", cwd=destination, env=env)
     call("bash", gradlew, "--no-daemon", "assembleRelease", "testReleaseUnitTest",
          cwd=destination, env=env)
@@ -261,10 +345,13 @@ def sdk_tag(destination, sdk, create):
 
 def jitpack(tag, destination):
     release.require(tag.startswith("v") and release.version_valid(tag[1:]), "invalid JitPack version")
+    destination = destination.resolve()
+    gradlew = destination / "gradlew"
+    release.require(gradlew.is_file(),
+                    "BLOCKED: Kotlin consumer checkout has no gradlew.")
     # Fetching this coordinate triggers the JitPack build. Retry the same immutable
     # version; no Maven Central/signing credentials and no mutable branch versions.
     base = f"https://jitpack.io/com/github/tinklehq/tinkle-sdk-kotlin/{tag}/tinkle-sdk-kotlin-{tag}"
-    destination = destination.resolve()
     manifest = release.load(destination / "sdk-artifact.json")
     release.require(tag == "v" + manifest["version"], "JitPack version/provenance mismatch")
     aar = destination / "build/jitpack/tinkle-sdk-kotlin.aar"
@@ -300,9 +387,6 @@ def jitpack(tag, destination):
     # Use the published coordinate without the file-AAR override so its POM must
     # supply JNA/coroutines. Compare Gradle's resolved AAR with the runtime input.
     env.pop("TINKLE_SDK_TEST_AAR", None)
-    gradlew = destination.resolve() / "gradlew"
-    release.require(gradlew.is_file(),
-                    "BLOCKED: Kotlin consumer checkout has no gradlew.")
     call("bash", gradlew, "--no-daemon", "--init-script",
          Path(__file__).with_name("sdk-consumer.init.gradle"),
          ":sample:verifyPublishedSdkCoordinate",
@@ -316,6 +400,10 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("toolchain")
     sub.add_parser("android-setup")
+    xcode = sub.add_parser("select-xcode")
+    xcode.add_argument("--version", choices=("26.6", "27.1"), required=True)
+    pins = sub.add_parser("pin-consumers")
+    pins.add_argument("--pins", type=Path, default=Path(__file__).with_name("sdk-consumers.json"))
     for name in ("stage", "swift-test", "android-build", "android-test", "sdk-tag"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--destination", type=Path, required=True)
@@ -341,6 +429,11 @@ def main():
         toolchain()
     elif args.command == "android-setup":
         android_setup()
+    elif args.command == "select-xcode":
+        select_xcode(args.version)
+    elif args.command == "pin-consumers":
+        pin_consumers(args.pins, os.environ.get("PUBLISH") == "true",
+                      os.environ.get("SWIFT_REF", ""), os.environ.get("KOTLIN_REF", ""))
     elif args.command == "stage":
         stage(args)
     elif args.command == "swift-test":
