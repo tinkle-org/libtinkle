@@ -397,13 +397,22 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(command.call_args_list[0].args, ("bash", "gradlew", "-p", "buildSrc", "test"))
 
     def test_android_runtime_requires_exact_api_and_page_size(self):
-        with patch.object(ci.release, "run", side_effect=["4096", "35"]), patch.object(ci, "call") as command:
+        # API is validated before any page-size probing.
+        with patch.object(ci.release, "run", return_value="35") as probed, \
+                patch.object(ci, "call") as command:
             with self.assertRaisesRegex(ValueError, "wrong emulator API"):
                 ci.android_test(self.root, self.artifacts, 4096, 36)
+            self.assertEqual(probed.call_args_list[0].args,
+                             ("adb", "shell", "getprop", "ro.build.version.sdk"))
             command.assert_not_called()
-        with patch.object(ci.release, "run", return_value="4096"), patch.object(ci, "call") as command:
+        # Page size comes from /proc/self/smaps, supported back to API 24.
+        smaps_4k = "Size: 4 kB\nKernelPageSize: 4 kB\nKernelPageSize: 4 kB\n"
+        with patch.object(ci.release, "run", side_effect=["36", smaps_4k]) as probed, \
+                patch.object(ci, "call") as command:
             with self.assertRaisesRegex(ValueError, "wrong emulator page size"):
                 ci.android_test(self.root, self.artifacts, 16384, 36)
+            self.assertEqual(probed.call_args_list[1].args,
+                             ("adb", "shell", "cat", "/proc/self/smaps"))
             command.assert_not_called()
 
     def debug_candidate(self):

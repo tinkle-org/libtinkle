@@ -38,8 +38,14 @@ def android_setup():
     # preinstalled/default NDK (which changes with runner images).
     sdk = Path(os.environ.get("ANDROID_HOME", os.environ.get("ANDROID_SDK_ROOT", "")))
     release.require(sdk.is_dir() and str(sdk) != ".", "ANDROID_HOME must name the installed SDK")
-    subprocess.run(["sdkmanager", "--licenses"], input="y\n" * 200, text=True, check=True)
-    call("sdkmanager", "--install", "ndk;30.0.16248370", "platforms;android-36", "build-tools;36.0.0")
+    # GitHub runners ship sdkmanager under cmdline-tools but not on PATH.
+    # Resolve it explicitly instead of assuming PATH configuration.
+    candidates = [sdk / "cmdline-tools/latest/bin/sdkmanager",
+                  sdk / "cmdline-tools/bin/sdkmanager",
+                  Path(shutil.which("sdkmanager") or "")]
+    manager = next((str(p) for p in candidates if p and Path(p).is_file()), "sdkmanager")
+    subprocess.run([manager, "--licenses"], input="y\n" * 200, text=True, check=True)
+    call(manager, "--install", "ndk;30.0.16248370", "platforms;android-36", "build-tools;36.0.0")
     ndk = sdk.resolve() / "ndk/30.0.16248370"
     release.require(ndk.is_dir(), "required NDK r30 was not installed")
     if "GITHUB_ENV" in os.environ:
@@ -128,11 +134,21 @@ def android_build(destination, artifacts):
 
 
 def android_test(destination, artifacts, page_size, api_level):
-    actual = release.run("adb", "shell", "getconf", "PAGE_SIZE").strip()
-    release.require(actual == str(page_size), f"wrong emulator page size: expected {page_size}, got {actual}")
+    # Validate the emulator API first: a wrong image must fail before any
+    # page-size probing, and the probe below must work on the minimum lane
+    # (API 24), where toybox `getconf PAGE_SIZE` is not reliably present.
     actual_api = release.run("adb", "shell", "getprop", "ro.build.version.sdk").strip()
     release.require(actual_api == str(api_level), f"wrong emulator API: expected {api_level}, got {actual_api}")
-    print(f"Runtime proof: Android API {actual_api}, PAGE_SIZE={actual}", flush=True)
+    # Page size from /proc/self/smaps KernelPageSize lines (e.g. "4 kB" for
+    # 4096, "16 kB" for 16384). `cat` exists on every API level; parsing the
+    # full set rejects mixed-page images instead of sampling one mapping.
+    smaps = release.run("adb", "shell", "cat", "/proc/self/smaps")
+    sizes = {line.split(":", 1)[1].strip() for line in smaps.splitlines()
+             if line.startswith("KernelPageSize:")}
+    release.require(bool(sizes), "no KernelPageSize entries in /proc/self/smaps")
+    expected = f"{page_size // 1024} kB"
+    release.require(sizes == {expected}, f"wrong emulator page size: expected {expected}, got {sorted(sizes)}")
+    print(f"Runtime proof: Android API {actual_api}, KernelPageSize={expected}", flush=True)
     call("adb", "shell", "getprop", "ro.product.cpu.abilist")
     proof = json.loads((destination / "build/sdk-ci-aar.json").read_text())
     release.require(release.digest(proof["path"]) == proof["sha256"], "AAR changed before consumer test")

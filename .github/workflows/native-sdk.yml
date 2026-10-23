@@ -114,7 +114,6 @@ jobs:
     needs: source
     runs-on: macos-26
     env:
-      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
       IPHONEOS_DEPLOYMENT_TARGET: '15.0'
       SDK_OUTPUT_DIR: ${{ github.workspace }}/target/sdk
     steps:
@@ -122,6 +121,16 @@ jobs:
         with:
           ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
+      - name: Select Xcode (27.1 when present, otherwise runner default)
+        run: |
+          for app in /Applications/Xcode*.app; do [ -d "$app" ] && echo "${app##*/}"; done || true
+          if [ -d /Applications/Xcode_27.1.app/Contents/Developer ]; then
+            echo "DEVELOPER_DIR=/Applications/Xcode_27.1.app/Contents/Developer" >> "$GITHUB_ENV"
+          elif [ -d /Applications/Xcode.app/Contents/Developer ]; then
+            echo "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer" >> "$GITHUB_ENV"
+          fi
+          xcodebuild -version
+          xcrun --show-sdk-path
       - run: rustup toolchain install 1.99.1 --profile minimal --target aarch64-apple-ios --target aarch64-apple-ios-sim --target x86_64-apple-ios
       - name: Verify pinned generator
         run: python3 scripts/sdk-ci.py toolchain
@@ -145,6 +154,10 @@ jobs:
         with:
           ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
       - run: rustup toolchain install 1.99.1 --profile minimal --target aarch64-linux-android --target armv7-linux-androideabi --target i686-linux-android --target x86_64-linux-android
       - name: Verify pinned generator
         run: python3 scripts/sdk-ci.py toolchain
@@ -189,9 +202,17 @@ jobs:
     needs: [source, manifest]
     runs-on: macos-26
     env:
-      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
       IPHONEOS_DEPLOYMENT_TARGET: '15.0'
     steps:
+      - name: Select Xcode (27.1 when present, otherwise runner default)
+        run: |
+          for app in /Applications/Xcode*.app; do [ -d "$app" ] && echo "${app##*/}"; done || true
+          if [ -d /Applications/Xcode_27.1.app/Contents/Developer ]; then
+            echo "DEVELOPER_DIR=/Applications/Xcode_27.1.app/Contents/Developer" >> "$GITHUB_ENV"
+          elif [ -d /Applications/Xcode.app/Contents/Developer ]; then
+            echo "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer" >> "$GITHUB_ENV"
+          fi
+          xcodebuild -version
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.source.outputs.sha }}

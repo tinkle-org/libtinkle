@@ -5,9 +5,13 @@ name: PR template check
 # Type-of-change box checked. Release-plz's own PRs are exempt (it uses a
 # fixed body format); without the exemption the release flow would deadlock
 # against this required check.
-# Runs with a read-only token; checkout reads the base-owned template.
+# Runs on pull_request_target so this workflow definition (including the
+# inline validator) is base-owned: under pull_request the definition would
+# come from the merge ref and PR-controlled code would execute. Combined
+# with the base-pinned checkout below, no PR head content is executed;
+# only the PR body text is read as data.
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, edited, reopened, synchronize]
 
 permissions:
@@ -28,7 +32,8 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Read the PR number from the event payload.
+          # Under pull_request_target GITHUB_REF_NAME is the base branch,
+          # so take the PR number from the event payload instead.
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           python3 - <<'EOF'
