@@ -1,0 +1,307 @@
+name: Native SDK artifacts
+on:
+  pull_request:
+  push:
+    tags: ['tinkle-ffi-v*']
+  workflow_call:
+    inputs:
+      source_ref:
+        type: string
+        required: true
+      publish:
+        type: boolean
+        default: false
+      swift_ref:
+        type: string
+        default: main
+      kotlin_ref:
+        type: string
+        default: main
+    secrets:
+      SDK_DISTRIBUTION_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Exact SHA for validation, or existing tinkle-ffi-vX.Y.Z tag for publishing'
+        required: true
+        type: string
+      publish:
+        description: 'Publish only from a matching tag on protected main'
+        type: boolean
+        default: false
+      swift_ref:
+        description: 'Swift consumer revision (bootstrap can use a feature branch)'
+        type: string
+        default: main
+      kotlin_ref:
+        description: 'Kotlin consumer revision (bootstrap can use a feature branch)'
+        type: string
+        default: main
+permissions:
+  contents: read
+env:
+  RUSTUP_TOOLCHAIN: 1.99.1
+concurrency:
+  group: native-sdk-${{ inputs.source_ref || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      publish: ${{ steps.source.outputs.publish }}
+      ref: ${{ steps.source.outputs.ref }}
+      swift_sha: ${{ steps.consumers.outputs.swift_sha }}
+      kotlin_sha: ${{ steps.consumers.outputs.kotlin_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - run: rustup toolchain install 1.99.1 --profile minimal
+      - name: Resolve immutable source and authorize publishing
+        id: source
+        env:
+          REQUESTED_REF: ${{ inputs.source_ref || github.ref_name }}
+          REQUESTED_PUBLISH: ${{ inputs.publish == true || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/tinkle-ffi-v')) }}
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          publish = os.environ['REQUESTED_PUBLISH'] == 'true'
+          sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert re.fullmatch('[0-9a-f]{40}', sha)
+          if publish:
+              assert os.environ['GITHUB_REPOSITORY'] == 'tinklehq/libtinkle'
+              assert os.environ['EVENT_NAME'] != 'pull_request', 'PRs cannot publish'
+              assert os.environ['WORKFLOW_REF'] == 'refs/heads/main' or os.environ['WORKFLOW_REF'].startswith('refs/tags/tinkle-ffi-v'), 'Publishing workflow must be main/tag-owned'
+              # Establish trust before executing an automation helper from the
+              # requested checkout. A dispatch ref is otherwise caller-controlled.
+              subprocess.run(['git', 'merge-base', '--is-ancestor', 'HEAD', 'origin/main'], check=True)
+              branch = json.loads(subprocess.check_output(['gh', 'api', 'repos/tinklehq/libtinkle/branches/main']))
+              assert branch['protected'], 'Publishing requires protected main before running source helpers'
+          ref = os.environ['REQUESTED_REF'] if publish else sha
+          if publish:
+              authorized = subprocess.check_output(['python3', 'scripts/sdk-release.py', 'authorize-source', '--ref', ref, '--publish'], text=True).strip()
+              assert authorized == sha
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'sha={sha}\nref={ref}\npublish={str(publish).lower()}\n')
+          PY
+      - name: Pin consumer revisions for this run
+        id: consumers
+        env:
+          SWIFT_REF: ${{ inputs.swift_ref || 'main' }}
+          KOTLIN_REF: ${{ inputs.kotlin_ref || 'main' }}
+          PUBLISH: ${{ steps.source.outputs.publish }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, subprocess, urllib.parse
+          if os.environ['PUBLISH'] == 'true':
+              assert os.environ['SWIFT_REF'] == os.environ['KOTLIN_REF'] == 'main', 'Release consumers must be main revisions'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              for sdk in ('swift', 'kotlin'):
+                  ref = urllib.parse.quote(os.environ[sdk.upper() + '_REF'], safe='')
+                  commit = json.loads(subprocess.check_output(['gh', 'api', f'repos/tinklehq/tinkle-sdk-{sdk}/commits/{ref}']))['sha']
+                  assert re.fullmatch('[0-9a-f]{40}', commit)
+                  output.write(f'{sdk}_sha={commit}\n')
+          PY
+  ios:
+    needs: source
+    runs-on: macos-26
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+      IPHONEOS_DEPLOYMENT_TARGET: '15.0'
+      SDK_OUTPUT_DIR: ${{ github.workspace }}/target/sdk
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
+      - run: rustup toolchain install 1.99.1 --profile minimal --target aarch64-apple-ios --target aarch64-apple-ios-sim --target x86_64-apple-ios
+      - name: Verify pinned generator
+        run: python3 scripts/sdk-ci.py toolchain
+      - run: bash scripts/build-ios.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-ios
+          path: |
+            target/sdk/TinkleSDKFFI.xcframework.zip
+            target/sdk/swift-bindings.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+  android:
+    needs: source
+    runs-on: ubuntu-latest
+    env:
+      SDK_OUTPUT_DIR: ${{ github.workspace }}/target/sdk
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
+      - run: rustup toolchain install 1.99.1 --profile minimal --target aarch64-linux-android --target armv7-linux-androideabi --target i686-linux-android --target x86_64-linux-android
+      - name: Verify pinned generator
+        run: python3 scripts/sdk-ci.py toolchain
+      - run: python3 scripts/sdk-ci.py android-setup
+      - run: bash scripts/build-android.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-android
+          path: |
+            target/sdk/android-native-libraries.zip
+            target/sdk/kotlin-bindings.zip
+            target/sdk/android-native-debug-symbols.zip
+            target/sdk/android-build-metadata.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+  manifest:
+    needs: [source, ios, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
+      - run: rustup toolchain install 1.99.1 --profile minimal
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: native-*
+          merge-multiple: true
+          path: target/sdk
+      - run: python3 scripts/sdk-release.py build-manifest --artifacts target/sdk
+      - run: python3 scripts/sdk-release.py build-debug-assets --manifest target/sdk/sdk-release.json --artifacts target/sdk
+      - run: python3 scripts/sdk-release.py verify --manifest target/sdk/sdk-release.json --artifacts target/sdk --debug-assets
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sdk-release
+          path: target/sdk
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+  swift-consumer:
+    needs: [source, manifest]
+    runs-on: macos-26
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+      IPHONEOS_DEPLOYMENT_TARGET: '15.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          path: core
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tinklehq/tinkle-sdk-swift
+          ref: ${{ needs.source.outputs.swift_sha }}
+          path: sdk
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sdk-release
+          path: artifacts
+      - name: Stage exact candidate and generated binding
+        run: python3 core/scripts/sdk-ci.py stage --sdk swift --destination sdk --artifacts artifacts --candidate
+      - name: Packaged simulator consumer (deployment target 15; current runtime only)
+        run: python3 core/scripts/sdk-ci.py swift-test --destination sdk
+  kotlin-consumer:
+    needs: [source, manifest]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: 24
+            target: default
+            pages: 4096
+          - api: 36
+            target: google_apis
+            pages: 4096
+          - api: 36
+            target: google_apis_ps16k
+            pages: 16384
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          path: core
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tinklehq/tinkle-sdk-kotlin
+          ref: ${{ needs.source.outputs.kotlin_sha }}
+          path: sdk
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sdk-release
+          path: artifacts
+      - run: python3 core/scripts/sdk-ci.py stage --sdk kotlin --destination sdk --artifacts artifacts --candidate
+      - run: python3 core/scripts/sdk-ci.py android-setup
+      - name: Assemble and unit-test release AAR
+        run: python3 core/scripts/sdk-ci.py android-build --destination sdk --artifacts artifacts
+      - name: Enable KVM
+        run: sudo chmod 666 /dev/kvm
+      - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: ${{ matrix.api }}
+          target: ${{ matrix.target }}
+          arch: x86_64
+          disable-animations: true
+          script: python3 core/scripts/sdk-ci.py android-test --destination sdk --artifacts artifacts --api-level ${{ matrix.api }} --page-size ${{ matrix.pages }}
+  publish:
+    needs: [source, manifest, swift-consumer, kotlin-consumer]
+    if: needs.source.outputs.publish == 'true' && github.repository == 'tinklehq/libtinkle' && github.event_name != 'pull_request' && (inputs.publish == true || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/tinkle-ffi-v'))) && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/tinkle-ffi-v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - run: rustup toolchain install 1.99.1 --profile minimal
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sdk-release
+          path: artifacts
+      - name: Upload tested ZIP bytes; existing assets must match
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/sdk-release.py publish --manifest artifacts/sdk-release.json --artifacts artifacts --debug-assets
+  promote:
+    needs: [source, publish]
+    if: needs.source.outputs.publish == 'true' && github.repository == 'tinklehq/libtinkle' && github.event_name != 'pull_request' && (inputs.publish == true || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/tinkle-ffi-v'))) && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/tinkle-ffi-v'))
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: [swift, kotlin]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sdk-release
+          path: artifacts
+      - name: Open reviewable SDK release PR (missing PAT is BLOCKED)
+        env:
+          SDK_DISTRIBUTION_TOKEN: ${{ secrets.SDK_DISTRIBUTION_TOKEN }}
+        run: python3 scripts/sdk-release.py promote --manifest artifacts/sdk-release.json --artifacts artifacts --sdk ${{ matrix.sdk }} --open-pr

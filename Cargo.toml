@@ -13,7 +13,7 @@ edition = "2021"
 license = "Apache-2.0 OR MIT"
 authors = ["Tinkle Messenger"]
 repository = "https://github.com/tinklehq/libtinkle"
-rust-version = "1.88"
+rust-version = "1.91"
 
 [workspace.dependencies]
 prost = "0.14"
@@ -31,7 +31,7 @@ tokio-util = { version = "0.7", features = ["full"] }
 zeroize = { version = "1", features = ["derive"] }
 async-trait = "0.1"
 futures-channel = "0.3"
-uniffi = { version = "0.31", features = ["tokio", "cli"] }
+uniffi = { version = "=0.32.2", features = ["tokio"] }
 
 syntra-core = { version = "=1.0.0-rc.1" }
 syntra-runtime = { version = "=1.0.0-rc.1" }
@@ -41,3 +41,19 @@ tinkle-schema = { path = "crates/tinkle-schema", version = "0.1.0" }
 # BSR-generated prost bindings (public index, no token).
 # Versions pinned from `buf registry sdk version` (see PROTO_PINNING.md).
 tinklecorp_tinkle-proto_community_neoeinstein-prost = { version = "0.5.0-20261020173106-64b4706c3194.2", registry = "buf" }
+
+# Native SDKs must retain unwind containment and matching native symbols.
+# Select staticlib/cdylib at packaging time, not for every workspace build.
+[profile.ios-release]
+inherits = "release"
+panic = "unwind"
+debug = "line-tables-only"
+strip = "none"
+lto = "thin"
+
+[profile.android-release]
+inherits = "release"
+panic = "unwind"
+debug = "line-tables-only"
+strip = "none"
+lto = "thin"

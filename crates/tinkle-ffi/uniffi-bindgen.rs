@@ -2,9 +2,7 @@
 //!
 //! Generate Swift/Kotlin bindings with e.g.:
 //! ```sh
-//! cargo run -p tinkle-ffi --bin uniffi-bindgen -- \
-//!   generate --library target/debug/libtinkle_ffi.dylib \
-//!   --language swift --out-dir out/swift
+//! bash scripts/generate-bindings.sh --write
 //! ```
 
 fn main() {

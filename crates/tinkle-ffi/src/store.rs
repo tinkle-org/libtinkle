@@ -17,7 +17,7 @@ use libtinkle::CursorStore as _;
 // TODO(runtime-acceptance-storage): GRDB/Room acceptance — principal
 // isolation between users, no credential persistence in the cursor store,
 // crash recovery replays from last persisted cursor without gaps.
-#[uniffi::export(with_foreign)]
+#[uniffi::export(rust, foreign)]
 #[async_trait::async_trait]
 pub trait FfiCursorStore: Send + Sync {
     async fn load(&self, principal: String, stream: String)

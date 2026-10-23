@@ -1,75 +1,70 @@
 name: CI
-
 on:
   push:
     branches: [main]
   pull_request:
-
+permissions:
+  contents: read
 env:
   CARGO_TERM_COLOR: always
-
+  RUSTUP_TOOLCHAIN: 1.99.1
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
-  fmt:
-    name: rustfmt
-    runs-on: ubuntu-latest
+  rust:
+    name: Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          components: rustfmt
+          persist-credentials: false
+      - run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-on-failure: true
       - run: cargo fmt --all -- --check
-
-  clippy:
-    name: clippy (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
-
-  test:
-    name: test (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --verbose
-
+      - run: cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings
+      - run: cargo test --locked --workspace --all-features --verbose
+      - run: python3 -m unittest discover -s tests -p 'test_sdk_release.py' -v
+      - name: Generated binding parity
+        run: bash scripts/generate-bindings.sh --check
   wasm:
     name: wasm32 check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p syntra-ws -p libtinkle-web --target wasm32-unknown-unknown
-
+          persist-credentials: false
+      - run: rustup toolchain install 1.99.1 --profile minimal --target wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-on-failure: true
+      - run: cargo check --locked -p syntra-ws -p libtinkle-web --target wasm32-unknown-unknown
   msrv:
-    name: msrv (cargo-hack)
+    name: Declared MSRV
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@cargo-hack
-      # No --ignore-private: the whole workspace is publish=false
-      # (git-only distribution), so ignoring private crates would select
-      # nothing and fail with "no rust-version field".
-      - run: cargo hack check --rust-version --workspace --all-targets
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install 1.99.1 --profile minimal
+      - name: Resolve workspace MSRV and check with the declared compiler
+        run: |
+          python3 - <<'PY'
+          import json, re, subprocess
+          data = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1']))
+          versions = {p['rust_version'] for p in data['packages'] if p['id'] in data['workspace_members']}
+          assert len(versions) == 1, 'Workspace members must declare one MSRV'
+          version = versions.pop()
+          assert version and re.fullmatch(r'\d+\.\d+(?:\.\d+)?', version)
+          # Fetch using the pinned modern Cargo. The MSRV compiler never makes
+          # registry/SSH requests, and optional CLI features stay disabled.
+          subprocess.run(['cargo', 'fetch', '--locked'], check=True)
+          subprocess.run(['rustup', 'toolchain', 'install', version, '--profile', 'minimal'], check=True)
+          subprocess.run(['cargo', '+' + version, 'check', '--locked', '--offline', '--workspace', '--all-targets'], check=True)
+          PY

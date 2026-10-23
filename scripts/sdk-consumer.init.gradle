@@ -1,0 +1,41 @@
+// Automation-only verification of the real published coordinate and its POM.
+// The runtime test subsequently consumes this same AAR by its recorded digest.
+gradle.projectsEvaluated {
+    def sample = gradle.rootProject.findProject(':sample')
+    if (sample == null) throw new GradleException('Missing :sample consumer')
+    sample.tasks.register('verifyPublishedSdkCoordinate') {
+        doLast {
+            def expectedVersion = System.getenv('TINKLE_EXPECTED_SDK_VERSION')
+            def expectedDigest = System.getenv('TINKLE_EXPECTED_SDK_AAR_SHA256')
+            if (!expectedVersion || !(expectedDigest ==~ /[0-9a-f]{64}/)) {
+                throw new GradleException('Missing immutable published SDK proof inputs')
+            }
+            // Resolving this configuration fails on a missing POM/transitive dependency;
+            // a human-readable dependencies report alone can print FAILED and exit 0.
+            def artifacts = sample.configurations.getByName('debugRuntimeClasspath')
+                .resolvedConfiguration.resolvedArtifacts
+            def sdk = artifacts.findAll {
+                it.moduleVersion.id.group == 'com.github.tinklehq' &&
+                it.name == 'tinkle-sdk-kotlin' &&
+                it.moduleVersion.id.version == expectedVersion && it.extension == 'aar'
+            }
+            if (sdk.size() != 1) throw new GradleException('Expected one immutable JitPack SDK AAR')
+            def digest = java.security.MessageDigest.getInstance('SHA-256')
+            sdk[0].file.withInputStream { stream ->
+                byte[] buffer = new byte[1024 * 1024]
+                int count
+                while ((count = stream.read(buffer)) != -1) digest.update(buffer, 0, count)
+            }
+            if (digest.digest().encodeHex().toString() != expectedDigest) {
+                throw new GradleException('Resolved JitPack AAR differs from the runtime proof input')
+            }
+            if (!artifacts.any { it.moduleVersion.id.group == 'net.java.dev.jna' && it.name == 'jna' && it.extension == 'aar' }) {
+                throw new GradleException('Published SDK POM did not bring Android JNA transitively')
+            }
+            if (!artifacts.any { it.moduleVersion.id.group == 'org.jetbrains.kotlinx' && it.name.startsWith('kotlinx-coroutines-core') }) {
+                throw new GradleException('Published SDK POM did not bring coroutines transitively')
+            }
+            logger.lifecycle("Verified published SDK coordinate, digest, and transitive dependencies: ${expectedVersion}")
+        }
+    }
+}

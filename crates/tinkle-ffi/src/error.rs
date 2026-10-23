@@ -5,8 +5,12 @@
 //! [`FfiError`] is built from [`libtinkle::TinkleError`] via strings.
 
 /// Errors surfaced to Swift/Kotlin.
+///
+/// This must not use `flat_error`: foreign `FfiCursorStore` implementations
+/// return `FfiError`, and UniFFI cannot lift flat errors back into Rust
+/// (`rustPanic("Can't lift flat errors")`). Keeping the message payloads
+/// makes store failures round-trip instead of panicking.
 #[derive(Debug, Clone, thiserror::Error, uniffi::Error)]
-#[uniffi(flat_error)]
 pub enum FfiError {
     #[error("network error: {0}")]
     Network(String),
