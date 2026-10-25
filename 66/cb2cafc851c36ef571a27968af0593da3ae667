@@ -1,0 +1,44 @@
+crates/libtinkle/src/sync.rs
+  s_317cc69b10b27f::t_a8e695c9ee268c 57
+  s_317cc69b10b27f::t_fe49a48d0b68bd 341-344
+  s_317cc69b10b27f::t_1a55139fbd550f 148-152
+  s_317cc69b10b27f::t_5adba7c6cc0bb7 435-438
+  s_317cc69b10b27f::t_47731e0b268b0e 166,183
+  s_317cc69b10b27f::t_6802936801884d 197-214
+  s_317cc69b10b27f::t_355f890095f1bf 215
+  s_317cc69b10b27f::t_df40a09d03e5b9 685-688,690-693
+  s_317cc69b10b27f::t_9b485930b304c2 795-799,828-831,836-841
+  s_317cc69b10b27f::t_9a57a1744f1285 36-56
+  s_317cc69b10b27f::t_3896a68db012d9 601-604
+  s_317cc69b10b27f::t_f2cf323161afe6 667-670
+  s_317cc69b10b27f::t_0add99c79da9dd 440
+  s_317cc69b10b27f::t_48c4ea684bf572 544-549,553-557,569-572
+  s_317cc69b10b27f::t_20330b8223924e 1040-1069
+  s_317cc69b10b27f::t_0e011c288f1354 1039
+crates/libtinkle/src/client.rs
+  s_317cc69b10b27f::t_21faa94a6be10c 196-200,219-223,227-229,232,239-240,250
+  s_317cc69b10b27f::t_bc2bd78b74e216 781-972
+  s_317cc69b10b27f::t_ab802368d64c15 677-680,687-718,723,728,742,751,761
+  s_317cc69b10b27f::t_95db1c19d8e7d0 53
+  s_317cc69b10b27f::t_d26ccca43e804f 23-24,28,38,50-52,54-61,91,93-104,120-123,145-148,161-162,164
+crates/libtinkle/tests/client_integration.rs
+  s_317cc69b10b27f::t_c5f654d9b945ae 11,35-36
+  s_317cc69b10b27f::t_f5ece89b4974de 90-91,128-134
+  s_317cc69b10b27f::t_7c7c5ed51211fc 684-764
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "66cb2cafc851c36ef571a27968af0593da3ae667",
+  "prompts": {},
+  "sessions": {
+    "s_317cc69b10b27f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e8be5aff6ffeD4ZIiLFcKcEDWB",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    }
+  }
+}
