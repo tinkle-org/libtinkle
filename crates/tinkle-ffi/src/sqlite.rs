@@ -31,6 +31,9 @@ pub struct FfiDialog {
     pub read_outbox_max_id: i64,
     pub pinned: bool,
     pub dialog_proto: Vec<u8>,
+    /// True when an invalidation committed with the checkpoint and no
+    /// authoritative refresh has cleared it yet; the host should refresh.
+    pub read_state_pending: bool,
 }
 
 impl From<tinkle_storage::MessageRow> for FfiMessage {
@@ -58,6 +61,7 @@ impl From<tinkle_storage::DialogRow> for FfiDialog {
             read_outbox_max_id: r.read_outbox_max_id,
             pinned: r.pinned,
             dialog_proto: r.proto,
+            read_state_pending: r.read_state_pending,
         }
     }
 }

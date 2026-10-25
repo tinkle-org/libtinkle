@@ -15,7 +15,10 @@ use std::sync::Mutex;
 use rusqlite::{params, Connection, OptionalExtension};
 use thiserror::Error;
 
-const SCHEMA_VERSION: i64 = 1;
+/// Version 2 adds `origin_stream` provenance to messages/dialogs, a
+/// `read_state_pending` flag to dialogs, and the shared `entity_provenance`
+/// table for users/chats.
+const SCHEMA_VERSION: i64 = 2;
 
 /// Errors surfaced from storage. Messages are safe for FFI; no SQL text.
 #[derive(Debug, Error, Clone)]
@@ -71,7 +74,20 @@ fn check_stream(stream: &str) -> Result<(), StorageError> {
         .map_err(|_| StorageError::InvalidInput("stream must be user:<id> or room:<id>".into()))
 }
 
+/// Provenance origin: a valid stream, or `""` for legacy/global rows.
+/// `""` pins the row: scoped rebuilds never delete it.
+fn check_origin(origin: &str) -> Result<(), StorageError> {
+    if origin.is_empty() {
+        return Ok(());
+    }
+    check_stream(origin).map_err(|_| {
+        StorageError::InvalidInput("origin_stream must be '' or user:<id>/room:<id>".into())
+    })
+}
+
 /// Cached message row. `proto` is the complete `tinkle.v1.Message` bytes.
+/// `origin_stream` is the update stream that produced this row; `""` is a
+/// legacy/global pin that scoped rebuilds never delete.
 #[derive(Debug, Clone)]
 pub struct MessageRow {
     pub conversation_key: String,
@@ -81,9 +97,14 @@ pub struct MessageRow {
     pub from_id: i64,
     pub body: String,
     pub proto: Vec<u8>,
+    pub origin_stream: String,
 }
 
 /// Cached dialog row. `proto` is the complete `tinkle.v1.Dialog` bytes.
+/// `origin_stream` scopes the row to its producing update stream (`""` =
+/// legacy/global pin, never deleted by scoped rebuilds).
+/// `read_state_pending` means an invalidation committed with the checkpoint
+/// and no authoritative refresh has cleared it yet; hosts should refresh.
 #[derive(Debug, Clone)]
 pub struct DialogRow {
     pub peer_kind: String,
@@ -94,6 +115,8 @@ pub struct DialogRow {
     pub read_outbox_max_id: i64,
     pub pinned: bool,
     pub proto: Vec<u8>,
+    pub origin_stream: String,
+    pub read_state_pending: bool,
 }
 
 /// Cached user row. `proto` is the complete `tinkle.v1.User` bytes.
@@ -111,12 +134,16 @@ pub struct ChatRow {
 }
 
 /// Cache writes applied atomically with one checkpoint advance.
+/// `read_state_scopes` lists streams whose dialogs must be marked
+/// `read_state_pending` in the same transaction (the invalidation payload
+/// carries no dialog identity, so the mark is stream-scoped).
 #[derive(Debug, Default, Clone)]
 pub struct CacheOps {
     pub messages: Vec<MessageRow>,
     pub dialogs: Vec<DialogRow>,
     pub users: Vec<UserRow>,
     pub chats: Vec<ChatRow>,
+    pub read_state_scopes: Vec<String>,
 }
 
 /// Durable per-stream validity + replay bounds.
@@ -166,6 +193,10 @@ impl Storage {
              PRAGMA foreign_keys=ON;
              PRAGMA busy_timeout=5000;",
         )?;
+        // Base tables in v1 shape. v2 columns/indexes/tables land via
+        // `migrate_1_to_2`, which runs for fresh databases too (on empty
+        // tables), so the initial batch never references columns that an
+        // existing v1 database does not have yet.
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS checkpoints(
@@ -198,7 +229,7 @@ impl Storage {
                principal TEXT NOT NULL, chat_id INTEGER NOT NULL, proto BLOB NOT NULL,
                PRIMARY KEY(principal, chat_id));",
         )?;
-        // Schema version fencing.
+        // Schema version fencing + migration.
         let version: Option<String> = conn
             .query_row(
                 "SELECT value FROM meta WHERE key='schema_version'",
@@ -207,23 +238,49 @@ impl Storage {
             )
             .optional()?;
         match version {
+            // Fresh database (tables just created empty): migrate to current.
             None => {
-                conn.execute(
-                    "INSERT INTO meta(key, value) VALUES('schema_version', ?1)",
-                    params![SCHEMA_VERSION.to_string()],
-                )?;
+                Self::migrate_1_to_2(&conn)?;
             }
             Some(v) => {
                 let parsed: i64 = v
                     .parse()
                     .map_err(|_| StorageError::Corrupt("bad schema_version in meta".into()))?;
-                if parsed != SCHEMA_VERSION {
+                if parsed == 1 {
+                    Self::migrate_1_to_2(&conn)?;
+                } else if parsed != SCHEMA_VERSION {
                     return Err(StorageError::Corrupt(format!(
                         "unsupported schema_version {parsed}, expected {SCHEMA_VERSION}"
                     )));
                 }
             }
         }
+        Ok(())
+    }
+
+    /// v1 → v2: provenance columns, dialog pending flag, and the shared
+    /// provenance table. Existing rows keep `origin_stream = ''`, i.e. a
+    /// global pin that scoped rebuilds never delete; existing users/chats
+    /// get explicit `''` provenance pins for the same reason.
+    fn migrate_1_to_2(conn: &Connection) -> Result<(), StorageError> {
+        conn.execute_batch(
+            "ALTER TABLE messages ADD COLUMN origin_stream TEXT NOT NULL DEFAULT '';
+             ALTER TABLE dialogs ADD COLUMN origin_stream TEXT NOT NULL DEFAULT '';
+             ALTER TABLE dialogs ADD COLUMN read_state_pending INTEGER NOT NULL DEFAULT 0;
+             CREATE TABLE IF NOT EXISTS entity_provenance(
+               principal TEXT NOT NULL, kind TEXT NOT NULL, entity_id INTEGER NOT NULL,
+               stream TEXT NOT NULL,
+               PRIMARY KEY(principal, kind, entity_id, stream));
+             CREATE INDEX IF NOT EXISTS idx_messages_origin
+               ON messages(principal, origin_stream);
+             CREATE INDEX IF NOT EXISTS idx_dialogs_origin
+               ON dialogs(principal, origin_stream);
+             INSERT OR IGNORE INTO entity_provenance(principal, kind, entity_id, stream)
+               SELECT principal, 'user', user_id, '' FROM users;
+             INSERT OR IGNORE INTO entity_provenance(principal, kind, entity_id, stream)
+               SELECT principal, 'chat', chat_id, '' FROM chats;
+             UPDATE meta SET value='2' WHERE key='schema_version';",
+        )?;
         Ok(())
     }
 
@@ -301,6 +358,7 @@ impl Storage {
             "dialogs",
             "users",
             "chats",
+            "entity_provenance",
         ] {
             let sql = format!("DELETE FROM {table} WHERE principal=?1");
             conn.execute(&sql, params![principal])?;
@@ -310,6 +368,11 @@ impl Storage {
 
     // -- stream validity / replay bounds -----------------------------------
 
+    /// Invalidate one stream's cache scope. Messages/dialogs carrying
+    /// this stream's origin are deleted; legacy `''`-origin rows are pinned
+    /// and survive. Users/chats are deleted only when no provenance
+    /// reference remains (another stream or a global `''` refresh pin),
+    /// so rebuilding one room never evicts an entity still used elsewhere.
     pub fn mark_rebuild(&self, principal: &str, stream: &str) -> Result<(), StorageError> {
         check_principal(principal)?;
         check_stream(stream)?;
@@ -325,14 +388,25 @@ impl Storage {
              ON CONFLICT(principal, stream) DO UPDATE SET valid=0",
             params![principal, stream],
         )?;
-        // Rebuild discards the stream's history, so cache rows derived from
-        // that history must not stay readable offline. Projected writes are
-        // not tagged by stream, so the principal's cache is reset wholesale;
-        // rows become readable again only as new snapshot commits land
-        // (which also re-arm validity via save_checkpoint/apply_sync_batch).
-        for table in ["messages", "dialogs", "users", "chats"] {
-            let sql = format!("DELETE FROM {table} WHERE principal=?1");
-            tx.execute(&sql, params![principal])?;
+        tx.execute(
+            "DELETE FROM messages WHERE principal=?1 AND origin_stream=?2",
+            params![principal, stream],
+        )?;
+        tx.execute(
+            "DELETE FROM dialogs WHERE principal=?1 AND origin_stream=?2",
+            params![principal, stream],
+        )?;
+        tx.execute(
+            "DELETE FROM entity_provenance WHERE principal=?1 AND stream=?2",
+            params![principal, stream],
+        )?;
+        for (table, kind, id_col) in [("users", "user", "user_id"), ("chats", "chat", "chat_id")] {
+            let sql = format!(
+                "DELETE FROM {table} WHERE principal=?1 AND NOT EXISTS (
+                   SELECT 1 FROM entity_provenance
+                   WHERE principal=?1 AND kind=?2 AND entity_id={table}.{id_col})"
+            );
+            tx.execute(&sql, params![principal, kind])?;
         }
         tx.commit()?;
         Ok(())
@@ -425,8 +499,18 @@ impl Storage {
             || ops.dialogs.len() > 256
             || ops.users.len() > 512
             || ops.chats.len() > 256
+            || ops.read_state_scopes.len() > 64
         {
             return Err(StorageError::InvalidInput("sync batch too large".into()));
+        }
+        for m in &ops.messages {
+            check_origin(&m.origin_stream)?;
+        }
+        for d in &ops.dialogs {
+            check_origin(&d.origin_stream)?;
+        }
+        for scope in &ops.read_state_scopes {
+            check_stream(scope)?;
         }
         let mut conn = self.lock()?;
         let tx = conn.transaction()?;
@@ -469,11 +553,12 @@ impl Storage {
                 return Err(StorageError::InvalidInput("bad message row".into()));
             }
             tx.execute(
-                "INSERT INTO messages(principal, conversation_key, message_id, peer_kind, peer_id, from_id, body, proto)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
+                "INSERT INTO messages(principal, conversation_key, message_id, peer_kind, peer_id, from_id, body, proto, origin_stream)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
                  ON CONFLICT(principal, conversation_key, message_id)
                  DO UPDATE SET peer_kind=excluded.peer_kind, peer_id=excluded.peer_id,
-                   from_id=excluded.from_id, body=excluded.body, proto=excluded.proto",
+                   from_id=excluded.from_id, body=excluded.body, proto=excluded.proto,
+                   origin_stream=excluded.origin_stream",
                 params![
                     principal,
                     m.conversation_key,
@@ -482,7 +567,8 @@ impl Storage {
                     m.peer_id,
                     m.from_id,
                     m.body,
-                    m.proto
+                    m.proto,
+                    m.origin_stream
                 ],
             )?;
         }
@@ -498,12 +584,13 @@ impl Storage {
             // `upsert_dialog`, not this path.
             tx.execute(
                 "INSERT INTO dialogs(principal, peer_kind, peer_id, top_message, unread_count,
-                   read_inbox_max_id, read_outbox_max_id, pinned, proto)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
+                   read_inbox_max_id, read_outbox_max_id, pinned, proto, origin_stream)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
                  ON CONFLICT(principal, peer_kind, peer_id)
                  DO UPDATE SET top_message=max(top_message, excluded.top_message),
                    proto=CASE WHEN excluded.top_message > top_message
-                     THEN excluded.proto ELSE proto END",
+                     THEN excluded.proto ELSE proto END,
+                   origin_stream=excluded.origin_stream",
                 params![
                     principal,
                     d.peer_kind,
@@ -513,7 +600,8 @@ impl Storage {
                     d.read_inbox_max_id,
                     d.read_outbox_max_id,
                     d.pinned as i32,
-                    d.proto
+                    d.proto,
+                    d.origin_stream
                 ],
             )?;
         }
@@ -535,6 +623,33 @@ impl Storage {
                 "INSERT INTO chats(principal, chat_id, proto) VALUES(?1,?2,?3)
                  ON CONFLICT(principal, chat_id) DO UPDATE SET proto=excluded.proto",
                 params![principal, c.chat_id, c.proto],
+            )?;
+        }
+        // Provenance: batch-touched entities stay reachable until every
+        // referencing stream rebuilds. One row per (entity, stream).
+        for u in &ops.users {
+            tx.execute(
+                "INSERT OR IGNORE INTO entity_provenance(principal, kind, entity_id, stream)
+                 VALUES(?1,'user',?2,?3)",
+                params![principal, u.user_id, stream],
+            )?;
+        }
+        for c in &ops.chats {
+            tx.execute(
+                "INSERT OR IGNORE INTO entity_provenance(principal, kind, entity_id, stream)
+                 VALUES(?1,'chat',?2,?3)",
+                params![principal, c.chat_id, stream],
+            )?;
+        }
+        // Read-state invalidation marks commit atomically with the
+        // checkpoint below. The payload carries no dialog identity, so the
+        // mark is stream-scoped; `''`-origin legacy rows are marked too
+        // (safe over-marking: the next authoritative refresh clears it).
+        for scope in &ops.read_state_scopes {
+            tx.execute(
+                "UPDATE dialogs SET read_state_pending=1
+                 WHERE principal=?1 AND (origin_stream=?2 OR origin_stream='')",
+                params![principal, scope],
             )?;
         }
         tx.execute(
@@ -568,7 +683,8 @@ impl Storage {
         let limit = (limit.clamp(1, 500)) as i64;
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
-            "SELECT conversation_key, message_id, peer_kind, peer_id, from_id, body, proto
+            "SELECT conversation_key, message_id, peer_kind, peer_id, from_id, body, proto,
+                    origin_stream
              FROM messages WHERE principal=?1 AND conversation_key=?2
              AND (?3 IS NULL OR message_id < ?3)
              ORDER BY message_id DESC LIMIT ?4",
@@ -584,6 +700,7 @@ impl Storage {
                     from_id: r.get(4)?,
                     body: r.get(5)?,
                     proto: r.get(6)?,
+                    origin_stream: r.get(7)?,
                 })
             },
         )?;
@@ -605,7 +722,7 @@ impl Storage {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT peer_kind, peer_id, top_message, unread_count, read_inbox_max_id,
-                    read_outbox_max_id, pinned, proto
+                    read_outbox_max_id, pinned, proto, origin_stream, read_state_pending
              FROM dialogs WHERE principal=?1 ORDER BY pinned DESC, top_message DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![principal, limit], |r| {
@@ -618,6 +735,8 @@ impl Storage {
                 read_outbox_max_id: r.get(5)?,
                 pinned: r.get::<_, i32>(6)? != 0,
                 proto: r.get(7)?,
+                origin_stream: r.get(8)?,
+                read_state_pending: r.get::<_, i32>(9)? != 0,
             })
         })?;
         let mut out = Vec::new();
@@ -663,31 +782,50 @@ impl Storage {
         Ok(v.map(|proto| ChatRow { chat_id, proto }))
     }
 
+    /// Authoritative user write (e.g. GetUsers refresh). Pins the entity
+    /// globally (`''` provenance) so stream-scoped rebuilds never evict an
+    /// entity the snapshots still reference.
     pub fn upsert_user(&self, principal: &str, row: &UserRow) -> Result<(), StorageError> {
         check_principal(principal)?;
         if row.user_id <= 0 || row.proto.is_empty() || row.proto.len() > 1_000_000 {
             return Err(StorageError::InvalidInput("bad user row".into()));
         }
-        let conn = self.lock()?;
-        conn.execute(
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        tx.execute(
             "INSERT INTO users(principal, user_id, proto) VALUES(?1,?2,?3)
              ON CONFLICT(principal, user_id) DO UPDATE SET proto=excluded.proto",
             params![principal, row.user_id, row.proto],
         )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO entity_provenance(principal, kind, entity_id, stream)
+             VALUES(?1,'user',?2,'')",
+            params![principal, row.user_id],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
+    /// Authoritative chat write (e.g. GetDialogs refresh). Pins globally;
+    /// see [`Self::upsert_user`].
     pub fn upsert_chat(&self, principal: &str, row: &ChatRow) -> Result<(), StorageError> {
         check_principal(principal)?;
         if row.chat_id <= 0 || row.proto.is_empty() || row.proto.len() > 1_000_000 {
             return Err(StorageError::InvalidInput("bad chat row".into()));
         }
-        let conn = self.lock()?;
-        conn.execute(
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        tx.execute(
             "INSERT INTO chats(principal, chat_id, proto) VALUES(?1,?2,?3)
              ON CONFLICT(principal, chat_id) DO UPDATE SET proto=excluded.proto",
             params![principal, row.chat_id, row.proto],
         )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO entity_provenance(principal, kind, entity_id, stream)
+             VALUES(?1,'chat',?2,'')",
+            params![principal, row.chat_id],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -696,21 +834,26 @@ impl Storage {
     /// [`Self::apply_sync_batch`], where dialog entries are top_message-only
     /// touches that preserve those columns. Callers must supply a current
     /// snapshot; this does not MAX-clamp top_message.
+    /// Clears `read_state_pending`: only an authoritative refresh — never a
+    /// sync batch touch — may clear the flag.
     pub fn upsert_dialog(&self, principal: &str, row: &DialogRow) -> Result<(), StorageError> {
         check_principal(principal)?;
         if row.peer_id == 0 || row.proto.len() > 1_000_000 {
             return Err(StorageError::InvalidInput("bad dialog row".into()));
         }
+        check_origin(&row.origin_stream)?;
         let conn = self.lock()?;
         conn.execute(
             "INSERT INTO dialogs(principal, peer_kind, peer_id, top_message, unread_count,
-               read_inbox_max_id, read_outbox_max_id, pinned, proto)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
+               read_inbox_max_id, read_outbox_max_id, pinned, proto, origin_stream,
+               read_state_pending)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0)
              ON CONFLICT(principal, peer_kind, peer_id)
              DO UPDATE SET top_message=excluded.top_message, unread_count=excluded.unread_count,
                read_inbox_max_id=excluded.read_inbox_max_id,
                read_outbox_max_id=excluded.read_outbox_max_id,
-               pinned=excluded.pinned, proto=excluded.proto",
+               pinned=excluded.pinned, proto=excluded.proto,
+               origin_stream=excluded.origin_stream, read_state_pending=0",
             params![
                 principal,
                 row.peer_kind,
@@ -720,7 +863,8 @@ impl Storage {
                 row.read_inbox_max_id,
                 row.read_outbox_max_id,
                 row.pinned as i32,
-                row.proto
+                row.proto,
+                row.origin_stream
             ],
         )?;
         Ok(())
@@ -740,6 +884,22 @@ mod tests {
             from_id: 42,
             body: format!("m{id}"),
             proto: vec![1, 2, 3],
+            origin_stream: "room:7".into(),
+        }
+    }
+
+    fn dlg(peer_id: i64, top: i64) -> DialogRow {
+        DialogRow {
+            peer_kind: "room".into(),
+            peer_id,
+            top_message: top,
+            unread_count: 0,
+            read_inbox_max_id: 0,
+            read_outbox_max_id: 0,
+            pinned: false,
+            proto: vec![4, 5, 6],
+            origin_stream: "room:7".into(),
+            read_state_pending: false,
         }
     }
 
@@ -797,16 +957,7 @@ mod tests {
         let s = Storage::open_in_memory().unwrap();
         let mut ops = CacheOps::default();
         ops.messages.push(msg(10));
-        ops.dialogs.push(DialogRow {
-            peer_kind: "room".into(),
-            peer_id: 7,
-            top_message: 10,
-            unread_count: 0,
-            read_inbox_max_id: 0,
-            read_outbox_max_id: 0,
-            pinned: false,
-            proto: vec![4, 5, 6],
-        });
+        ops.dialogs.push(dlg(7, 10));
         s.apply_sync_batch("user:1", "room:7", 1, 0, &ops).unwrap();
         assert_eq!(
             s.get_messages("user:1", "room:7", 10, None).unwrap().len(),
@@ -834,6 +985,176 @@ mod tests {
     }
 
     #[test]
+    fn rebuild_is_stream_scoped() {
+        let s = Storage::open_in_memory().unwrap();
+        let mut ops7 = CacheOps::default();
+        ops7.messages.push(msg(10));
+        ops7.dialogs.push(dlg(7, 10));
+        ops7.users.push(UserRow {
+            user_id: 42,
+            proto: vec![1],
+        });
+        ops7.chats.push(ChatRow {
+            chat_id: 7,
+            proto: vec![2],
+        });
+        s.apply_sync_batch("user:1", "room:7", 1, 0, &ops7).unwrap();
+
+        let mut ops8 = CacheOps::default();
+        let mut m8 = msg(20);
+        m8.conversation_key = "room:8".into();
+        m8.peer_id = 8;
+        m8.origin_stream = "room:8".into();
+        ops8.messages.push(m8);
+        let mut d8 = dlg(8, 20);
+        d8.origin_stream = "room:8".into();
+        ops8.dialogs.push(d8);
+        ops8.users.push(UserRow {
+            user_id: 42,
+            proto: vec![1],
+        });
+        ops8.chats.push(ChatRow {
+            chat_id: 7,
+            proto: vec![2],
+        });
+        s.apply_sync_batch("user:1", "room:8", 1, 0, &ops8).unwrap();
+
+        s.mark_rebuild("user:1", "room:7").unwrap();
+
+        // room:7 scope gone...
+        assert!(s
+            .get_messages("user:1", "room:7", 10, None)
+            .unwrap()
+            .is_empty());
+        assert_eq!(s.load_checkpoint("user:1", "room:7").unwrap(), None);
+        assert!(!s.stream_state("user:1", "room:7").unwrap().valid);
+        // ...room:8 scope intact, including shared entities still referenced.
+        assert_eq!(
+            s.get_messages("user:1", "room:8", 10, None).unwrap().len(),
+            1
+        );
+        let dialogs = s.list_dialogs("user:1", 10).unwrap();
+        assert_eq!(dialogs.len(), 1);
+        assert_eq!(dialogs[0].peer_id, 8);
+        assert!(s.get_user("user:1", 42).unwrap().is_some());
+        assert!(s.get_chat("user:1", 7).unwrap().is_some());
+        assert_eq!(s.load_checkpoint("user:1", "room:8").unwrap(), Some(1));
+    }
+
+    #[test]
+    fn shared_entity_deleted_after_last_reference() {
+        let s = Storage::open_in_memory().unwrap();
+        // User seen only in room:7's history: no other provenance.
+        let mut ops = CacheOps::default();
+        ops.users.push(UserRow {
+            user_id: 42,
+            proto: vec![1],
+        });
+        s.apply_sync_batch("user:1", "room:7", 1, 0, &ops).unwrap();
+        assert!(s.get_user("user:1", 42).unwrap().is_some());
+        s.mark_rebuild("user:1", "room:7").unwrap();
+        assert!(s.get_user("user:1", 42).unwrap().is_none());
+    }
+
+    #[test]
+    fn global_pin_survives_stream_rebuild() {
+        let s = Storage::open_in_memory().unwrap();
+        // Authoritative refresh pins globally: the snapshot still references
+        // this entity even after a stream rebuild.
+        s.upsert_user(
+            "user:1",
+            &UserRow {
+                user_id: 42,
+                proto: vec![1],
+            },
+        )
+        .unwrap();
+        s.upsert_chat(
+            "user:1",
+            &ChatRow {
+                chat_id: 7,
+                proto: vec![2],
+            },
+        )
+        .unwrap();
+        s.mark_rebuild("user:1", "room:7").unwrap();
+        assert!(s.get_user("user:1", 42).unwrap().is_some());
+        assert!(s.get_chat("user:1", 7).unwrap().is_some());
+    }
+
+    #[test]
+    fn migration_1_to_2_pins_legacy_rows() {
+        let dir = std::env::temp_dir().join(format!(
+            "tinkle-mig-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tinkle.db");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO meta(key, value) VALUES('schema_version', '1');
+                 CREATE TABLE checkpoints(principal TEXT NOT NULL, stream TEXT NOT NULL, cursor INTEGER NOT NULL, PRIMARY KEY(principal, stream));
+                 CREATE TABLE stream_state(principal TEXT NOT NULL, stream TEXT NOT NULL, valid INTEGER NOT NULL DEFAULT 1, replay_floor INTEGER NOT NULL DEFAULT 0, head INTEGER, PRIMARY KEY(principal, stream));
+                 CREATE TABLE messages(principal TEXT NOT NULL, conversation_key TEXT NOT NULL, message_id INTEGER NOT NULL, peer_kind TEXT NOT NULL, peer_id INTEGER NOT NULL, from_id INTEGER NOT NULL, body TEXT NOT NULL, proto BLOB NOT NULL, PRIMARY KEY(principal, conversation_key, message_id));
+                 CREATE TABLE dialogs(principal TEXT NOT NULL, peer_kind TEXT NOT NULL, peer_id INTEGER NOT NULL, top_message INTEGER NOT NULL DEFAULT 0, unread_count INTEGER NOT NULL DEFAULT 0, read_inbox_max_id INTEGER NOT NULL DEFAULT 0, read_outbox_max_id INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0, proto BLOB NOT NULL, PRIMARY KEY(principal, peer_kind, peer_id));
+                 CREATE TABLE users(principal TEXT NOT NULL, user_id INTEGER NOT NULL, proto BLOB NOT NULL, PRIMARY KEY(principal, user_id));
+                 CREATE TABLE chats(principal TEXT NOT NULL, chat_id INTEGER NOT NULL, proto BLOB NOT NULL, PRIMARY KEY(principal, chat_id));
+                 INSERT INTO users(principal, user_id, proto) VALUES('user:1', 42, X'0102');
+                 INSERT INTO messages(principal, conversation_key, message_id, peer_kind, peer_id, from_id, body, proto) VALUES('user:1', 'room:7', 10, 'room', 7, 42, 'm10', X'010203');",
+            )
+            .unwrap();
+        }
+        let s = Storage::open(path.to_str().unwrap()).unwrap();
+        // Legacy rows readable with a global pin...
+        let msgs = s.get_messages("user:1", "room:7", 10, None).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].origin_stream, "");
+        // ...and survive a scoped rebuild of another stream's history.
+        s.mark_rebuild("user:1", "room:7").unwrap();
+        assert!(s.get_user("user:1", 42).unwrap().is_some());
+        assert_eq!(
+            s.get_messages("user:1", "room:7", 10, None).unwrap().len(),
+            1
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_state_pending_commits_atomically_and_clears_on_refresh() {
+        let s = Storage::open_in_memory().unwrap();
+        let mut ops = CacheOps::default();
+        ops.messages.push(msg(10));
+        ops.dialogs.push(dlg(7, 10));
+        s.apply_sync_batch("user:1", "room:7", 1, 0, &ops).unwrap();
+        assert!(!s.list_dialogs("user:1", 10).unwrap()[0].read_state_pending);
+
+        // Invalidation commits atomically with the checkpoint advance.
+        let mut inv = CacheOps::default();
+        inv.read_state_scopes.push("room:7".into());
+        s.apply_sync_batch("user:1", "room:7", 2, 1, &inv).unwrap();
+        assert_eq!(s.load_checkpoint("user:1", "room:7").unwrap(), Some(2));
+        assert!(s.list_dialogs("user:1", 10).unwrap()[0].read_state_pending);
+
+        // A later message touch must not clear the flag...
+        let mut touch = CacheOps::default();
+        touch.messages.push(msg(11));
+        touch.dialogs.push(dlg(7, 11));
+        s.apply_sync_batch("user:1", "room:7", 3, 2, &touch)
+            .unwrap();
+        assert!(s.list_dialogs("user:1", 10).unwrap()[0].read_state_pending);
+
+        // ...only the authoritative refresh clears it.
+        s.upsert_dialog("user:1", &dlg(7, 11)).unwrap();
+        assert!(!s.list_dialogs("user:1", 10).unwrap()[0].read_state_pending);
+    }
+
+    #[test]
     fn rejects_bad_inputs_without_sql_leak() {
         let s = Storage::open_in_memory().unwrap();
         assert!(s.load_checkpoint("bad", "user:1").is_err());
@@ -856,6 +1177,7 @@ mod tests {
             from_id: 42,
             body: "m10".into(),
             proto: vec![1, 2, 3],
+            origin_stream: "room:7".into(),
         });
         s.apply_sync_batch("user:1", "room:7", 1, 0, &ops).unwrap();
         assert_eq!(s.load_checkpoint("user:1", "room:7").unwrap(), Some(1));
@@ -874,6 +1196,7 @@ mod tests {
             from_id: 42,
             body: "m11".into(),
             proto: vec![1, 2, 3],
+            origin_stream: "room:7".into(),
         });
         assert!(s.apply_sync_batch("user:1", "room:7", 2, 1, &bad).is_err());
     }

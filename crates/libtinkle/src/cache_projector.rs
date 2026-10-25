@@ -67,9 +67,12 @@ pub fn project_update_to_ops(
             // Advances checkpoint only; must not invent deletions.
         }
         Some(UpdatePayload::ReadStateInvalidated(_)) => {
-            // Nothing to project. Explicit-mode callers refresh dialogs/read
-            // state via RPC before acknowledging; SQLite-mode auto-commit
-            // re-emits UpdateReady (see SyncManager) so hosts still refresh.
+            // No cacheable body. Storage marks the update's stream scope
+            // read-state-pending in the same transaction as the checkpoint
+            // advance (see CacheOps); SQLite-mode auto-commit re-emits
+            // UpdateReady (see SyncManager) so hosts still refresh, and the
+            // authoritative refresh clears the flag.
+            ops.read_state_scopes.push(update.stream.clone());
         }
         Some(UpdatePayload::MessageRefresh(m)) => {
             let msg = m
@@ -96,6 +99,7 @@ pub fn project_update_to_ops(
                 from_id: msg.from_id,
                 body: msg.message.clone(),
                 proto,
+                origin_stream: update.stream.clone(),
             });
             // Touch dialog so offline list stays ordered without extra RPC.
             // Storage applies this as a top_message-only touch with
@@ -117,6 +121,10 @@ pub fn project_update_to_ops(
                     read_outbox_max_id: 0,
                     pinned: false,
                     proto: dialog_proto,
+                    origin_stream: update.stream.clone(),
+                    // Storage-owned: batch touches never set or clear this;
+                    // invalidations mark it, authoritative refreshes clear it.
+                    read_state_pending: false,
                 });
             }
         }
@@ -145,6 +153,7 @@ pub fn project_update_to_ops(
                         from_id: msg.from_id,
                         body: msg.message.clone(),
                         proto,
+                        origin_stream: update.stream.clone(),
                     });
                 }
             }
@@ -263,5 +272,25 @@ mod tests {
         let ops = project_update_to_ops("user:1", &update).unwrap();
         assert!(ops.messages.is_empty());
         assert!(ops.dialogs.is_empty());
+        assert!(ops.read_state_scopes.is_empty());
+    }
+
+    #[test]
+    fn invalidated_projects_stream_scope_only() {
+        use tinkle_schema::proto::ReadStateInvalidated;
+        let update = Update {
+            event_id: "22222222-2222-4222-8222-222222222222".into(),
+            stream: "room:7".into(),
+            cursor: 5,
+            occurred_at: None,
+            source_seq: None,
+            source_revision: None,
+            payload: Some(P::ReadStateInvalidated(ReadStateInvalidated {})),
+        };
+        let ops = project_update_to_ops("user:1", &update).unwrap();
+        assert!(ops.messages.is_empty());
+        assert!(ops.dialogs.is_empty());
+        // The payload names no dialog: the mark is stream-scoped.
+        assert_eq!(ops.read_state_scopes, vec!["room:7".to_string()]);
     }
 }

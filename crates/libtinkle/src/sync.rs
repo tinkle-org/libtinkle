@@ -1209,6 +1209,10 @@ mod tests {
             peer_input::Target, update::Payload as P, Message, MessageContext, MessageRefresh,
             PeerInput,
         };
+        let room_id: i64 = stream
+            .strip_prefix("room:")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(7);
         Update {
             event_id: "11111111-1111-4111-8111-111111111111".into(),
             stream: stream.into(),
@@ -1220,7 +1224,7 @@ mod tests {
                 message: Some(Message {
                     message_id,
                     peer: Some(PeerInput {
-                        target: Some(Target::ChatId(7)),
+                        target: Some(Target::ChatId(room_id)),
                     }),
                     from_id: 42,
                     date: None,
@@ -1236,7 +1240,7 @@ mod tests {
                 }),
                 random_id: None,
                 context: Some(MessageContext {
-                    conversation_key: "room:7".into(),
+                    conversation_key: stream.into(),
                     order_key: tinkle_schema::sync::position_order(cursor, None),
                     resolve_user_id: None,
                     resolve_conversation: false,
@@ -1288,6 +1292,47 @@ mod tests {
             .get_messages("user:1", "room:7", 10, None)
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn rebuild_one_room_preserves_other_rooms_cache() {
+        let store = MemStore::new();
+        let mgr = SyncManager::new("user:1", store);
+        let sqlite = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
+        mgr.set_sqlite_storage(sqlite.clone()).await;
+        mgr.handle_update(message_refresh("room:7", 1, 10))
+            .await
+            .unwrap();
+        mgr.handle_update(message_refresh("room:8", 1, 20))
+            .await
+            .unwrap();
+        assert!(matches!(
+            mgr.next_event().await.unwrap(),
+            SyncEvent::Applied { .. }
+        ));
+        assert!(matches!(
+            mgr.next_event().await.unwrap(),
+            SyncEvent::Applied { .. }
+        ));
+        mgr.handle_expired("room:7", None).await;
+        assert!(matches!(
+            mgr.next_event().await.unwrap(),
+            SyncEvent::RebuildRequired { .. }
+        ));
+        // room:7 scope gone, room:8 scope (cache + checkpoint) intact.
+        assert!(sqlite
+            .get_messages("user:1", "room:7", 10, None)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            sqlite
+                .get_messages("user:1", "room:8", 10, None)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(sqlite.load_checkpoint("user:1", "room:8").unwrap(), Some(1));
+        assert_eq!(sqlite.load_checkpoint("user:1", "room:7").unwrap(), None);
     }
 
     #[tokio::test]
