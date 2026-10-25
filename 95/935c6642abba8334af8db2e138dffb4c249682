@@ -1,0 +1,175 @@
+crates/libtinkle/examples/subscribe.rs
+  s_d8121a5faa8755::t_0df337eb4b4bd6 50-59
+  s_d8121a5faa8755::t_03a74ae2026776 11-22
+crates/libtinkle/src/grpc.rs
+  s_7478c1da1b2aa9::t_4fc60f0b4a22a4 85,98-104
+  s_7478c1da1b2aa9::t_506e914faec05c 21,23-28,30,34-39,44-45,47-53,56-58,68-84
+  s_7478c1da1b2aa9::t_2ec6e0c4e276de 11-13
+  s_7478c1da1b2aa9::t_030945f4bd9262 86
+docs/architecture.md
+  s_d8121a5faa8755::t_cd1e002e4f20f6 48-50
+  s_d8121a5faa8755::t_c779fa13b2d921 13-14
+crates/libtinkle/src/client.rs
+  s_7478c1da1b2aa9::t_7edca77f2bf33c 26
+  s_7478c1da1b2aa9::t_69bfb6f0447a1d 299-309
+  s_4d581a61e3d5bc::t_3b56f08e948857 404-416
+  s_4d581a61e3d5bc::t_8f43a9149d56ae 661-664,668-720
+  s_7478c1da1b2aa9::t_fed6f96418961e 322-331
+  s_4d581a61e3d5bc::t_6e83553c468f15 384
+  s_7478c1da1b2aa9::t_4812f924e2d0bc 250-264
+  s_4d581a61e3d5bc::t_6522f75c2c4d5c 452,462
+  s_4d581a61e3d5bc::t_30e46db2acf6ec 290-294
+  s_7478c1da1b2aa9::t_143ae0727a51c9 123-127
+  s_d8121a5faa8755::t_56eed0bc0484bf 241
+  s_4d581a61e3d5bc::t_6fa02508a9c597 36
+  s_4d581a61e3d5bc::t_7f40b6656e4f3d 503-507,510,519-520,522-523,533,544-545
+  s_7478c1da1b2aa9::t_52b6f0ae2bc957 665-667
+  s_4d581a61e3d5bc::t_73291f2317e8bf 333-342
+crates/libtinkle/src/lib.rs
+  s_d8121a5faa8755::t_1d62143875fe13 29
+  s_d8121a5faa8755::t_a76c9846b388c8 14-15
+  s_5a07c548e529c7::t_9ccaa89780e302 44-48
+docs/reconnect-sync.md
+  s_d8121a5faa8755::t_7df99ab3433c17 28-34
+crates/libtinkle/src/errors.rs
+  s_4d581a61e3d5bc::t_7775a7b174e960 43
+  s_4d581a61e3d5bc::t_99cab190b93fb0 63-76
+  s_4d581a61e3d5bc::t_76b7ef61bef9b9 14-15
+  s_7478c1da1b2aa9::t_c45d7e8bd18078 18-26
+  s_7478c1da1b2aa9::t_68e6b320a37581 45-46
+crates/tinkle-storage/Cargo.toml
+  s_d8121a5faa8755::t_a2a08a7e945606 15
+crates/libtinkle/src/sync.rs
+  s_4d581a61e3d5bc::t_43d664969fc34d 188-199
+  s_5a07c548e529c7::t_525f6b3d949962 1018
+  s_4d581a61e3d5bc::t_785a349cc0f8be 881-886
+  s_5a07c548e529c7::t_7fc334522f3802 146
+  s_5a07c548e529c7::t_96be2021e1e8a5 490-531,535-547,592
+  s_5a07c548e529c7::t_ab6ba05bf6bbcb 111-116
+  s_5a07c548e529c7::t_94a1041b3c0889 645-649,656-670
+  s_5a07c548e529c7::t_bb4f5d2321834b 675
+  s_4d581a61e3d5bc::t_907c675550424b 683,688
+  s_b031fb3fabeb94::t_74ce223048b93e 594-612
+  s_5a07c548e529c7::t_fb7a4ded5def6c 1046
+  s_5a07c548e529c7::t_ccf6eced5367a5 671,887-1017,1019-1045,1047-1084,1086-1130
+  s_5a07c548e529c7::t_a35b03b9b72567 711-718
+  s_5a07c548e529c7::t_02255b5f84cf09 593
+crates/tinkle-ffi/src/client.rs
+  s_b031fb3fabeb94::t_7abf34fd23b006 286-289,291
+  s_b031fb3fabeb94::t_6ef3d72a3c80f4 167-169
+crates/tinkle-ffi/src/sqlite.rs
+  s_b031fb3fabeb94::t_fadde7a5fd07f7 83-89,99-113
+  s_b031fb3fabeb94::t_413d35e1a16bdc 114,169-229
+  s_b031fb3fabeb94::t_e8c746347c3226 262-272
+  s_b031fb3fabeb94::t_a5ad0d1791cda5 115
+crates/libtinkle/tests/client_integration.rs
+  s_d8121a5faa8755::t_7f1e066fb5c430 495-498
+crates/tinkle-ffi/src/config.rs
+  s_7478c1da1b2aa9::t_4dedaee0ff57b5 24-35
+crates/libtinkle/src/config.rs
+  s_7478c1da1b2aa9::t_1d29ecc360be0c 13-14
+  s_7478c1da1b2aa9::t_45e6ebebe22d37 121-145,147-160
+  s_7478c1da1b2aa9::t_6b2660747296fb 92-94
+crates/tinkle-storage/src/lib.rs
+  s_285af7d3b795c4::t_305f4f0c7a66f4 795,843-892
+  s_b031fb3fabeb94::t_64715f5a1ec9b8 694-698
+  s_285af7d3b795c4::t_277696ae1a3b4d 291-293
+  s_285af7d3b795c4::t_a5f6422c07a0a5 411-420
+  s_b031fb3fabeb94::t_417601030cd06c 493-498,504-506
+  s_5a07c548e529c7::t_a340cbe5c40c76 328-334,336
+  s_285af7d3b795c4::t_93ec596b8c51dc 316-318,322,335,337
+  s_5a07c548e529c7::t_4d45289e13b382 796-835
+  s_285af7d3b795c4::t_3866bc123cb69a 462-468
+crates/libtinkle/src/services.rs
+  s_7478c1da1b2aa9::t_9021cf242b6d81 137-140,149-152
+crates/tinkle-schema/src/sync.rs
+  s_8083576ddad78b::t_8da32ded4c90f3 218-225,231-235,241-262,268-286
+  s_8083576ddad78b::t_b1c0a8c1aeb333 126-131,135-153,156
+  s_8083576ddad78b::t_8b062216cbb9cd 311-315
+crates/libtinkle/src/cache_projector.rs
+  s_285af7d3b795c4::t_a36e598fac2b2b 105-121
+  s_b031fb3fabeb94::t_df28e19254172c 128-132
+  s_b031fb3fabeb94::t_84ebcaae748499 92,101-103
+  s_b031fb3fabeb94::t_2d9d5a5042de3f 70-72
+  s_285af7d3b795c4::t_e5a9083e22a4d1 235-251
+  s_285af7d3b795c4::t_750b1d5ccc2a61 234
+crates/libtinkle/src/cursor.rs
+  s_285af7d3b795c4::t_066e7a111bb129 19-24,30-31
+crates/tinkle-ffi/src/error.rs
+  s_7478c1da1b2aa9::t_9e1e6020e5cf19 69-73
+  s_4d581a61e3d5bc::t_375352521f5552 67
+crates/tinkle-schema/tests/sync_conformance.rs
+  s_8083576ddad78b::t_8c4cbccdc06dda 10,13-14
+  s_8083576ddad78b::t_205395aa9e1023 198-226
+  s_8083576ddad78b::t_6d87aa7a7be85b 247-410
+  s_8083576ddad78b::t_d51aa7943ebe58 87-123
+  s_8083576ddad78b::t_98cc233a3fa1d7 140-142,157-159
+crates/libtinkle/src/sqlite_store.rs
+  s_5a07c548e529c7::t_7ca878b3f1ca5e 3-5,13-15
+  s_5a07c548e529c7::t_65d05dbb7f98c4 41-50,54-63,67-76,80-88
+  s_d8121a5faa8755::t_19c4208c4581a7 16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "95935c6642abba8334af8db2e138dffb4c249682",
+  "prompts": {},
+  "sessions": {
+    "s_285af7d3b795c4": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e8c04ab51ffebTeZGh4ezG5d6U",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_4d581a61e3d5bc": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e8c04ab59ffeoQQr0l57r6Ays3",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_5a07c548e529c7": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e8c04ab63ffel0n2l0bPaC6udO",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_7478c1da1b2aa9": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e8c04ab3fffe1CGxHao8qADBIY",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_8083576ddad78b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e8c04ab44ffeLItBf8vDJqBpL3",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_b031fb3fabeb94": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e8c04ab49ffe4xTX0bOMMt4iCG",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_d8121a5faa8755": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e8c04ab7dffevTqpnvKngi6wir",
+        "model": "muse-spark-1.3-contributor"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    }
+  }
+}
