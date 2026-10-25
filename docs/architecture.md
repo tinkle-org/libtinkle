@@ -10,8 +10,8 @@ Tinkle application          methods, payload schemas, auth policy,
 libtinkle client            typed dispatch, subscriptions, reconnect,
                             backoff, cursor persistence, gRPC catch-up (this SDK)
        ↓
-tinkle-schema                  prost + tonic bindings + sync validation
-                            validation (no transport)
+tinkle-schema                  prost + tonic bindings + sync
+                             validation (no transport)
        ↓
 Syntra RPC / Events         correlation, deadlines, cancel, notifications
        ↓
@@ -45,8 +45,9 @@ Network                     tokio-tungstenite + rustls (native) /
 - `libtinkle`: `Client` (connect/call/subscribe/reconnect/suspend),
   `Credential` (redacted + zeroized), `CursorStore` injection,
   backoff policy, typed facades (`messages()`, `auth()`, `updates()`).
-  This is the ONLY public Rust API; internal modules
-  are `pub(crate)`, `SyncManager` never leaves the crate.
+  This is the ONLY public Rust API surface (plus `SyncEvent`/`SyncManager`
+  for explicit-store apps and `SqliteCursorStore` on native); internal
+  modules are `pub(crate)` with re-exports providing the public paths.
 - `tinkle-ffi` (public FFI): UniFFI `TinkleClient` object + `FfiError` +
   `FfiCursorStore` foreign trait over a shared process-wide Tokio runtime.
   Swift/Kotlin implement storage natively; no Syntra type crosses FFI.

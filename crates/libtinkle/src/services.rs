@@ -134,6 +134,10 @@ impl<'a> Auth<'a> {
         )
         .await?;
         // Learn the authenticated principal (`user:<id>`) for sync scope.
+        // Only touch live sync state on an actual principal change:
+        // setting the principal clears cursors/pending/delivered, so a
+        // repeat sign-in for the same user must be a no-op. Switching to
+        // a different user requires resubscribing afterwards.
         if let Some(user) = resp.user.as_ref() {
             let id = match user.user_type.as_ref() {
                 Some(tinkle_schema::proto::user::UserType::Data(d)) => Some(d.id),
@@ -142,7 +146,10 @@ impl<'a> Auth<'a> {
             };
             if let Some(id) = id {
                 if id > 0 {
-                    self.client.set_principal_user_id(id).await;
+                    let next = format!("user:{id}");
+                    if self.client.principal().await != next {
+                        self.client.set_principal_user_id(id).await;
+                    }
                 }
             }
         }

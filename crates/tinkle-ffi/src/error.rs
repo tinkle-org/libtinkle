@@ -64,7 +64,13 @@ impl From<libtinkle::TinkleError> for FfiError {
             libtinkle::TinkleError::NotConnected(_) => Self::NotConnected,
             libtinkle::TinkleError::ReconnectExhausted { .. } => Self::ReconnectExhausted,
             libtinkle::TinkleError::Sync(msg) => Self::Sync(msg),
+            libtinkle::TinkleError::SyncError(e) => Self::Sync(e.to_string()),
             libtinkle::TinkleError::Grpc(msg) => Self::Network(msg),
+            // Local setup errors (bad endpoint, malformed credential) are
+            // permanent and never retryable: surface as internal config
+            // errors, not network failures.
+            libtinkle::TinkleError::GrpcConfig(msg)
+            | libtinkle::TinkleError::GrpcAuth(msg) => Self::Internal(msg),
             libtinkle::TinkleError::Codec(msg) => Self::Codec(msg),
             libtinkle::TinkleError::CursorStore(msg) => Self::Storage(msg),
             // Subscription setup failures are sync-domain failures.

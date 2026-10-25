@@ -492,5 +492,8 @@ async fn acknowledge_without_connection_fails_closed() {
         store.clone() as Arc<dyn libtinkle::CursorStore>,
     );
     // Without a connection, acknowledge fails closed (no silent advance).
-    assert!(c.acknowledge("user:42", 1).await.is_err());
+    assert!(matches!(
+        c.acknowledge("user:42", 1).await,
+        Err(libtinkle::TinkleError::NotConnected(_))
+    ));
 }

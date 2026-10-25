@@ -1,14 +1,18 @@
 //! SQLite-backed `CursorStore` for native clients.
 //!
-//! Wraps `tinkle_storage::Storage` (rusqlite bundled). Calls are short,
-//! bounded SQLite operations; async callers run them inline. If profiling
-//! shows pump stalls, move these to `spawn_blocking` behind the same trait.
+//! Wraps `tinkle_storage::Storage` (rusqlite bundled). `Storage` is blocking
+//! rusqlite behind a mutex, so every method here hops to the blocking pool
+//! (mirroring `tinkle-ffi`); async pump/ack tasks never block a Tokio worker.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::errors::TinkleError;
+
+fn task_failed(e: tokio::task::JoinError) -> TinkleError {
+    TinkleError::CursorStore(format!("storage task failed: {e}"))
+}
 
 #[derive(Clone)]
 pub struct SqliteCursorStore {
@@ -34,26 +38,53 @@ impl SqliteCursorStore {
 #[async_trait]
 impl crate::cursor::CursorStore for SqliteCursorStore {
     async fn load(&self, principal: &str, stream: &str) -> Result<Option<u64>, TinkleError> {
-        self.inner
-            .load_checkpoint(principal, stream)
-            .map_err(|e| TinkleError::CursorStore(e.to_string()))
+        let inner = self.inner.clone();
+        let principal = principal.to_string();
+        let stream = stream.to_string();
+        tokio::task::spawn_blocking(move || {
+            inner
+                .load_checkpoint(&principal, &stream)
+                .map_err(|e| TinkleError::CursorStore(e.to_string()))
+        })
+        .await
+        .map_err(task_failed)?
     }
 
     async fn save(&self, principal: &str, stream: &str, cursor: u64) -> Result<(), TinkleError> {
-        self.inner
-            .save_checkpoint(principal, stream, cursor)
-            .map_err(|e| TinkleError::CursorStore(e.to_string()))
+        let inner = self.inner.clone();
+        let principal = principal.to_string();
+        let stream = stream.to_string();
+        tokio::task::spawn_blocking(move || {
+            inner
+                .save_checkpoint(&principal, &stream, cursor)
+                .map_err(|e| TinkleError::CursorStore(e.to_string()))
+        })
+        .await
+        .map_err(task_failed)?
     }
 
     async fn remove_stream(&self, principal: &str, stream: &str) -> Result<(), TinkleError> {
-        self.inner
-            .remove_stream(principal, stream)
-            .map_err(|e| TinkleError::CursorStore(e.to_string()))
+        let inner = self.inner.clone();
+        let principal = principal.to_string();
+        let stream = stream.to_string();
+        tokio::task::spawn_blocking(move || {
+            inner
+                .remove_stream(&principal, &stream)
+                .map_err(|e| TinkleError::CursorStore(e.to_string()))
+        })
+        .await
+        .map_err(task_failed)?
     }
 
     async fn clear_principal(&self, principal: &str) -> Result<(), TinkleError> {
-        self.inner
-            .clear_principal(principal)
-            .map_err(|e| TinkleError::CursorStore(e.to_string()))
+        let inner = self.inner.clone();
+        let principal = principal.to_string();
+        tokio::task::spawn_blocking(move || {
+            inner
+                .clear_principal(&principal)
+                .map_err(|e| TinkleError::CursorStore(e.to_string()))
+        })
+        .await
+        .map_err(task_failed)?
     }
 }

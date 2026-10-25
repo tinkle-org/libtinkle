@@ -108,6 +108,12 @@ pub struct SyncManager {
     store: Arc<dyn CursorStore>,
     #[cfg(not(target_arch = "wasm32"))]
     sqlite: Mutex<Option<Arc<tinkle_storage::Storage>>>,
+    /// Serializes durable checkpoint writes from concurrent `acknowledge`
+    /// calls so commits persist in commit order and a newer cursor is never
+    /// overwritten by an older one. Held only across the in-memory commit +
+    /// store save; store I/O still stays outside `state` so the notification
+    /// pump is never blocked.
+    checkpoint_save: Mutex<()>,
     event_tx: mpsc::Sender<SyncEvent>,
     event_rx: Mutex<mpsc::Receiver<SyncEvent>>,
     interests: Mutex<Interests>,
@@ -137,6 +143,7 @@ impl SyncManager {
             store,
             #[cfg(not(target_arch = "wasm32"))]
             sqlite: Mutex::new(None),
+            checkpoint_save: Mutex::new(()),
             event_tx: tx,
             event_rx: Mutex::new(rx),
             interests: Mutex::new(Interests::default()),
@@ -176,6 +183,18 @@ impl SyncManager {
                 StreamStatus::Initializing
             },
         );
+    }
+
+    /// Last fully delivered cursor for `stream`: `max(applied, delivered)`.
+    /// Catch-up advances `delivered` without persisting, so follows must
+    /// resume from here — not from the pre-catch-up store cursor — to avoid
+    /// replaying already-delivered updates as duplicates.
+    pub(crate) async fn effective_cursor(&self, stream: &str) -> u64 {
+        let state = self.state.lock().await;
+        state
+            .cursors
+            .get(stream)
+            .max(state.delivered.get(stream).copied().unwrap_or(0))
     }
 
     pub(crate) async fn record_bounds(&self, stream: &str, floor: u64, head: Option<u64>) {
@@ -468,15 +487,64 @@ impl SyncManager {
                 if let Some(sqlite) = self.sqlite_clone().await {
                     // Automatic mode: project + commit cache and checkpoint
                     // atomically, then publish Applied. No explicit ack needed.
-                    let ops = crate::cache_projector::project_update_to_ops(&principal, &update)
-                        .map_err(TinkleError::Sync)?;
-                    if let Err(e) =
-                        sqlite.apply_sync_batch(&principal, &stream, cursor, applied, &ops)
-                    {
+                    let ops =
+                        match crate::cache_projector::project_update_to_ops(&principal, &update) {
+                            Ok(ops) => ops,
+                            Err(projection) => {
+                                // Sync validation accepts shapes the projector
+                                // cannot persist (e.g. non-positive message_id).
+                                // Without an event the update would be dropped
+                                // silently and the checkpoint would stall; surface
+                                // it for recovery like any other apply failure.
+                                let _ = self
+                                    .event_tx
+                                    .send(SyncEvent::CheckpointFailed {
+                                        stream: stream.clone(),
+                                        cursor,
+                                        error: projection.clone(),
+                                    })
+                                    .await;
+                                return Err(TinkleError::Sync(projection));
+                            }
+                        };
+                    // `Storage` is synchronous rusqlite behind a mutex; run
+                    // it on the blocking pool so SQLite contention cannot
+                    // stall the Tokio notification pump.
+                    let batch_result = {
+                        let sqlite_task = sqlite.clone();
+                        let principal_task = principal.clone();
+                        let stream_task = stream.clone();
+                        tokio::task::spawn_blocking(move || {
+                            sqlite_task.apply_sync_batch(
+                                &principal_task,
+                                &stream_task,
+                                cursor,
+                                applied,
+                                &ops,
+                            )
+                        })
+                        .await
+                        .map_err(|e| {
+                            TinkleError::CursorStore(format!("sync apply task failed: {e}"))
+                        })?
+                    };
+                    if let Err(e) = batch_result {
                         // Scope moved under us (concurrent apply) or rebuild:
                         // hydrate in-memory cursor and surface for recovery.
                         if matches!(e, tinkle_storage::StorageError::ScopeMismatch { .. }) {
-                            if let Ok(Some(current)) = sqlite.load_checkpoint(&principal, &stream) {
+                            let current: Option<u64> = {
+                                let sqlite_task = sqlite.clone();
+                                let principal_task = principal.clone();
+                                let stream_task = stream.clone();
+                                tokio::task::spawn_blocking(move || {
+                                    sqlite_task.load_checkpoint(&principal_task, &stream_task)
+                                })
+                                .await
+                                .ok()
+                                .and_then(|r| r.ok())
+                                .flatten()
+                            };
+                            if let Some(current) = current {
                                 let mut state = self.state.lock().await;
                                 if state.principal == principal {
                                     state.cursors.hydrate(&stream, current);
@@ -521,6 +589,27 @@ impl SyncManager {
                             cursor,
                         })
                         .await;
+                    // ReadStateInvalidated carries no cacheable body, so the
+                    // atomic commit above advances the checkpoint without
+                    // refreshing unread/read state. Surface the payload so FFI
+                    // hosts can trigger a GetDialogs/read-state refresh;
+                    // without this SQLite-mode clients would see only
+                    // `Applied` and serve stale dialogs.
+                    if matches!(
+                        update.payload.as_ref(),
+                        Some(tinkle_schema::proto::update::Payload::ReadStateInvalidated(
+                            _
+                        ))
+                    ) {
+                        let _ = self
+                            .event_tx
+                            .send(SyncEvent::UpdateReady {
+                                stream: stream.clone(),
+                                cursor,
+                                update: Box::new(update.clone()),
+                            })
+                            .await;
+                    }
                     return Ok(self.pop_buffered_next(&stream).await);
                 }
                 debug!(%stream, cursor, "update ready, awaiting application");
@@ -553,17 +642,37 @@ impl SyncManager {
     /// `UpdateReady`; out-of-order or duplicate acks never move state
     /// backward.
     pub async fn acknowledge(&self, stream: &str, cursor: u64) -> Result<(), TinkleError> {
-        let (principal, previous, decision) = {
+        // Serialize checkpoint writes so concurrent acks persist in commit
+        // order: without this, a newer cursor could be saved first and then
+        // overwritten by an older one, causing replay on restart.
+        let _save_guard = self.checkpoint_save.lock().await;
+        let (principal, previous) = {
             let mut state = self.state.lock().await;
             let prev = state.cursors.get(stream);
             // Duplicate ack after a successful commit is harmless.
             if cursor == prev {
                 return Ok(());
             }
+            // The ack must reference an update that was actually delivered as
+            // `UpdateReady`; otherwise the caller could advance the durable
+            // checkpoint without ever applying the update.
+            let delivered = state.delivered.get(stream).copied().unwrap_or(0);
+            if cursor > delivered {
+                let expected = prev.saturating_add(1);
+                let stream_owned = stream.to_string();
+                drop(state);
+                return Err(TinkleError::SyncError(
+                    tinkle_schema::sync::SyncError::Gap {
+                        stream: stream_owned,
+                        expected,
+                        got: cursor,
+                    },
+                ));
+            }
             match state.cursors.decision(stream, cursor) {
                 CursorDecision::Next => {
                     state.cursors.commit(stream, cursor)?;
-                    (state.principal.clone(), prev, true)
+                    (state.principal.clone(), prev)
                 }
                 _ => {
                     let applied = state.cursors.get(stream);
@@ -571,13 +680,12 @@ impl SyncManager {
                         let expected = applied.saturating_add(1);
                         let stream_owned = stream.to_string();
                         drop(state);
-                        return Err(TinkleError::Sync(
+                        return Err(TinkleError::SyncError(
                             tinkle_schema::sync::SyncError::Gap {
                                 stream: stream_owned,
                                 expected,
                                 got: cursor,
-                            }
-                            .to_string(),
+                            },
                         ));
                     }
                     drop(state);
@@ -595,12 +703,19 @@ impl SyncManager {
                 }
             }
         };
-        let _ = (previous, decision);
         if let Err(e) = self.store.save(&principal, stream, cursor).await {
             let error = e.to_string();
             let mut state = self.state.lock().await;
             if state.principal == principal && state.cursors.get(stream) == cursor {
                 state.cursors.hydrate(stream, previous);
+                // Roll delivered back as well: the update must be retried,
+                // and leaving delivered ahead would classify the redelivery
+                // as duplicate/stale and suppress it.
+                if previous == 0 {
+                    state.delivered.remove(stream);
+                } else {
+                    state.delivered.insert(stream.to_string(), previous);
+                }
             }
             drop(state);
             let _ = self
@@ -763,7 +878,255 @@ mod tests {
         let store = MemStore::new();
         let mgr = SyncManager::new("user:1", store);
         let err = mgr.acknowledge("user:1", 2).await.unwrap_err();
+        assert!(matches!(
+            err,
+            TinkleError::Sync(_) | TinkleError::SyncError(_)
+        ));
+        assert!(err.is_gap());
+        assert!(err.to_string().to_ascii_lowercase().contains("gap"));
+    }
+
+    #[tokio::test]
+    async fn acknowledge_without_delivery_is_rejected() {
+        let store = MemStore::new();
+        let mgr = SyncManager::new("user:1", store.clone());
+        // No `UpdateReady` was ever delivered: the ack must not advance the
+        // durable checkpoint without the update being applied.
+        let err = mgr.acknowledge("user:1", 1).await.unwrap_err();
+        assert!(err.is_gap());
+        assert_eq!(store.load("user:1", "user:1").await.unwrap(), None);
+    }
+
+    struct FailingStore;
+
+    #[async_trait]
+    impl CursorStore for FailingStore {
+        async fn load(&self, _p: &str, _s: &str) -> Result<Option<u64>, TinkleError> {
+            Ok(None)
+        }
+        async fn save(&self, _p: &str, _s: &str, _c: u64) -> Result<(), TinkleError> {
+            Err(TinkleError::CursorStore("boom".into()))
+        }
+        async fn remove_stream(&self, _p: &str, _s: &str) -> Result<(), TinkleError> {
+            Ok(())
+        }
+        async fn clear_principal(&self, _p: &str) -> Result<(), TinkleError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_ack_rolls_back_delivered_so_retry_redelivers() {
+        let store = Arc::new(FailingStore);
+        let mgr = SyncManager::new("user:1", store);
+        mgr.handle_update(omitted("user:1", 1)).await.unwrap();
+        assert!(matches!(
+            mgr.next_event().await.unwrap(),
+            SyncEvent::UpdateReady { cursor: 1, .. }
+        ));
+        assert!(mgr.acknowledge("user:1", 1).await.is_err());
+        assert!(matches!(
+            mgr.next_event().await.unwrap(),
+            SyncEvent::CheckpointFailed { cursor: 1, .. }
+        ));
+        // Redelivery must surface `UpdateReady` again, not Duplicate/Stale.
+        mgr.handle_update(omitted("user:1", 1)).await.unwrap();
+        assert!(matches!(
+            mgr.next_event().await.unwrap(),
+            SyncEvent::UpdateReady { cursor: 1, .. }
+        ));
+    }
+
+    struct SlowFirstStore {
+        inner: StdMutex<HashMap<(String, String), u64>>,
+    }
+
+    #[async_trait]
+    impl CursorStore for SlowFirstStore {
+        async fn load(&self, p: &str, s: &str) -> Result<Option<u64>, TinkleError> {
+            Ok(self
+                .inner
+                .lock()
+                .unwrap()
+                .get(&(p.to_string(), s.to_string()))
+                .copied())
+        }
+        async fn save(&self, p: &str, s: &str, c: u64) -> Result<(), TinkleError> {
+            if c == 1 {
+                // Force the race: the older cursor's save lands last unless
+                // checkpoint writes are serialized in commit order.
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            }
+            self.inner
+                .lock()
+                .unwrap()
+                .insert((p.to_string(), s.to_string()), c);
+            Ok(())
+        }
+        async fn remove_stream(&self, p: &str, s: &str) -> Result<(), TinkleError> {
+            self.inner
+                .lock()
+                .unwrap()
+                .remove(&(p.to_string(), s.to_string()));
+            Ok(())
+        }
+        async fn clear_principal(&self, p: &str) -> Result<(), TinkleError> {
+            self.inner.lock().unwrap().retain(|(pp, _), _| pp != p);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_acks_persist_newest_last() {
+        let store = Arc::new(SlowFirstStore {
+            inner: StdMutex::new(HashMap::new()),
+        });
+        let mgr = SyncManager::new("user:1", store.clone());
+        mgr.handle_update(omitted("user:1", 1)).await.unwrap();
+        mgr.handle_update(omitted("user:1", 2)).await.unwrap();
+        assert!(matches!(
+            mgr.next_event().await.unwrap(),
+            SyncEvent::UpdateReady { cursor: 1, .. }
+        ));
+        assert!(matches!(
+            mgr.next_event().await.unwrap(),
+            SyncEvent::UpdateReady { cursor: 2, .. }
+        ));
+        let m1 = mgr.clone();
+        let h1 = tokio::spawn(async move { m1.acknowledge("user:1", 1).await });
+        // Let ack(1) commit and enter its slow save before ack(2) starts.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        mgr.acknowledge("user:1", 2).await.unwrap();
+        h1.await.unwrap().unwrap();
+        let mut applied = Vec::new();
+        applied.push(mgr.next_event().await.unwrap());
+        applied.push(mgr.next_event().await.unwrap());
+        assert!(
+            applied
+                .iter()
+                .all(|e| matches!(e, SyncEvent::Applied { .. })),
+            "expected two Applied events, got {applied:?}"
+        );
+        assert_eq!(store.load("user:1", "user:1").await.unwrap(), Some(2));
+    }
+
+    fn message_refresh(stream: &str, cursor: u64, message_id: i64) -> Update {
+        use tinkle_schema::proto::{
+            peer_input::Target, update::Payload as P, Message, MessageContext, MessageRefresh,
+            PeerInput,
+        };
+        Update {
+            event_id: "11111111-1111-4111-8111-111111111111".into(),
+            stream: stream.into(),
+            cursor,
+            occurred_at: None,
+            source_seq: None,
+            source_revision: None,
+            payload: Some(P::MessageRefresh(MessageRefresh {
+                message: Some(Message {
+                    message_id,
+                    peer: Some(PeerInput {
+                        target: Some(Target::ChatId(7)),
+                    }),
+                    from_id: 42,
+                    date: None,
+                    message: "hello".into(),
+                    media: None,
+                    entities: vec![],
+                    reply_to: None,
+                    edit_date: None,
+                    reactions: None,
+                    replies: None,
+                    pinned: false,
+                    ttl_period: 0,
+                }),
+                random_id: None,
+                context: Some(MessageContext {
+                    conversation_key: "room:7".into(),
+                    order_key: tinkle_schema::sync::position_order(cursor, None),
+                    resolve_user_id: None,
+                    resolve_conversation: false,
+                }),
+            })),
+        }
+    }
+
+    #[tokio::test]
+    async fn sqlite_auto_apply_commits_cache_and_checkpoint() {
+        let store = MemStore::new();
+        let mgr = SyncManager::new("user:1", store);
+        let sqlite = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
+        mgr.set_sqlite_storage(sqlite.clone()).await;
+        mgr.handle_update(message_refresh("room:7", 1, 10))
+            .await
+            .unwrap();
+        let evt = mgr.next_event().await.unwrap();
+        assert!(
+            matches!(evt, SyncEvent::Applied { cursor: 1, .. }),
+            "got {evt:?}"
+        );
+        assert_eq!(sqlite.load_checkpoint("user:1", "room:7").unwrap(), Some(1));
+        let rows = sqlite.get_messages("user:1", "room:7", 10, None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].message_id, 10);
+    }
+
+    #[tokio::test]
+    async fn sqlite_projection_failure_surfaces_checkpoint_failed() {
+        let store = MemStore::new();
+        let mgr = SyncManager::new("user:1", store);
+        let sqlite = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
+        mgr.set_sqlite_storage(sqlite.clone()).await;
+        // Passes sync validation but the projector rejects message_id 0.
+        let err = mgr
+            .handle_update(message_refresh("room:7", 1, 0))
+            .await
+            .unwrap_err();
         assert!(matches!(err, TinkleError::Sync(_)));
-        assert!(err.to_string().contains("gap"));
+        let evt = mgr.next_event().await.unwrap();
+        assert!(
+            matches!(evt, SyncEvent::CheckpointFailed { cursor: 1, .. }),
+            "got {evt:?}"
+        );
+        // Nothing committed, nothing cached: recovery can retry cleanly.
+        assert_eq!(sqlite.load_checkpoint("user:1", "room:7").unwrap(), None);
+        assert!(sqlite
+            .get_messages("user:1", "room:7", 10, None)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn rebuild_clears_native_cache_until_snapshot_recommits() {
+        let store = MemStore::new();
+        let mgr = SyncManager::new("user:1", store);
+        let sqlite = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
+        mgr.set_sqlite_storage(sqlite.clone()).await;
+        mgr.handle_update(message_refresh("room:7", 1, 10))
+            .await
+            .unwrap();
+        assert!(matches!(
+            mgr.next_event().await.unwrap(),
+            SyncEvent::Applied { .. }
+        ));
+        assert_eq!(
+            sqlite
+                .get_messages("user:1", "room:7", 10, None)
+                .unwrap()
+                .len(),
+            1
+        );
+        mgr.handle_expired("room:7", None).await;
+        assert!(matches!(
+            mgr.next_event().await.unwrap(),
+            SyncEvent::RebuildRequired { .. }
+        ));
+        // Stale rows from discarded history are not readable offline.
+        assert!(sqlite
+            .get_messages("user:1", "room:7", 10, None)
+            .unwrap()
+            .is_empty());
+        assert!(sqlite.list_dialogs("user:1", 10).unwrap().is_empty());
+        assert_eq!(sqlite.load_checkpoint("user:1", "room:7").unwrap(), None);
     }
 }

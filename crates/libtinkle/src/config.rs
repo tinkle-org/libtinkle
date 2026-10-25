@@ -10,6 +10,8 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use syntra_runtime::ConnectionConfig;
 
+use crate::errors::TinkleError;
+
 /// Opaque credential (e.g. session token bytes). `Debug` is redacted.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct Credential {
@@ -87,6 +89,9 @@ impl ReconnectPolicy {
 pub struct ClientConfig {
     /// gRPC base endpoint for `ReadUpdates` catch-up, e.g. `https://gateway.example.com`.
     /// When `None`, catch-up must go through the follow binding only.
+    /// Prefer `with_grpc_endpoint` over direct assignment: the builder
+    /// validates scheme/`https` up front, while a directly assigned
+    /// value is only checked when catch-up runs.
     pub grpc_endpoint: Option<String>,
     /// WSS URL, e.g. `wss://gateway.example.com/syntra/v1/ws`.
     pub url: String,
@@ -113,10 +118,46 @@ impl ClientConfig {
         }
     }
 
+    /// Validate a gRPC catch-up endpoint without storing it. Shared by
+    /// the builder and fallible constructors so misconfig fails fast
+    /// with `GrpcConfig` (FailedPrecondition) instead of surfacing as a
+    /// retried `Grpc` (Unavailable) at catch-up time.
+    pub fn validate_grpc_endpoint(endpoint: &str, allow_insecure: bool) -> Result<(), TinkleError> {
+        if endpoint.trim().is_empty() {
+            return Err(TinkleError::GrpcConfig(
+                "grpc_endpoint must not be blank".into(),
+            ));
+        }
+        let lower = endpoint.to_ascii_lowercase();
+        if allow_insecure {
+            if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+                return Err(TinkleError::GrpcConfig(
+                    "grpc_endpoint must include http:// or https:// scheme".into(),
+                ));
+            }
+        } else if !lower.starts_with("https://") {
+            return Err(TinkleError::GrpcConfig(
+                "grpc_endpoint must use https:// unless allow_insecure".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// gRPC endpoint for catch-up (`ReadUpdates` over actual gRPC).
-    pub fn with_grpc_endpoint(mut self, endpoint: impl Into<String>) -> Self {
-        self.grpc_endpoint = Some(endpoint.into());
-        self
+    ///
+    /// Fails fast: blank endpoints, missing schemes, and non-`https`
+    /// endpoints without `allow_insecure` return `GrpcConfig`
+    /// (FailedPrecondition) here instead of silently degrading to
+    /// follow-only at subscribe time. Call after `insecure_dev` when a
+    /// dev `http://` endpoint is intended.
+    pub fn with_grpc_endpoint(
+        mut self,
+        endpoint: impl Into<String>,
+    ) -> Result<Self, TinkleError> {
+        let endpoint = endpoint.into();
+        Self::validate_grpc_endpoint(&endpoint, self.allow_insecure)?;
+        self.grpc_endpoint = Some(endpoint);
+        Ok(self)
     }
 
     /// Development-only plaintext. Production MUST use `wss://`.

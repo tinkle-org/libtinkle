@@ -31,7 +31,6 @@ async-trait.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tonic.workspace = true
-tonic-prost.workspace = true
 tinkle-storage.workspace = true
 
 # WASM: reduced tokio (no mio/net) + minimal tokio-util (CancellationToken

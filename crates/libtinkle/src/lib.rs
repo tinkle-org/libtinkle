@@ -11,7 +11,8 @@
 //! - This crate owns connection lifecycle, typed RPC dispatch,
 //!   sync coordination, cursors, reconnect, and backoff.
 //!
-//! Catch-up uses actual gRPC `ReadUpdates`; ongoing delivery uses Syntra
+//! Catch-up uses gRPC `ReadUpdates` on native (unavailable on wasm32,
+//! where `grpc` returns an error); ongoing delivery uses Syntra
 //! notifications carrying `FollowUpdatesResponse` bytes.
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -25,7 +26,7 @@ pub(crate) mod grpc;
 pub(crate) mod reconnect;
 pub(crate) mod services;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod sqlite_store;
+pub(crate) mod sqlite_store;
 pub(crate) mod sync;
 
 pub use client::{Client, SubscribeResult};
@@ -40,3 +41,8 @@ pub use sync::{SyncEvent, SyncManager};
 pub use syntra_core::error::ErrorCode;
 /// Re-exported cancellation token.
 pub use syntra_runtime::CancelToken;
+/// Re-exported native storage so public signatures naming `Storage`
+/// resolve via `libtinkle` without adding a direct `tinkle-storage`
+/// dependency.
+#[cfg(not(target_arch = "wasm32"))]
+pub use tinkle_storage::Storage;

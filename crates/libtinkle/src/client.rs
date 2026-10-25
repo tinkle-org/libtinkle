@@ -23,6 +23,7 @@
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
+use zeroize::Zeroizing;
 
 use syntra_runtime::{CancelToken, Initiator};
 
@@ -32,6 +33,7 @@ use crate::errors::TinkleError;
 use crate::reconnect::{backoff_sleep, should_retry};
 use crate::services::{Auth, Messages, Updates};
 use crate::sync::{Interests, SyncEvent, SyncManager};
+use tinkle_schema::sync::SyncError;
 
 struct Live {
     handle: syntra_ws::WsHandle,
@@ -118,6 +120,11 @@ impl Client {
     /// Set the authenticated principal from a known user id.
     /// Called automatically after `sign_in`; apps with an existing
     /// session token should call it after resolving their own id.
+    ///
+    /// Changing the principal resets live sync state (cursors, pending,
+    /// delivered) via `SyncManager::set_principal`, so resubscribe
+    /// afterwards to re-establish follows from persisted cursors.
+    /// Setting the same principal again is a no-op.
     pub async fn set_principal_user_id(&self, user_id: i64) {
         if user_id <= 0 {
             return;
@@ -231,7 +238,7 @@ impl Client {
         Auth::new(self)
     }
 
-    pub(crate) fn updates(&self) -> Updates<'_> {
+    pub fn updates(&self) -> Updates<'_> {
         Updates::new(self)
     }
 
@@ -240,25 +247,21 @@ impl Client {
         &self,
         req: tinkle_schema::proto::ReadUpdatesRequest,
     ) -> Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> {
-        let endpoint = self
-            .config
-            .grpc_endpoint
-            .clone()
-            .ok_or_else(|| TinkleError::Grpc("grpc_endpoint not configured".into()))?;
-        let lower = endpoint.to_ascii_lowercase();
-        if self.config.allow_insecure {
-            if !(lower.starts_with("https://") || lower.starts_with("http://")) {
-                return Err(TinkleError::Grpc(
-                    "grpc_endpoint must include http:// or https:// scheme".into(),
-                ));
-            }
-        } else if !lower.starts_with("https://") {
-            return Err(TinkleError::Grpc(
-                "grpc_endpoint must use https:// unless allow_insecure".into(),
-            ));
-        }
-        let token = self.credential.expose_secret().to_vec();
-        crate::grpc::read_updates_grpc(&endpoint, &token, req, 30_000).await
+        let endpoint = self.validated_grpc_endpoint()?;
+        // Zeroized on drop; never logged, never placed in URLs.
+        let token: Zeroizing<Vec<u8>> = Zeroizing::new(self.credential.expose_secret().to_vec());
+        crate::grpc::read_updates_grpc(&endpoint, token.as_slice(), req, 30_000).await
+    }
+
+    /// Fetch the configured gRPC endpoint, failing fast with
+    /// `GrpcConfig` (FailedPrecondition) on missing/blank/scheme/https
+    /// violations instead of a retried `Grpc` (Unavailable) at page time.
+    fn validated_grpc_endpoint(&self) -> Result<String, TinkleError> {
+        let endpoint = self.config.grpc_endpoint.clone().ok_or_else(|| {
+            TinkleError::GrpcConfig("grpc_endpoint not configured".into())
+        })?;
+        ClientConfig::validate_grpc_endpoint(&endpoint, self.config.allow_insecure)?;
+        Ok(endpoint)
     }
 
     /// Catch up one stream over gRPC with paginated recovery.
@@ -284,11 +287,26 @@ impl Client {
         let mgr = self.live_mgr().await?;
         let limit = limit.clamp(1, 500);
         let _ = mgr.hydrate_from_store(&[stream.to_string()]).await;
-        let _ = mgr.begin_recovery(stream).await;
+        if !mgr.begin_recovery(stream).await {
+            return Err(TinkleError::Sync(format!(
+                "concurrent recovery already in progress on {stream}"
+            )));
+        }
         let mut last_resp: Option<tinkle_schema::proto::ReadUpdatesResponse> = None;
         let mut pages = 0u32;
         let mut no_progress_pages = 0u32;
         let result: Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> = async {
+            let endpoint = self.validated_grpc_endpoint()?;
+            // Zeroized on drop; never logged, never placed in URLs.
+            let token: Zeroizing<Vec<u8>> =
+                Zeroizing::new(self.credential.expose_secret().to_vec());
+            // Fail fast on malformed credentials before opening the
+            // connection, not after the 10s connect timeout.
+            let _ = crate::grpc::bearer(token.as_slice())?;
+            // One TCP/TLS/H2 connection per recovery run, shared by all
+            // pages — not one handshake per page.
+            #[cfg(not(target_arch = "wasm32"))]
+            let channel = crate::grpc::connect_channel(&endpoint, 30_000).await?;
             loop {
                 if pages >= 20 {
                     break;
@@ -301,17 +319,28 @@ impl Client {
                 };
                 let mut attempt = 0u32;
                 let resp = loop {
-                    match self.read_updates_grpc(req.clone()).await {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let page = crate::grpc::read_updates_on_channel(
+                        &channel,
+                        token.as_slice(),
+                        req.clone(),
+                    )
+                    .await;
+                    #[cfg(target_arch = "wasm32")]
+                    let page = self.read_updates_grpc(req.clone()).await;
+                    match page {
                         Ok(r) => break r,
-                        Err(_) if attempt < 2 => {
-                            attempt += 1;
-                            tokio::time::sleep(std::time::Duration::from_millis(
-                                100 * (1 << attempt),
-                            ))
-                            .await;
-                            continue;
+                        Err(e) => {
+                            if attempt < 2 && is_retryable_grpc_error(&e) {
+                                attempt += 1;
+                                tokio::time::sleep(std::time::Duration::from_millis(
+                                    100 * (1 << attempt),
+                                ))
+                                .await;
+                                continue;
+                            }
+                            return Err(e);
                         }
-                        Err(e) => return Err(e),
                     }
                 };
                 mgr.record_bounds(stream, resp.replay_floor, Some(resp.head))
@@ -352,8 +381,7 @@ impl Client {
                             }
                         }
                         Err(e) => {
-                            let msg = e.to_string();
-                            if msg.contains("gap") || msg.contains("Gap") {
+                            if matches!(e, TinkleError::SyncError(SyncError::Gap { .. })) {
                                 break;
                             }
                             return Err(e);
@@ -373,7 +401,19 @@ impl Client {
                     break;
                 }
             }
-            last_resp.ok_or_else(|| TinkleError::Grpc("empty recovery: no pages".into()))
+            match last_resp {
+                None => Err(TinkleError::Grpc("empty recovery: no pages".into())),
+                Some(resp) => {
+                    if after < resp.head {
+                        Err(TinkleError::Sync(format!(
+                            "incomplete recovery on {stream}: after {after} < head {} after {pages} pages",
+                            resp.head
+                        )))
+                    } else {
+                        Ok(resp)
+                    }
+                }
+            }
         }
         .await;
         match &result {
@@ -409,7 +449,7 @@ impl Client {
                     *self.principal.write().await = authenticated.clone();
                     mgr.set_principal(authenticated).await;
                 }
-                _ => {
+                Ok(_) => {
                     // Gateway without empty-stream resolution: principal
                     // must have been set via `sign_in` or
                     // `set_principal_user_id`. Fail closed rather than
@@ -419,6 +459,7 @@ impl Client {
                             .into(),
                     ));
                 }
+                Err(e) => return Err(e),
             }
         }
         let principal = self.principal().await;
@@ -459,12 +500,14 @@ impl Client {
             }
         }
 
-        // Start follows for own + rooms. Each follow replays retained
-        // suffix after the supplied cursor, covering commits between the
-        // gRPC page and subscription establishment.
+        // Start follows for own + rooms. Each follow resumes from the
+        // post-catch-up cursor, covering commits between the gRPC page and
+        // subscription establishment without replaying already-delivered
+        // updates as duplicates.
+        let own_follow_cursor = own_cursor.max(mgr.effective_cursor(&own_stream).await);
         let follow_own = tinkle_schema::proto::FollowUpdatesRequest {
             stream: own_stream.clone(),
-            after_cursor: own_cursor,
+            after_cursor: own_follow_cursor,
         };
         let own_resp = self.updates().follow(follow_own).await?;
         if !own_resp.stream.is_empty() && own_resp.stream != own_stream {
@@ -473,9 +516,11 @@ impl Client {
             mgr.set_principal(own_resp.stream.clone()).await;
         }
         for (room_id, after) in &effective_rooms {
+            let stream = format!("room:{room_id}");
+            let follow_cursor = (*after).max(mgr.effective_cursor(&stream).await);
             let req = tinkle_schema::proto::FollowUpdatesRequest {
-                stream: format!("room:{room_id}"),
-                after_cursor: *after,
+                stream,
+                after_cursor: follow_cursor,
             };
             // Room follow failures surface immediately; own follow already
             // established, so caller can retry rooms without losing own.
@@ -485,7 +530,7 @@ impl Client {
             let req = tinkle_schema::proto::ObserveConnectivityRequest {
                 user_ids: watch_user_ids.clone(),
             };
-            let _ = self.updates().observe_connectivity(req).await;
+            self.updates().observe_connectivity(req).await?;
         }
 
         mgr.on_subscribed(effective_rooms.clone(), watch_user_ids.clone())
@@ -496,8 +541,8 @@ impl Client {
             subscribed: true,
         };
         Ok(SubscribeResult {
-            stream: own_resp.stream.clone(),
-            after_cursor: own_cursor,
+            stream: self.principal().await,
+            after_cursor: own_follow_cursor,
             head: head.or(own_resp.head),
         })
     }
@@ -612,4 +657,64 @@ impl Client {
 
 fn principal_user_suffix(principal: &str) -> String {
     principal.strip_prefix("user:").unwrap_or("0").to_string()
+}
+
+/// Retry only transient transport/status gRPC failures. Permanent local
+/// validation (bad endpoint, bearer, config) and permanent status codes
+/// (InvalidArgument, Unauthenticated, etc.) must surface immediately
+/// without sleeping. Variant-based first: `GrpcConfig`/`GrpcAuth` are
+/// never retryable by construction; the message heuristics below apply
+/// only to transport (`Grpc`) failures.
+fn is_retryable_grpc_error(e: &TinkleError) -> bool {
+    let msg = match e {
+        TinkleError::Grpc(m) => m.to_ascii_lowercase(),
+        _ => return false,
+    };
+    let compact: String = msg.chars().filter(|c| !c.is_whitespace()).collect();
+    const PERMANENT: &[&str] = &[
+        "notconfigured",
+        "mustinclude",
+        "mustuse",
+        "invalidendpoint",
+        "mustbeascii",
+        "invalidbearer",
+        "invalidargument",
+        "unauthenticated",
+        "permissiondenied",
+        "notfound",
+        "alreadyexists",
+        "failedprecondition",
+        "outofrange",
+        "unimplemented",
+    ];
+    for pat in PERMANENT {
+        if compact.contains(pat) {
+            return false;
+        }
+    }
+    const RETRYABLE: &[&str] = &[
+        "connect",
+        "transport",
+        "unavailable",
+        "deadline",
+        "timeout",
+        "timedout",
+        "resourceexhausted",
+        "aborted",
+        "internal",
+        "unknown",
+        "cancelled",
+        "reset",
+        "refused",
+        "eof",
+        "brokenpipe",
+        "temporarily",
+        "tryagain",
+    ];
+    for pat in RETRYABLE {
+        if compact.contains(pat) {
+            return true;
+        }
+    }
+    false
 }

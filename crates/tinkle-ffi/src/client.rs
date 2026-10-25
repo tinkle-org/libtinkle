@@ -164,6 +164,9 @@ impl TinkleClient {
     /// Create a client sharing one native SQLite file. Rust applies incoming
     /// updates and commits cache + checkpoint atomically, then emits
     /// `Applied`; UI reads the shared cache instead of acknowledging.
+    /// For `ReadStateInvalidated` an additional `UpdateReady` follows the
+    /// `Applied` so hosts refresh dialogs/read state via RPC (the atomic
+    /// commit alone carries no cacheable body).
     #[uniffi::constructor]
     pub fn new_sqlite(
         config: ClientConfigFfi,
@@ -280,8 +283,12 @@ impl TinkleClient {
     }
 
     /// Set the authenticated principal from a known user id.
-    pub async fn set_principal_user_id(&self, user_id: i64) {
+    pub async fn set_principal_user_id(&self, user_id: i64) -> Result<(), FfiError> {
+        if user_id <= 0 {
+            return Err(FfiError::Codec("user_id must be positive".to_string()));
+        }
         self.inner.set_principal_user_id(user_id).await;
+        Ok(())
     }
 
     // Named `shutdown` instead of `close` because UniFFI generates a

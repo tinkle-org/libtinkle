@@ -21,7 +21,18 @@ impl From<ClientConfigFfi> for libtinkle::ClientConfig {
         }
         cfg.user_agent = c.user_agent;
         if let Some(ep) = c.grpc_endpoint {
-            cfg = cfg.with_grpc_endpoint(ep);
+            // Blank means unset: an empty/whitespace endpoint would
+            // enable catch-up that can never succeed. `From` cannot
+            // fail, so an invalid non-blank endpoint is likewise left
+            // unset (client falls back to follow-only); fallible
+            // callers should use `validate_grpc_endpoint` +
+            // `with_grpc_endpoint` to fail fast instead.
+            let ep = ep.trim().to_string();
+            if !ep.is_empty()
+                && libtinkle::ClientConfig::validate_grpc_endpoint(&ep, cfg.allow_insecure).is_ok()
+            {
+                cfg.grpc_endpoint = Some(ep);
+            }
         }
         cfg
     }

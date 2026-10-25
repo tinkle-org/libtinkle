@@ -288,6 +288,9 @@ impl Storage {
         Ok(())
     }
 
+    /// Remove every row owned by `principal`: checkpoints, stream_state,
+    /// and the cached messages/dialogs/users/chats. Logout-scoped wipe so a
+    /// signed-out principal leaves no offline bodies behind.
     pub fn clear_principal(&self, principal: &str) -> Result<(), StorageError> {
         check_principal(principal)?;
         let conn = self.lock()?;
@@ -310,17 +313,28 @@ impl Storage {
     pub fn mark_rebuild(&self, principal: &str, stream: &str) -> Result<(), StorageError> {
         check_principal(principal)?;
         check_stream(stream)?;
-        let conn = self.lock()?;
-        conn.execute(
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        tx.execute(
             "DELETE FROM checkpoints WHERE principal=?1 AND stream=?2",
             params![principal, stream],
         )?;
-        conn.execute(
+        tx.execute(
             "INSERT INTO stream_state(principal, stream, valid, replay_floor)
              VALUES(?1,?2,0,0)
              ON CONFLICT(principal, stream) DO UPDATE SET valid=0",
             params![principal, stream],
         )?;
+        // Rebuild discards the stream's history, so cache rows derived from
+        // that history must not stay readable offline. Projected writes are
+        // not tagged by stream, so the principal's cache is reset wholesale;
+        // rows become readable again only as new snapshot commits land
+        // (which also re-arm validity via save_checkpoint/apply_sync_batch).
+        for table in ["messages", "dialogs", "users", "chats"] {
+            let sql = format!("DELETE FROM {table} WHERE principal=?1");
+            tx.execute(&sql, params![principal])?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -394,17 +408,16 @@ impl Storage {
         check_principal(principal)?;
         check_stream(stream)?;
         check_cursor(cursor)?;
-        if cursor != expected_prev.saturating_add(1) && !(expected_prev == 0 && cursor == 0) {
-            // Enforce contiguity here as well; SyncManager already classifies,
-            // but the database must never commit a gap.
-            if cursor != expected_prev + 1 {
-                let found: u64 = self.load_checkpoint(principal, stream)?.unwrap_or(0);
-                return Err(StorageError::ScopeMismatch {
-                    stream: stream.to_string(),
-                    expected: expected_prev.saturating_add(1),
-                    found,
-                });
-            }
+        // Enforce contiguity here as well; SyncManager already classifies,
+        // but the database must never commit a gap.
+        let expected_next = expected_prev.saturating_add(1);
+        if cursor != expected_next && !(expected_prev == 0 && cursor == 0) {
+            let found: u64 = self.load_checkpoint(principal, stream)?.unwrap_or(0);
+            return Err(StorageError::ScopeMismatch {
+                stream: stream.to_string(),
+                expected: expected_next,
+                found,
+            });
         }
         // Bound one transaction to keep it short and avoid holding the mutex
         // across network I/O (callers resolve refreshes before calling here).
@@ -446,7 +459,13 @@ impl Storage {
             )));
         }
         for m in &ops.messages {
-            if m.message_id <= 0 || m.peer_id == 0 || m.proto.len() > 2_000_000 {
+            // Peer-less messages (optional Message.peer absent) project as
+            // ("unknown", 0) with a conversation_key derived from context or
+            // principal. Accept those so the checkpoint can advance; dialog
+            // identity still requires a real peer (see projector, which skips
+            // the dialog touch when the peer is unknown).
+            let peer_ok = m.peer_id != 0 || m.peer_kind == "unknown";
+            if m.message_id <= 0 || !peer_ok || m.proto.len() > 2_000_000 {
                 return Err(StorageError::InvalidInput("bad message row".into()));
             }
             tx.execute(
@@ -471,15 +490,20 @@ impl Storage {
             if d.peer_id == 0 || d.proto.len() > 1_000_000 {
                 return Err(StorageError::InvalidInput("bad dialog row".into()));
             }
+            // Dialog entries in a sync batch are top_message touches from the
+            // projector: preserve unread/read/pinned columns and never move
+            // top_message backwards (edits carry older ids). Proto follows
+            // the winning top_message so the blob stays coherent.
+            // Full dialog refreshes (unread/read/pinned) go through
+            // `upsert_dialog`, not this path.
             tx.execute(
                 "INSERT INTO dialogs(principal, peer_kind, peer_id, top_message, unread_count,
                    read_inbox_max_id, read_outbox_max_id, pinned, proto)
                  VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
                  ON CONFLICT(principal, peer_kind, peer_id)
-                 DO UPDATE SET top_message=excluded.top_message, unread_count=excluded.unread_count,
-                   read_inbox_max_id=excluded.read_inbox_max_id,
-                   read_outbox_max_id=excluded.read_outbox_max_id,
-                   pinned=excluded.pinned, proto=excluded.proto",
+                 DO UPDATE SET top_message=max(top_message, excluded.top_message),
+                   proto=CASE WHEN excluded.top_message > top_message
+                     THEN excluded.proto ELSE proto END",
                 params![
                     principal,
                     d.peer_kind,
@@ -667,6 +691,11 @@ impl Storage {
         Ok(())
     }
 
+    /// Authoritative dialog write (e.g. GetDialogs refresh): overwrites all
+    /// columns including unread/read/pinned. Contrast with
+    /// [`Self::apply_sync_batch`], where dialog entries are top_message-only
+    /// touches that preserve those columns. Callers must supply a current
+    /// snapshot; this does not MAX-clamp top_message.
     pub fn upsert_dialog(&self, principal: &str, row: &DialogRow) -> Result<(), StorageError> {
         check_principal(principal)?;
         if row.peer_id == 0 || row.proto.len() > 1_000_000 {
@@ -764,10 +793,101 @@ mod tests {
     }
 
     #[test]
+    fn rebuild_resets_cache_until_snapshot_recommits() {
+        let s = Storage::open_in_memory().unwrap();
+        let mut ops = CacheOps::default();
+        ops.messages.push(msg(10));
+        ops.dialogs.push(DialogRow {
+            peer_kind: "room".into(),
+            peer_id: 7,
+            top_message: 10,
+            unread_count: 0,
+            read_inbox_max_id: 0,
+            read_outbox_max_id: 0,
+            pinned: false,
+            proto: vec![4, 5, 6],
+        });
+        s.apply_sync_batch("user:1", "room:7", 1, 0, &ops).unwrap();
+        assert_eq!(
+            s.get_messages("user:1", "room:7", 10, None).unwrap().len(),
+            1
+        );
+        assert_eq!(s.list_dialogs("user:1", 10).unwrap().len(), 1);
+        // Rebuild discards history: stale rows must not stay readable.
+        s.mark_rebuild("user:1", "room:7").unwrap();
+        assert!(s
+            .get_messages("user:1", "room:7", 10, None)
+            .unwrap()
+            .is_empty());
+        assert!(s.list_dialogs("user:1", 10).unwrap().is_empty());
+        assert_eq!(s.load_checkpoint("user:1", "room:7").unwrap(), None);
+        assert!(!s.stream_state("user:1", "room:7").unwrap().valid);
+        // A fresh snapshot commit re-arms the stream and restores readability.
+        s.save_checkpoint("user:1", "room:7", 1).unwrap();
+        let mut ops2 = CacheOps::default();
+        ops2.messages.push(msg(11));
+        s.apply_sync_batch("user:1", "room:7", 2, 1, &ops2).unwrap();
+        assert_eq!(
+            s.get_messages("user:1", "room:7", 10, None).unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
     fn rejects_bad_inputs_without_sql_leak() {
         let s = Storage::open_in_memory().unwrap();
         assert!(s.load_checkpoint("bad", "user:1").is_err());
         assert!(s.save_checkpoint("user:1", "user:1", 0).is_err());
         assert!(s.get_messages("user:1", "", 10, None).is_err());
+    }
+
+    #[test]
+    fn peerless_message_advances_checkpoint_without_dialog() {
+        // Optional Message.peer absent projects ("unknown", 0): the message
+        // row commits under its derived conversation_key and the checkpoint
+        // advances; no dialog touch is stored (no valid dialog identity).
+        let s = Storage::open_in_memory().unwrap();
+        let mut ops = CacheOps::default();
+        ops.messages.push(MessageRow {
+            conversation_key: "room:7".into(),
+            message_id: 10,
+            peer_kind: "unknown".into(),
+            peer_id: 0,
+            from_id: 42,
+            body: "m10".into(),
+            proto: vec![1, 2, 3],
+        });
+        s.apply_sync_batch("user:1", "room:7", 1, 0, &ops).unwrap();
+        assert_eq!(s.load_checkpoint("user:1", "room:7").unwrap(), Some(1));
+        assert_eq!(
+            s.get_messages("user:1", "room:7", 10, None).unwrap().len(),
+            1
+        );
+        assert!(s.list_dialogs("user:1", 10).unwrap().is_empty());
+        // A zero peer with a concrete kind is still rejected.
+        let mut bad = CacheOps::default();
+        bad.messages.push(MessageRow {
+            conversation_key: "room:7".into(),
+            message_id: 11,
+            peer_kind: "room".into(),
+            peer_id: 0,
+            from_id: 42,
+            body: "m11".into(),
+            proto: vec![1, 2, 3],
+        });
+        assert!(s.apply_sync_batch("user:1", "room:7", 2, 1, &bad).is_err());
+    }
+
+    #[test]
+    fn contiguity_check_does_not_overflow_at_max() {
+        // expected_prev = u64::MAX must not panic (debug overflow); it is a
+        // fence mismatch, reported as ScopeMismatch without committing.
+        let s = Storage::open_in_memory().unwrap();
+        let ops = CacheOps::default();
+        let err = s
+            .apply_sync_batch("user:1", "room:7", 1, u64::MAX, &ops)
+            .unwrap_err();
+        assert!(matches!(err, StorageError::ScopeMismatch { .. }));
+        assert_eq!(s.load_checkpoint("user:1", "room:7").unwrap(), None);
     }
 }

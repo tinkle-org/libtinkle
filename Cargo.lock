@@ -907,7 +907,6 @@ dependencies = [
  "tokio-tungstenite",
  "tokio-util",
  "tonic",
- "tonic-prost",
  "tracing",
  "url",
  "zeroize",
@@ -1757,8 +1756,6 @@ dependencies = [
  "thiserror",
  "tinkle-org_schema_community_neoeinstein-prost",
  "tinkle-org_schema_community_neoeinstein-tonic",
- "tonic",
- "tonic-prost",
 ]
 
 [[package]]

@@ -25,9 +25,13 @@ retries, and jittered backoff (`ReconnectPolicy`: 500 ms base, ×2,
    Pages arrive in increasing cursor order with `replay_floor` and `head`.
 4. Validate each `Update` (stream/cursor/event_id/payload agreement)
    before any effects.
-5. Emit `UpdateReady`; the app applies data plus required refreshes,
-   then calls `acknowledge(stream, cursor)` to persist the checkpoint.
-   Receipt alone never advances the checkpoint.
+5. Explicit-store path (no native SQLite): emit `UpdateReady`; the app
+   applies data plus required refreshes, then calls
+   `acknowledge(stream, cursor)` to persist the checkpoint and emit
+   `Applied`. Receipt alone never advances the checkpoint.
+   Native SQLite path (`Client::new_sqlite`): project + commit cache and
+   checkpoint atomically, then emit `Applied` directly with no explicit
+   `acknowledge` needed.
 6. Start Syntra follows (`FollowUpdates`, `ObserveConnectivity`) after
    the stored cursor. The server replays retained suffix before live
    delivery, covering commits between gRPC pages and subscription.

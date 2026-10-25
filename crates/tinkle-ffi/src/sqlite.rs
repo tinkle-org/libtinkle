@@ -80,6 +80,13 @@ impl SqliteStorage {
 
 #[uniffi::export(async_runtime = "tokio")]
 impl SqliteStorage {
+    /// Blocking open: does FS I/O + PRAGMAs + schema sync on the calling
+    /// thread. Do NOT call on the UI/main thread; call from a background
+    /// queue, or prefer [`Self::open_async`] which moves the work to
+    /// `spawn_blocking`. A full async refactor (async constructor as the
+    /// only open path) is out of scope to avoid breaking existing
+    /// Swift/Kotlin call sites; this doc + the async alternative is the
+    /// interim guard.
     #[uniffi::constructor]
     pub fn open(path: String) -> Result<Arc<Self>, FfiError> {
         if path.is_empty() {
@@ -87,6 +94,23 @@ impl SqliteStorage {
         }
         let inner = Arc::new(tinkle_storage::Storage::open(&path).map_err(map_err)?);
         Ok(Arc::new(Self { inner }))
+    }
+
+    /// Non-blocking open for UI callers: runs [`tinkle_storage::Storage::open`]
+    /// on Tokio's blocking pool.
+    #[uniffi::constructor]
+    pub async fn open_async(path: String) -> Result<Arc<Self>, FfiError> {
+        if path.is_empty() {
+            return Err(FfiError::Storage("db path must not be empty".into()));
+        }
+        let inner = tokio::task::spawn_blocking(move || {
+            tinkle_storage::Storage::open(&path).map_err(map_err)
+        })
+        .await
+        .map_err(|e| FfiError::Storage(format!("storage task failed: {e}")))??;
+        Ok(Arc::new(Self {
+            inner: Arc::new(inner),
+        }))
     }
 
     #[uniffi::constructor]
@@ -142,6 +166,67 @@ impl SqliteStorage {
         .map_err(|e| FfiError::Storage(format!("storage task failed: {e}")))?
     }
 
+    /// Write plumbing for [`Self::get_user_proto`]: the sync projector never
+    /// emits user rows, so without an explicit save (e.g. from a
+    /// UsersService refresh) the getter stays `None`. Hosts should call this
+    /// after fetching user objects via RPC.
+    pub async fn save_user_proto(
+        &self,
+        principal: String,
+        user_id: i64,
+        user_proto: Vec<u8>,
+    ) -> Result<(), FfiError> {
+        if user_id <= 0 {
+            return Err(FfiError::Codec("user_id must be positive".into()));
+        }
+        if user_proto.is_empty() || user_proto.len() > 1_000_000 {
+            return Err(FfiError::Codec("user_proto bad size".into()));
+        }
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            inner
+                .upsert_user(
+                    &principal,
+                    &tinkle_storage::UserRow {
+                        user_id,
+                        proto: user_proto,
+                    },
+                )
+                .map_err(map_err)
+        })
+        .await
+        .map_err(|e| FfiError::Storage(format!("storage task failed: {e}")))?
+    }
+
+    /// Write plumbing for [`Self::get_chat_proto`]: see [`Self::save_user_proto`].
+    pub async fn save_chat_proto(
+        &self,
+        principal: String,
+        chat_id: i64,
+        chat_proto: Vec<u8>,
+    ) -> Result<(), FfiError> {
+        if chat_id <= 0 {
+            return Err(FfiError::Codec("chat_id must be positive".into()));
+        }
+        if chat_proto.is_empty() || chat_proto.len() > 1_000_000 {
+            return Err(FfiError::Codec("chat_proto bad size".into()));
+        }
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            inner
+                .upsert_chat(
+                    &principal,
+                    &tinkle_storage::ChatRow {
+                        chat_id,
+                        proto: chat_proto,
+                    },
+                )
+                .map_err(map_err)
+        })
+        .await
+        .map_err(|e| FfiError::Storage(format!("storage task failed: {e}")))?
+    }
+
     pub async fn get_user_proto(
         &self,
         principal: String,
@@ -174,6 +259,17 @@ impl SqliteStorage {
         .map_err(|e| FfiError::Storage(format!("storage task failed: {e}")))?
     }
 
+    /// Delete all rows for `principal`, including checkpoints.
+    ///
+    /// Coordination required: [`TinkleClient`] holds in-memory cursors. If
+    /// the client is still running, the next auto-commit fails the SQLite
+    /// scope fence (`ScopeMismatch`) because memory expects the deleted
+    /// checkpoint, breaking sync until recovery. Callers must
+    /// `shutdown()`/`suspend()` the client first and only reconnect (fresh
+    /// `subscribe`/catch-up from cursor 0) after clearing. A full fix would
+    /// reset the live `SyncManager` cursors atomically with this delete;
+    /// that cross-object coordination is out of scope, so this doc is the
+    /// guard.
     pub async fn clear_principal(&self, principal: String) -> Result<(), FfiError> {
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || inner.clear_principal(&principal).map_err(map_err))

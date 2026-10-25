@@ -67,7 +67,9 @@ pub fn project_update_to_ops(
             // Advances checkpoint only; must not invent deletions.
         }
         Some(UpdatePayload::ReadStateInvalidated(_)) => {
-            // Caller refreshes dialogs/read state via RPC; nothing to project.
+            // Nothing to project. Explicit-mode callers refresh dialogs/read
+            // state via RPC before acknowledging; SQLite-mode auto-commit
+            // re-emits UpdateReady (see SyncManager) so hosts still refresh.
         }
         Some(UpdatePayload::MessageRefresh(m)) => {
             let msg = m
@@ -87,7 +89,7 @@ pub fn project_update_to_ops(
                 return Err("message proto too large".into());
             }
             ops.messages.push(tinkle_storage::MessageRow {
-                conversation_key: conversation_key.clone(),
+                conversation_key,
                 message_id: msg.message_id,
                 peer_kind: peer_kind.clone(),
                 peer_id,
@@ -96,30 +98,38 @@ pub fn project_update_to_ops(
                 proto,
             });
             // Touch dialog so offline list stays ordered without extra RPC.
+            // Storage applies this as a top_message-only touch with
+            // MAX(top_message): unread/read/pinned columns are preserved and
+            // an older message (e.g. edit) never moves the top backwards.
             // Full dialog details arrive via GetDialogs refreshes.
-            let dialog_proto = build_dialog_proto(&peer_kind, peer_id, msg.message_id);
-            ops.dialogs.push(tinkle_storage::DialogRow {
-                peer_kind,
-                peer_id,
-                top_message: msg.message_id,
-                unread_count: 0,
-                read_inbox_max_id: 0,
-                read_outbox_max_id: 0,
-                pinned: false,
-                proto: dialog_proto,
-            });
-            // Best-effort sender hint: context may carry resolve_user_id, but
-            // full user objects arrive via UsersService refreshes elsewhere.
-            let _ = (&conversation_key, principal);
+            // Peer-less messages (optional Message.peer absent) have no valid
+            // dialog identity: storage rejects peer_id 0 here, so skip the
+            // touch. The message row above still commits and advances the
+            // checkpoint via its derived conversation_key.
+            if peer_id != 0 {
+                let dialog_proto = build_dialog_proto(&peer_kind, peer_id, msg.message_id);
+                ops.dialogs.push(tinkle_storage::DialogRow {
+                    peer_kind,
+                    peer_id,
+                    top_message: msg.message_id,
+                    unread_count: 0,
+                    read_inbox_max_id: 0,
+                    read_outbox_max_id: 0,
+                    pinned: false,
+                    proto: dialog_proto,
+                });
+            }
         }
         Some(UpdatePayload::SendAttemptFailed(m)) => {
             // Private to sender; reconcile without disclosing to others.
             // Cache the failed attempt's public projection if present so the
             // sender's outbox can show it offline.
             if let Some(msg) = m.message.as_ref() {
-                if msg.message_id != 0 {
-                    // Send attempts use transient ids; only cache when the
-                    // server assigned a durable message_id.
+                if msg.message_id > 0 {
+                    // Send attempts use transient ids (negative); only cache
+                    // when the server assigned a durable positive message_id.
+                    // Storage rejects message_id <= 0, so caching a negative
+                    // id would fail the batch and leave the cursor unadvanced.
                     let (peer_kind, peer_id) = peer_of(msg);
                     let ctx_key = m.context.as_ref().map(|c| c.conversation_key.as_str());
                     let conversation_key =
@@ -219,6 +229,24 @@ mod tests {
         assert_eq!(ops.messages[0].conversation_key, "room:7");
         assert_eq!(ops.dialogs.len(), 1);
         assert_eq!(ops.dialogs[0].top_message, 10);
+    }
+
+    #[test]
+    fn peerless_message_projects_no_dialog() {
+        // Optional Message.peer absent: message row keeps the derived
+        // conversation_key, but no dialog touch (storage has no valid
+        // dialog identity for peer_id 0).
+        let mut u = message_update();
+        if let Some(P::MessageRefresh(m)) = u.payload.as_mut() {
+            if let Some(msg) = m.message.as_mut() {
+                msg.peer = None;
+            }
+        }
+        let ops = project_update_to_ops("user:1", &u).unwrap();
+        assert_eq!(ops.messages.len(), 1);
+        assert_eq!(ops.messages[0].peer_id, 0);
+        assert_eq!(ops.messages[0].conversation_key, "room:7");
+        assert!(ops.dialogs.is_empty());
     }
 
     #[test]

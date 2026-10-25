@@ -123,18 +123,37 @@ pub fn is_canonical_stream(s: &str) -> bool {
     if kind != "user" && kind != "room" {
         return false;
     }
-    matches!(id.parse::<i64>(), Ok(v) if v > 0)
+    // Require round-trip: only one spelling valid. Rejects "+5", "007",
+    // " 5", "5 ", etc. that `parse` alone would accept.
+    match id.parse::<i64>() {
+        Ok(v) if v > 0 && id == v.to_string() => true,
+        _ => false,
+    }
 }
 
 fn is_lowercase_uuid(s: &str) -> bool {
-    if s.is_empty() || s.len() > 64 {
+    // Strict canonical lowercase UUID: 8-4-4-4-12 layout, 36 chars,
+    // dashes only at 8/13/18/23, all other chars lowercase hex.
+    if s.len() != 36 {
         return false;
     }
-    // Accept canonical lowercase UUID/text: hex + dashes, lowercase only.
-    !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase() || c == '-')
-        && s.chars().any(|c| c.is_ascii_hexdigit())
+    let b = s.as_bytes();
+    if b[8] != b'-' || b[13] != b'-' || b[18] != b'-' || b[23] != b'-' {
+        return false;
+    }
+    for (i, &c) in b.iter().enumerate() {
+        if i == 8 || i == 13 || i == 18 || i == 23 {
+            continue;
+        }
+        if !(c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+            return false;
+        }
+    }
+    // Proto requires a nonzero source UUID: reject nil.
+    if s == "00000000-0000-0000-0000-000000000000" {
+        return false;
+    }
+    true
 }
 
 /// Validate one durable `Update` before any effects.
@@ -196,20 +215,74 @@ pub fn validate_update(update: &Update) -> Result<ValidatedUpdate, SyncError> {
                     ));
                 }
             }
+            if let Some(ctx) = m.context.as_ref() {
+                let expected = position_order(update.cursor, update.source_seq);
+                if ctx.order_key != expected {
+                    return Err(SyncError::InvalidUpdate(
+                        "message context order_key must match position".to_string(),
+                    ));
+                }
+            }
         }
         UpdatePayload::SendAttemptFailed(m) => {
             if update.event_id.is_empty() {
                 return Err(SyncError::InvalidUpdate("event_id must be set".to_string()));
+            }
+            if !is_lowercase_uuid(&update.event_id) {
+                return Err(SyncError::InvalidUpdate(
+                    "event_id must be canonical".to_string(),
+                ));
             }
             if m.random_id == 0 {
                 return Err(SyncError::InvalidUpdate(
                     "random_id must be nonzero".to_string(),
                 ));
             }
+            if let Some(v) = update.source_seq {
+                if v < 0 {
+                    return Err(SyncError::InvalidUpdate(
+                        "source_seq must be nonnegative".to_string(),
+                    ));
+                }
+            }
+            if let Some(v) = update.source_revision {
+                if v < 0 {
+                    return Err(SyncError::InvalidUpdate(
+                        "source_revision must be nonnegative".to_string(),
+                    ));
+                }
+            }
+            if let Some(ctx) = m.context.as_ref() {
+                let expected = position_order(update.cursor, update.source_seq);
+                if ctx.order_key != expected {
+                    return Err(SyncError::InvalidUpdate(
+                        "message context order_key must match position".to_string(),
+                    ));
+                }
+            }
         }
         UpdatePayload::ReadStateInvalidated(_) => {
             if update.event_id.is_empty() {
                 return Err(SyncError::InvalidUpdate("event_id must be set".to_string()));
+            }
+            if !is_lowercase_uuid(&update.event_id) {
+                return Err(SyncError::InvalidUpdate(
+                    "event_id must be canonical".to_string(),
+                ));
+            }
+            if let Some(v) = update.source_seq {
+                if v < 0 {
+                    return Err(SyncError::InvalidUpdate(
+                        "source_seq must be nonnegative".to_string(),
+                    ));
+                }
+            }
+            if let Some(v) = update.source_revision {
+                if v < 0 {
+                    return Err(SyncError::InvalidUpdate(
+                        "source_revision must be nonnegative".to_string(),
+                    ));
+                }
             }
         }
     }
@@ -235,6 +308,11 @@ pub fn validate_follow_response(payload: &[u8]) -> Result<ValidatedFollow, SyncE
             resp.stream
         )));
     }
+    if let Some(h) = resp.head {
+        if h > MAX_CURSOR {
+            return Err(SyncError::CursorOutOfRange);
+        }
+    }
     match resp.result {
         Some(FollowResult::Update(u)) => {
             if u.stream != resp.stream {
@@ -243,9 +321,6 @@ pub fn validate_follow_response(payload: &[u8]) -> Result<ValidatedFollow, SyncE
                 ));
             }
             if let Some(h) = resp.head {
-                if h > MAX_CURSOR {
-                    return Err(SyncError::CursorOutOfRange);
-                }
                 if u.cursor > h {
                     return Err(SyncError::InvalidUpdate("update beyond head".into()));
                 }
