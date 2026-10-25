@@ -20,8 +20,10 @@
 //! `ObserveConnectivity` notifications. Never auto-retries unsafe
 //! mutations without an application idempotency policy.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use tokio::sync::RwLock;
 use zeroize::Zeroizing;
 
@@ -32,7 +34,8 @@ use crate::cursor::CursorStore;
 use crate::errors::TinkleError;
 use crate::reconnect::{backoff_sleep, should_retry};
 use crate::services::{Auth, Messages, Updates};
-use crate::sync::{Interests, SyncEvent, SyncManager};
+use crate::sync::{Interests, SyncEvent, SyncManager, UNKNOWN_PRINCIPAL};
+use crate::ErrorCode;
 use tinkle_schema::sync::SyncError;
 
 struct Live {
@@ -65,6 +68,16 @@ pub struct Client {
     live: Arc<RwLock<Option<Live>>>,
     principal: Arc<RwLock<String>>,
     interests: Arc<tokio::sync::Mutex<Interests>>,
+    /// Follows established on the current connection, by resolved stream.
+    /// Connection-scoped: cleared whenever the socket dies (`close`), so a
+    /// new connection always re-establishes. Insert-before-request gives
+    /// at-most-once issuance per connection; the marker is removed if the
+    /// RPC fails so retries re-issue.
+    follows: Arc<tokio::sync::Mutex<HashSet<String>>>,
+    /// Serializes `subscribe` bodies: concurrent subscribes must not issue
+    /// duplicate follows or interleave hydration. The WS2 supervisor will own
+    /// this; until then this is the single-subscriber lock.
+    sub_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Client {
@@ -76,8 +89,10 @@ impl Client {
             #[cfg(not(target_arch = "wasm32"))]
             sqlite: None,
             live: Arc::new(RwLock::new(None)),
-            principal: Arc::new(RwLock::new("unknown".to_string())),
+            principal: Arc::new(RwLock::new(UNKNOWN_PRINCIPAL.to_string())),
             interests: Arc::new(tokio::sync::Mutex::new(Interests::default())),
+            follows: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+            sub_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -95,8 +110,10 @@ impl Client {
             store,
             sqlite: Some(storage),
             live: Arc::new(RwLock::new(None)),
-            principal: Arc::new(RwLock::new("unknown".to_string())),
+            principal: Arc::new(RwLock::new(UNKNOWN_PRINCIPAL.to_string())),
             interests: Arc::new(tokio::sync::Mutex::new(Interests::default())),
+            follows: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+            sub_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -425,43 +442,28 @@ impl Client {
 
     /// Subscribe with durable cursor recovery.
     ///
-    /// Flow: learn principal (own-stream probe) → hydrate → gRPC catch-up
-    /// for own + rooms → start Syntra follows + connectivity observations.
-    /// Returns the own-stream confirmation; replay itself arrives as
-    /// `UpdateReady` events requiring explicit `acknowledge`.
+    /// Flow: resolve principal (probe-as-follow: exactly one own-stream
+    /// follow per connection) → hydrate → gRPC catch-up for own + rooms →
+    /// start Syntra follows (skipping already-established) + connectivity
+    /// observations. Returns the own-stream confirmation; replay itself
+    /// arrives as `UpdateReady` events requiring explicit `acknowledge`.
+    ///
+    /// Partial room failures do not abort established follows. Rooms that
+    /// fail (after the scoped-continuation fallback) are reported in the
+    /// returned error while interests are still persisted, so a retry or
+    /// reconnect reconciles without issuing duplicate follows.
     pub async fn subscribe(
         &self,
         rooms: Vec<(i64, u64)>,
         watch_user_ids: Vec<i64>,
     ) -> Result<SubscribeResult, TinkleError> {
+        let _sub = self.sub_lock.lock().await;
         let mgr = self.live_mgr().await?;
-        if self.principal().await == "unknown" {
-            // Probe the authenticated own stream via the follow binding:
-            // an empty stream selects the caller's own user stream and the
-            // gateway echoes the concrete `user:<id>`.
-            let probe = tinkle_schema::proto::FollowUpdatesRequest {
-                stream: String::new(),
-                after_cursor: 0,
-            };
-            match self.updates().follow(probe).await {
-                Ok(resp) if !resp.stream.is_empty() => {
-                    let authenticated = resp.stream.clone();
-                    *self.principal.write().await = authenticated.clone();
-                    mgr.set_principal(authenticated).await;
-                }
-                Ok(_) => {
-                    // Gateway without empty-stream resolution: principal
-                    // must have been set via `sign_in` or
-                    // `set_principal_user_id`. Fail closed rather than
-                    // checkpointing under `unknown`.
-                    return Err(TinkleError::Subscription(
-                        "authenticated principal unknown; call set_principal_user_id after sign_in"
-                            .into(),
-                    ));
-                }
-                Err(e) => return Err(e),
-            }
-        }
+        // Exactly-once own-stream follow per connection: when the principal
+        // is unknown the probe doubles as the follow (see
+        // `ProbeFollowResolver`); otherwise the explicit follow below is the
+        // only one.
+        ProbeFollowResolver.resolve(self).await?;
         let principal = self.principal().await;
         let own_stream = if principal.starts_with("user:") {
             principal.clone()
@@ -505,26 +507,40 @@ impl Client {
         // subscription establishment without replaying already-delivered
         // updates as duplicates.
         let own_follow_cursor = own_cursor.max(mgr.effective_cursor(&own_stream).await);
-        let follow_own = tinkle_schema::proto::FollowUpdatesRequest {
-            stream: own_stream.clone(),
-            after_cursor: own_follow_cursor,
-        };
-        let own_resp = self.updates().follow(follow_own).await?;
-        if !own_resp.stream.is_empty() && own_resp.stream != own_stream {
-            // Principal rotation: gateway resolved a different own stream.
-            *self.principal.write().await = own_resp.stream.clone();
-            mgr.set_principal(own_resp.stream.clone()).await;
+        match self.follow_once(&own_stream, own_follow_cursor).await? {
+            Some(own_resp) => {
+                if !own_resp.stream.is_empty() && own_resp.stream != own_stream {
+                    // Principal rotation: gateway resolved a different own stream.
+                    self.follows.lock().await.remove(&own_stream);
+                    self.follows.lock().await.insert(own_resp.stream.clone());
+                    *self.principal.write().await = own_resp.stream.clone();
+                    mgr.set_principal(own_resp.stream.clone()).await;
+                }
+                head = head.or(own_resp.head);
+            }
+            None => {
+                // Probe-as-follow already established the own stream on this
+                // connection; re-requesting would be rejected as a duplicate.
+            }
         }
+        let mut failed_rooms: Vec<(i64, String)> = Vec::new();
         for (room_id, after) in &effective_rooms {
             let stream = format!("room:{room_id}");
             let follow_cursor = (*after).max(mgr.effective_cursor(&stream).await);
-            let req = tinkle_schema::proto::FollowUpdatesRequest {
-                stream,
-                after_cursor: follow_cursor,
-            };
-            // Room follow failures surface immediately; own follow already
-            // established, so caller can retry rooms without losing own.
-            let _ = self.updates().follow(req).await?;
+            match self.follow_once(&stream, follow_cursor).await {
+                Ok(_) => {}
+                Err(e) if e.code() == ErrorCode::FailedPrecondition && follow_cursor != 0 => {
+                    // Scoped-continuation rejection: retry once from the
+                    // origin. The stored checkpoint is untouched; the dedup
+                    // pipeline makes the replay idempotent. If the retry is
+                    // rejected too, the room stays degraded.
+                    tracing::debug!(%stream, error = %e, "room resume rejected, retrying from origin");
+                    if let Err(e2) = self.follow_once(&stream, 0).await {
+                        failed_rooms.push((*room_id, e2.to_string()));
+                    }
+                }
+                Err(e) => failed_rooms.push((*room_id, e.to_string())),
+            }
         }
         if !watch_user_ids.is_empty() {
             let req = tinkle_schema::proto::ObserveConnectivityRequest {
@@ -540,11 +556,41 @@ impl Client {
             watch_user_ids,
             subscribed: true,
         };
+        if !failed_rooms.is_empty() {
+            return Err(TinkleError::Subscription(format!(
+                "room follows failed (degraded; established follows kept, retry reconciles): {failed_rooms:?}"
+            )));
+        }
         Ok(SubscribeResult {
             stream: self.principal().await,
             after_cursor: own_follow_cursor,
-            head: head.or(own_resp.head),
+            head,
         })
+    }
+
+    /// Issue a follow RPC at most once per connection. Returns `Ok(None)`
+    /// when the stream was already established earlier on this connection
+    /// (skip, do not re-request). A failed RPC removes the marker so a
+    /// retry re-issues.
+    async fn follow_once(
+        &self,
+        stream: &str,
+        after_cursor: u64,
+    ) -> Result<Option<tinkle_schema::proto::FollowUpdatesResponse>, TinkleError> {
+        if !self.follows.lock().await.insert(stream.to_string()) {
+            return Ok(None);
+        }
+        let req = tinkle_schema::proto::FollowUpdatesRequest {
+            stream: stream.to_string(),
+            after_cursor,
+        };
+        match self.updates().follow(req).await {
+            Ok(resp) => Ok(Some(resp)),
+            Err(e) => {
+                self.follows.lock().await.remove(stream);
+                Err(e)
+            }
+        }
     }
 
     /// Next sync event. `UpdateReady` must be followed by `acknowledge`
@@ -560,13 +606,15 @@ impl Client {
         mgr.acknowledge(stream, cursor).await
     }
 
-    /// Graceful close.
+    /// Graceful close. Follow markers die with the socket: the next
+    /// connection must re-establish every follow from persisted cursors.
     pub async fn close(&self) {
         if let Some(live) = self.live.write().await.take() {
             live.handle.close().await;
             live.pump.abort();
             live.sync_mgr.on_disconnect().await;
         }
+        self.follows.lock().await.clear();
     }
 
     /// Background suspension (mobile).
@@ -588,7 +636,7 @@ impl Client {
                     };
                     if subscribed {
                         let previous = self.principal().await;
-                        if previous == "unknown" {
+                        if previous == UNKNOWN_PRINCIPAL {
                             if let Err(e) = self.subscribe(rooms, watch).await {
                                 self.close().await;
                                 return Err(e);
@@ -652,6 +700,55 @@ impl Client {
 
     pub async fn version(&self) -> Option<u32> {
         self.live.read().await.as_ref().map(|l| l.version)
+    }
+}
+
+/// Resolves the authenticated principal without creating a duplicate
+/// subscription. Swap point for a future dedicated identity RPC: replace
+/// the strategy, keep the exactly-once-follow contract.
+#[async_trait]
+trait PrincipalResolver: Send + Sync {
+    async fn resolve(&self, client: &Client) -> Result<String, TinkleError>;
+}
+
+/// Probe strategy: the empty-stream follow request doubles as the
+/// own-stream follow. The gateway resolves the caller's stream from
+/// authentication and echoes the concrete `user:<id>`; that follow stays
+/// active, so no second own-stream follow is ever issued on the connection.
+/// `SyncManager::resolve_principal` preserves the retained suffix that may
+/// already be replaying through the pump.
+struct ProbeFollowResolver;
+
+#[async_trait]
+impl PrincipalResolver for ProbeFollowResolver {
+    async fn resolve(&self, client: &Client) -> Result<String, TinkleError> {
+        if client.principal().await != UNKNOWN_PRINCIPAL {
+            return Ok(client.principal().await);
+        }
+        let mgr = client.live_mgr().await?;
+        let probe = tinkle_schema::proto::FollowUpdatesRequest {
+            stream: String::new(),
+            after_cursor: 0,
+        };
+        match client.updates().follow(probe).await {
+            Ok(resp) if !resp.stream.is_empty() => {
+                let resolved = resp.stream.clone();
+                *client.principal.write().await = resolved.clone();
+                mgr.resolve_principal(resolved.clone()).await;
+                client.follows.lock().await.insert(resolved.clone());
+                Ok(resolved)
+            }
+            Ok(_) => {
+                // Gateway without empty-stream resolution: principal must
+                // have been set via `sign_in` or `set_principal_user_id`.
+                // Fail closed rather than checkpointing under `unknown`.
+                Err(TinkleError::Subscription(
+                    "authenticated principal unknown; call set_principal_user_id after sign_in"
+                        .into(),
+                ))
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 

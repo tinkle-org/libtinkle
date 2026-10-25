@@ -4,7 +4,9 @@
 
 use futures_util::{SinkExt, StreamExt};
 use prost::Message;
+use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 
 use libtinkle::CursorStore;
@@ -22,12 +24,37 @@ use tinkle_schema::proto::{
 
 // -- Mock gateway ---------------------------------------------------------
 
-async fn mock_gateway(listener: TcpListener) {
+/// Shared mock state across connections of one mock gateway.
+#[derive(Debug, Default)]
+struct MockLogInner {
+    /// Every follow request seen, in order (including rejected ones).
+    follows: Mutex<Vec<(String, u64)>>,
+    /// Room streams rejected even from the origin (degraded-path tests).
+    fail_rooms: Mutex<HashSet<String>>,
+}
+
+type MockLog = Arc<MockLogInner>;
+
+fn rpc_error(id: u64, code: i32, message: &str) -> Frame {
+    Frame {
+        version: 1,
+        request_id: id,
+        body: Some(Body::Result(RpcResult {
+            outcome: Some(Outcome::Error(ProtoRpcError {
+                code,
+                message: message.into(),
+            })),
+        })),
+    }
+}
+
+async fn mock_gateway(listener: TcpListener, log: MockLog) {
     loop {
         let (stream, _) = match listener.accept().await {
             Ok(v) => v,
             Err(_) => return,
         };
+        let task_log = log.clone();
         tokio::spawn(async move {
             use tokio_tungstenite::tungstenite::handshake::server::ErrorResponse;
             use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
@@ -52,6 +79,11 @@ async fn mock_gateway(listener: TcpListener) {
                 Ok(w) => w,
                 Err(_) => return,
             };
+            let log = task_log.clone();
+            // Server rule mirrored here: at most one follow per stream per
+            // connection; room continuation with a nonzero cursor requires a
+            // scope proof the client cannot mint.
+            let mut followed: HashSet<String> = HashSet::new();
             let (mut write, mut read) = ws.split();
             let hello_msg = match read.next().await {
                 Some(Ok(m)) => m,
@@ -112,7 +144,7 @@ async fn mock_gateway(listener: TcpListener) {
                     Some(Body::Cancel(_)) => continue,
                     _ => continue,
                 };
-                let resp_frame = handle_mock_request(id, req).await;
+                let resp_frame = handle_mock_request(id, req, &mut followed, &log).await;
                 if resp_frame_needs_notif(&resp_frame) {
                     let obs = ObserveConnectivityResponse {
                         update: Some(ConnectivityChanged {
@@ -168,7 +200,12 @@ fn resp_frame_needs_notif(frame: &Frame) -> bool {
     false
 }
 
-async fn handle_mock_request(id: u64, req: RpcRequest) -> Frame {
+async fn handle_mock_request(
+    id: u64,
+    req: RpcRequest,
+    followed: &mut HashSet<String>,
+    log: &MockLog,
+) -> Frame {
     let result = match req.method.as_str() {
         "/example.Echo/Echo" => RpcResult {
             outcome: Some(Outcome::Payload(req.payload)),
@@ -227,6 +264,20 @@ async fn handle_mock_request(id: u64, req: RpcRequest) -> Frame {
             } else {
                 r.stream
             };
+            log.follows
+                .lock()
+                .unwrap()
+                .push((stream.clone(), r.after_cursor));
+            if followed.contains(&stream) {
+                return rpc_error(id, 6, "already following");
+            }
+            if stream.starts_with("room:") && r.after_cursor != 0 {
+                return rpc_error(id, 9, "room continuation requires scoped history proof");
+            }
+            if stream.starts_with("room:") && log.fail_rooms.lock().unwrap().contains(&stream) {
+                return rpc_error(id, 9, "room continuation requires scoped history proof");
+            }
+            followed.insert(stream.clone());
             let resp = FollowUpdatesResponse {
                 stream,
                 head: Some(r.after_cursor),
@@ -296,11 +347,16 @@ async fn handle_mock_request(id: u64, req: RpcRequest) -> Frame {
     }
 }
 
-async fn start_mock() -> SocketAddr {
+async fn start_mock_logged() -> (SocketAddr, MockLog) {
+    let log: MockLog = Arc::new(MockLogInner::default());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(mock_gateway(listener));
-    addr
+    tokio::spawn(mock_gateway(listener, log.clone()));
+    (addr, log)
+}
+
+async fn start_mock() -> SocketAddr {
+    start_mock_logged().await.0
 }
 
 fn test_client(addr: SocketAddr) -> libtinkle::Client {
@@ -309,6 +365,18 @@ fn test_client(addr: SocketAddr) -> libtinkle::Client {
         cfg,
         libtinkle::Credential::from_session_token("test-token"),
         libtinkle::InMemoryCursorStore::new(),
+    )
+}
+
+fn test_client_with_store(
+    addr: SocketAddr,
+    store: Arc<libtinkle::InMemoryCursorStore>,
+) -> libtinkle::Client {
+    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
+    libtinkle::Client::new(
+        cfg,
+        libtinkle::Credential::from_session_token("test-token"),
+        store,
     )
 }
 
@@ -483,7 +551,6 @@ async fn sync_pipeline_buffers_consecutive_updates_before_ack() {
 
 #[tokio::test]
 async fn acknowledge_without_connection_fails_closed() {
-    use std::sync::Arc;
     let store = libtinkle::InMemoryCursorStore::new();
     let cfg = libtinkle::ClientConfig::new("ws://127.0.0.1:1/syntra/v1/ws").insecure_dev();
     let c = libtinkle::Client::new(
@@ -496,4 +563,113 @@ async fn acknowledge_without_connection_fails_closed() {
         c.acknowledge("user:42", 1).await,
         Err(libtinkle::TinkleError::NotConnected(_))
     ));
+}
+
+// -- WS1: single-follow subscribe --------------------------------------------
+
+fn own_follows(log: &MockLog) -> Vec<(String, u64)> {
+    log.follows
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(s, _)| s == "user:42")
+        .cloned()
+        .collect()
+}
+
+#[tokio::test]
+async fn cold_subscribe_issues_single_own_follow() {
+    let (addr, log) = start_mock_logged().await;
+    let c = test_client(addr);
+    c.connect().await.unwrap();
+    // No set_principal_user_id: cold session resolves via probe-as-follow.
+    let resp = c.subscribe(vec![], vec![]).await.unwrap();
+    assert_eq!(resp.stream, "user:42");
+    assert_eq!(c.principal().await, "user:42");
+    let follows = own_follows(&log);
+    assert_eq!(
+        follows.len(),
+        1,
+        "exactly one own-stream follow per connection, got {follows:?}"
+    );
+    assert_eq!(follows[0], ("user:42".to_string(), 0));
+    c.close().await;
+}
+
+#[tokio::test]
+async fn resubscribe_on_same_connection_does_not_duplicate_follows() {
+    let (addr, log) = start_mock_logged().await;
+    let c = test_client(addr);
+    c.connect().await.unwrap();
+    c.subscribe(vec![], vec![]).await.unwrap();
+    c.subscribe(vec![], vec![]).await.unwrap();
+    assert_eq!(own_follows(&log).len(), 1);
+    c.close().await;
+}
+
+#[tokio::test]
+async fn room_scope_rejection_falls_back_to_origin_without_touching_checkpoint() {
+    let (addr, log) = start_mock_logged().await;
+    let store = libtinkle::InMemoryCursorStore::new();
+    store.save("user:42", "room:7", 30).await.unwrap();
+    let c = test_client_with_store(addr, store.clone());
+    c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
+    let resp = c.subscribe(vec![(7, 50)], vec![]).await.unwrap();
+    assert_eq!(resp.stream, "user:42");
+    let room: Vec<(String, u64)> = log
+        .follows
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(s, _)| s == "room:7")
+        .cloned()
+        .collect();
+    assert_eq!(
+        room,
+        vec![("room:7".to_string(), 50), ("room:7".to_string(), 0),],
+        "rejected resume attempt, then origin retry"
+    );
+    // The fallback must not erase the stored checkpoint.
+    assert_eq!(store.load("user:42", "room:7").await.unwrap(), Some(30));
+    c.close().await;
+}
+
+#[tokio::test]
+async fn persistently_rejected_room_degrades_without_losing_own_follow() {
+    let (addr, log) = start_mock_logged().await;
+    log.fail_rooms.lock().unwrap().insert("room:9".to_string());
+    let c = test_client(addr);
+    c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
+    let err = c.subscribe(vec![(9, 10)], vec![]).await.unwrap_err();
+    assert!(
+        err.to_string().contains('9'),
+        "degraded room must be named, got {err}"
+    );
+    assert_eq!(own_follows(&log).len(), 1);
+    // The scope clears: retry reconciles without duplicating the own follow.
+    log.fail_rooms.lock().unwrap().clear();
+    let resp = c.subscribe(vec![(9, 10)], vec![]).await.unwrap();
+    assert_eq!(resp.stream, "user:42");
+    assert_eq!(own_follows(&log).len(), 1);
+    let room: Vec<(String, u64)> = log
+        .follows
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(s, _)| s == "room:9")
+        .cloned()
+        .collect();
+    assert_eq!(
+        room,
+        vec![
+            ("room:9".to_string(), 10),
+            ("room:9".to_string(), 0),
+            // Retry: nonzero resume rejected again, origin fallback accepted.
+            ("room:9".to_string(), 10),
+            ("room:9".to_string(), 0),
+        ]
+    );
+    c.close().await;
 }

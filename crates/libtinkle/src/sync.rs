@@ -27,6 +27,12 @@ use tinkle_schema::{
 use crate::cursor::CursorStore;
 use crate::errors::TinkleError;
 
+/// Pre-authentication principal placeholder. Resolution from this value to
+/// the authenticated `user:<id>` preserves in-flight per-stream progress
+/// (see [`SyncManager::resolve_principal`]); any other principal change is
+/// an account switch and resets sync state.
+pub(crate) const UNKNOWN_PRINCIPAL: &str = "unknown";
+
 /// App-visible sync events.
 #[derive(Debug, Clone)]
 pub enum SyncEvent {
@@ -226,6 +232,39 @@ impl SyncManager {
         state.pending.clear();
         state.status.clear();
         state.heads.clear();
+    }
+
+    /// Resolve the pre-authentication placeholder to the authenticated
+    /// principal, preserving per-stream cursors, delivered progress, and
+    /// buffered live updates. Updates validated before resolution (e.g. the
+    /// retained suffix replaying on a probe-as-follow) stay valid and
+    /// acknowledgeable after hydration raises the applied cursor.
+    ///
+    /// Any transition from a concrete principal is an account switch and
+    /// keeps the hard-reset semantics of [`Self::set_principal`].
+    pub(crate) async fn resolve_principal(&self, principal: String) {
+        let from_known = {
+            let state = self.state.lock().await;
+            if state.principal == principal {
+                return;
+            }
+            state.principal != UNKNOWN_PRINCIPAL
+        };
+        if from_known {
+            self.set_principal(principal).await;
+            return;
+        }
+        let mut state = self.state.lock().await;
+        if state.principal == principal {
+            return;
+        }
+        if state.principal != UNKNOWN_PRINCIPAL {
+            drop(state);
+            self.set_principal(principal).await;
+            return;
+        }
+        state.principal = principal;
+        state.status.clear();
     }
 
     pub(crate) async fn handle_expired(&self, stream: &str, head: Option<u64>) {
@@ -816,6 +855,67 @@ mod tests {
                 tinkle_schema::proto::ContentOmitted {},
             )),
         }
+    }
+
+    #[tokio::test]
+    async fn resolve_placeholder_preserves_inflight_progress() {
+        // Probe-as-follow replays before the principal is known: progress
+        // must survive resolution and stay acknowledgeable afterwards.
+        let store = MemStore::new();
+        let mgr = SyncManager::new(UNKNOWN_PRINCIPAL, store.clone());
+        mgr.handle_update(omitted("user:42", 1)).await.unwrap();
+        mgr.handle_update(omitted("user:42", 2)).await.unwrap();
+        mgr.resolve_principal("user:42".to_string()).await;
+        // Pre-resolution backlog still queued, cursor intact.
+        assert_eq!(mgr.effective_cursor("user:42").await, 2);
+        for expected in 1..=2u64 {
+            let evt = mgr.next_event().await.unwrap();
+            assert!(
+                matches!(evt, SyncEvent::UpdateReady { cursor, .. } if cursor == expected),
+                "expected UpdateReady {expected}, got {evt:?}"
+            );
+        }
+        for expected in 1..=2u64 {
+            mgr.acknowledge("user:42", expected).await.unwrap();
+            let evt = mgr.next_event().await.unwrap();
+            assert!(
+                matches!(evt, SyncEvent::Applied { cursor, .. } if cursor == expected),
+                "expected Applied {expected}, got {evt:?}"
+            );
+        }
+        assert_eq!(store.load("user:42", "user:42").await.unwrap(), Some(2));
+    }
+
+    #[tokio::test]
+    async fn resolve_after_hydrate_dedupes_applied_prefix() {
+        // Cold start with a stored checkpoint: the retained suffix replays
+        // from origin, hydration raises applied, already-applied cursors
+        // classify stale while new ones stay acknowledgeable.
+        let store = MemStore::new();
+        store.save("user:42", "user:42", 1).await.unwrap();
+        let mgr = SyncManager::new(UNKNOWN_PRINCIPAL, store.clone());
+        mgr.handle_update(omitted("user:42", 1)).await.unwrap();
+        mgr.handle_update(omitted("user:42", 2)).await.unwrap();
+        mgr.resolve_principal("user:42".to_string()).await;
+        mgr.hydrate_from_store(&["user:42".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(mgr.effective_cursor("user:42").await, 2);
+        // Cursor 1 was already applied: ack is a harmless no-op...
+        mgr.acknowledge("user:42", 1).await.unwrap();
+        // ...while cursor 2 commits.
+        mgr.acknowledge("user:42", 2).await.unwrap();
+        assert_eq!(store.load("user:42", "user:42").await.unwrap(), Some(2));
+    }
+
+    #[tokio::test]
+    async fn set_principal_resets_on_account_switch() {
+        let store = MemStore::new();
+        let mgr = SyncManager::new("user:1", store);
+        mgr.handle_update(omitted("user:1", 1)).await.unwrap();
+        mgr.set_principal("user:2".to_string()).await;
+        assert_eq!(mgr.effective_cursor("user:1").await, 0);
+        assert_eq!(mgr.effective_cursor("user:2").await, 0);
     }
 
     #[tokio::test]
