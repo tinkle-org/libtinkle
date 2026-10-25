@@ -15,16 +15,17 @@
 //! The SDK serializes the public request protobuf, constructs the Syntra
 //! `RpcRequest`, allocates a nonzero `request_id`, sends through the
 //! active connection, awaits the matching `RpcResult`, decodes the typed
-//! response, and returns typed errors. Catch-up uses actual gRPC
-//! `ReadUpdates`; ongoing delivery uses Syntra `FollowUpdates` /
-//! `ObserveConnectivity` notifications. Never auto-retries unsafe
+//! response, and returns typed errors. Catch-up uses `ReadUpdates` over
+//! the same Syntra connection by default (dedicated gRPC is opt-in);
+//! ongoing delivery uses Syntra `FollowUpdates` / `ObserveConnectivity`
+//! notifications. Never auto-retries unsafe
 //! mutations without an application idempotency policy.
 
-use std::collections::{HashMap, HashSet};
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-
-use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot, RwLock};
 use zeroize::Zeroizing;
 
@@ -55,7 +56,13 @@ struct SupState {
     handle: Option<tokio::task::JoinHandle<()>>,
     shutdown: Option<oneshot::Sender<()>>,
     epoch: u64,
+    // Supervisor-only: the monitor task cannot spawn on wasm32 (its future
+    // captures the connection handle, which is !Send on the browser
+    // executor). Autonomous supervision arrives with the spawn_local
+    // adaptation; manual connect/subscribe/recover work on wasm today.
+    #[cfg(not(target_arch = "wasm32"))]
     last_result: Option<SubscribeResult>,
+    #[cfg(not(target_arch = "wasm32"))]
     last_reestablish: Option<std::time::Instant>,
 }
 
@@ -310,6 +317,8 @@ impl Client {
     }
 
     /// gRPC catch-up for one stream. Requires `grpc_endpoint` in config.
+    /// Opt-in (`RecoveryTransport::Grpc`); the default recovery path is
+    /// [`Self::read_updates_syntra`].
     pub(crate) async fn read_updates_grpc(
         &self,
         req: tinkle_schema::proto::ReadUpdatesRequest,
@@ -318,6 +327,25 @@ impl Client {
         // Zeroized on drop; never logged, never placed in URLs.
         let token: Zeroizing<Vec<u8>> = Zeroizing::new(self.credential.expose_secret().to_vec());
         crate::grpc::read_updates_grpc(&endpoint, token.as_slice(), req, 30_000).await
+    }
+
+    /// Bounded replay over the existing WebSocket: `ReadUpdates` as a Syntra
+    /// RPC on the live connection. The default recovery transport — no
+    /// second connection to configure. Pages re-enter the same
+    /// validation/application pipeline as live follows.
+    pub(crate) async fn read_updates_syntra(
+        &self,
+        req: tinkle_schema::proto::ReadUpdatesRequest,
+    ) -> Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> {
+        use prost::Message as _;
+        let mut buf = Vec::with_capacity(req.encoded_len());
+        req.encode(&mut buf)
+            .map_err(|e| TinkleError::Codec(format!("encode ReadUpdates: {e}")))?;
+        let out = self
+            .call_raw(tinkle_schema::sync::READ_METHOD, buf, 30_000)
+            .await?;
+        tinkle_schema::proto::ReadUpdatesResponse::decode(&*out)
+            .map_err(|e| TinkleError::Codec(format!("decode ReadUpdates: {e}")))
     }
 
     /// Fetch the configured gRPC endpoint, failing fast with
@@ -363,17 +391,32 @@ impl Client {
         let mut pages = 0u32;
         let mut no_progress_pages = 0u32;
         let result: Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> = async {
-            let endpoint = self.validated_grpc_endpoint()?;
-            // Zeroized on drop; never logged, never placed in URLs.
-            let token: Zeroizing<Vec<u8>> =
-                Zeroizing::new(self.credential.expose_secret().to_vec());
-            // Fail fast on malformed credentials before opening the
-            // connection, not after the 10s connect timeout.
-            let _ = crate::grpc::bearer(token.as_slice())?;
-            // One TCP/TLS/H2 connection per recovery run, shared by all
-            // pages — not one handshake per page.
+            // Page source: Syntra RPC over the live connection by default;
+            // one shared gRPC channel per recovery run when opted in.
+            let use_grpc = self.config.recovery == crate::config::RecoveryTransport::Grpc;
             #[cfg(not(target_arch = "wasm32"))]
-            let channel = crate::grpc::connect_channel(&endpoint, 30_000).await?;
+            let grpc_conn: Option<(
+                tonic::transport::Channel,
+                Zeroizing<Vec<u8>>,
+            )> = if use_grpc {
+                let endpoint = self.validated_grpc_endpoint()?;
+                // Zeroized on drop; never logged, never placed in URLs.
+                let token: Zeroizing<Vec<u8>> =
+                    Zeroizing::new(self.credential.expose_secret().to_vec());
+                // Fail fast on malformed credentials before opening the
+                // connection, not after the 10s connect timeout.
+                let _ = crate::grpc::bearer(token.as_slice())?;
+                let channel = crate::grpc::connect_channel(&endpoint, 30_000).await?;
+                Some((channel, token))
+            } else {
+                None
+            };
+            #[cfg(target_arch = "wasm32")]
+            if use_grpc {
+                return Err(TinkleError::GrpcConfig(
+                    "gRPC recovery unavailable on wasm; use Syntra transport".into(),
+                ));
+            }
             loop {
                 if pages >= 20 {
                     break;
@@ -386,15 +429,32 @@ impl Client {
                 };
                 let mut attempt = 0u32;
                     let resp = loop {
-                        #[cfg(not(target_arch = "wasm32"))]
-                        let page = crate::grpc::read_updates_on_channel(
-                            &channel,
-                            token.as_slice(),
-                            req.clone(),
-                        )
-                        .await;
-                        #[cfg(target_arch = "wasm32")]
-                        let page = self.read_updates_grpc(req.clone()).await;
+                        let page = match self.config.recovery {
+                            crate::config::RecoveryTransport::Syntra => {
+                                self.read_updates_syntra(req.clone()).await
+                            }
+                            crate::config::RecoveryTransport::Grpc => {
+                                #[cfg(not(target_arch = "wasm32"))]
+                                {
+                                    let (channel, token) = grpc_conn
+                                        .as_ref()
+                                        .expect("grpc connection established above");
+                                    crate::grpc::read_updates_on_channel(
+                                        channel,
+                                        token.as_slice(),
+                                        req.clone(),
+                                    )
+                                    .await
+                                }
+                                #[cfg(target_arch = "wasm32")]
+                                {
+                                    Err(TinkleError::GrpcConfig(
+                                        "gRPC recovery unavailable on wasm; use Syntra transport"
+                                            .into(),
+                                    ))
+                                }
+                            }
+                        };
                         match page {
                             Ok(r) => break r,
                             Err(e) => match e.recovery_decision() {
@@ -529,9 +589,9 @@ impl Client {
         let mgr = self.live_mgr().await?;
         // Exactly-once own-stream follow per connection: when the principal
         // is unknown the probe doubles as the follow (see
-        // `ProbeFollowResolver`); otherwise the explicit follow below is the
+        // `resolve_own_stream`); otherwise the explicit follow below is the
         // only one.
-        ProbeFollowResolver.resolve(self).await?;
+        self.resolve_own_stream().await?;
         let principal = self.principal().await;
         let own_stream = if principal.starts_with("user:") {
             principal.clone()
@@ -788,6 +848,10 @@ impl Client {
     /// the initial establishment result. Call `stop()` (or `close()`) to
     /// shut down; `connect`/`subscribe`/`reconnect` remain as documented
     /// low-level primitives for manual control.
+    ///
+    /// Unavailable on wasm32: the monitor task cannot spawn on the browser
+    /// executor yet (see libtinkle-web). Use manual connect/subscribe there.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn start(
         &self,
         rooms: Vec<(i64, u64)>,
@@ -832,8 +896,29 @@ impl Client {
         }
     }
 
+    /// wasm32 stub: the supervisor monitor cannot spawn on the browser
+    /// executor yet (its future captures the `!Send` connection handle).
+    /// Manual `connect`/`subscribe`/`recover_stream` work on wasm; the
+    /// autonomous supervisor arrives with the spawn_local adaptation.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn start(
+        &self,
+        _rooms: Vec<(i64, u64)>,
+        _watch_user_ids: Vec<i64>,
+    ) -> Result<SubscribeResult, TinkleError> {
+        // Hold the single-flight lock so a future native implementation
+        // keeps the same mutual-exclusion shape.
+        let _guard = self.start_lock.lock().await;
+        Err(TinkleError::NotConnected(
+            "supervised lifecycle unavailable on wasm; use connect/subscribe".into(),
+        ))
+    }
+
     /// Connect (if needed) and subscribe. Signals are wired by `connect()`
-    /// from `signal_tx`, so supervised and manual paths share this.
+    /// from `signal_tx`, plus here for managers created by an earlier
+    /// manual `connect()`, so supervised and manual paths share this.
+    /// Supervisor-only (see `start`).
+    #[cfg(not(target_arch = "wasm32"))]
     async fn establish(
         &self,
         rooms: Vec<(i64, u64)>,
@@ -842,12 +927,16 @@ impl Client {
         if !self.is_connected().await {
             self.connect().await?;
         }
+        if let Some(tx) = self.signal_tx.lock().await.clone() {
+            self.live_mgr().await?.set_signal_tx(tx).await;
+        }
         self.subscribe(rooms, watch_user_ids).await
     }
 
     /// Supervisor monitor: exactly one per client. Reacts to pump death
     /// and recovery hints; the interval tick is a backstop for missed
     /// hints. Returns only on shutdown.
+    #[cfg(not(target_arch = "wasm32"))]
     async fn supervise(
         self,
         mut sig_rx: mpsc::Receiver<RecoverySignal>,
@@ -892,6 +981,8 @@ impl Client {
 
     /// Reconnect + resubscribe from persisted interests, with a cooldown so
     /// overlapping triggers do not pile up (reconnect backs off internally).
+    /// Supervisor-only (see `start`).
+    #[cfg(not(target_arch = "wasm32"))]
     async fn reestablish(&self) {
         {
             let mut sup = self.sup_state.lock().await;
@@ -915,6 +1006,8 @@ impl Client {
     /// Bounded recovery for one stream from its durable applied cursor.
     /// Success clears the degraded record; anything else leaves stream
     /// state (Gap/RebuildRequired events already emitted) for the host.
+    /// Supervisor-only (see `start`).
+    #[cfg(not(target_arch = "wasm32"))]
     async fn recover_one(
         &self,
         stream: &str,
@@ -997,38 +1090,31 @@ impl Client {
 }
 
 /// Resolves the authenticated principal without creating a duplicate
-/// subscription. Swap point for a future dedicated identity RPC: replace
-/// the strategy, keep the exactly-once-follow contract.
-#[async_trait]
-trait PrincipalResolver: Send + Sync {
-    async fn resolve(&self, client: &Client) -> Result<String, TinkleError>;
-}
-
-/// Probe strategy: the empty-stream follow request doubles as the
-/// own-stream follow. The gateway resolves the caller's stream from
-/// authentication and echoes the concrete `user:<id>`; that follow stays
-/// active, so no second own-stream follow is ever issued on the connection.
+/// subscription: the empty-stream follow request doubles as the own-stream
+/// follow. The gateway resolves the caller's stream from authentication
+/// and echoes the concrete `user:<id>`; that follow stays active, so no
+/// second own-stream follow is ever issued on the connection.
 /// `SyncManager::resolve_principal` preserves the retained suffix that may
 /// already be replaying through the pump.
-struct ProbeFollowResolver;
-
-#[async_trait]
-impl PrincipalResolver for ProbeFollowResolver {
-    async fn resolve(&self, client: &Client) -> Result<String, TinkleError> {
-        if client.principal().await != UNKNOWN_PRINCIPAL {
-            return Ok(client.principal().await);
+///
+/// Swap point for a future dedicated identity RPC: replace this probe with
+/// the unary call, keep the exactly-once-follow contract.
+impl Client {
+    async fn resolve_own_stream(&self) -> Result<String, TinkleError> {
+        if self.principal().await != UNKNOWN_PRINCIPAL {
+            return Ok(self.principal().await);
         }
-        let mgr = client.live_mgr().await?;
+        let mgr = self.live_mgr().await?;
         let probe = tinkle_schema::proto::FollowUpdatesRequest {
             stream: String::new(),
             after_cursor: 0,
         };
-        match client.updates().follow(probe).await {
+        match self.updates().follow(probe).await {
             Ok(resp) if !resp.stream.is_empty() => {
                 let resolved = resp.stream.clone();
-                *client.principal.write().await = resolved.clone();
+                *self.principal.write().await = resolved.clone();
                 mgr.resolve_principal(resolved.clone()).await;
-                client.follows.lock().await.insert(resolved.clone());
+                self.follows.lock().await.insert(resolved.clone());
                 Ok(resolved)
             }
             Ok(_) => {

@@ -82,8 +82,10 @@ impl TinkleError {
     }
 
     /// Classify a recovery-page failure. Transport-level `Grpc` failures
-    /// (connect/read framing, no status) are transient by construction;
-    /// everything else keys on the typed status code.
+    /// (connect/read framing, no status) are transient by construction.
+    /// Syntra RPC failures key on their code the same way: replay reads
+    /// are idempotent, so unknown-outcome and transient codes retry.
+    /// Everything else keys on the typed status code.
     pub fn recovery_decision(&self) -> RecoveryDecision {
         match self {
             Self::GrpcStatus { code, .. } => match code {
@@ -91,6 +93,20 @@ impl TinkleError {
                 | ErrorCode::DeadlineExceeded
                 | ErrorCode::Aborted
                 | ErrorCode::ResourceExhausted
+                | ErrorCode::Internal
+                | ErrorCode::Unknown
+                | ErrorCode::DataLoss => RecoveryDecision::Retry,
+                ErrorCode::OutOfRange => RecoveryDecision::Rebuild,
+                ErrorCode::Unauthenticated | ErrorCode::PermissionDenied => RecoveryDecision::Auth,
+                _ => RecoveryDecision::Fail,
+            },
+            // Replay reads are idempotent: unknown-outcome and transient
+            // transport failures retry; auth failures do not.
+            Self::Syntra(e) => match e.code() {
+                ErrorCode::Unavailable
+                | ErrorCode::DeadlineExceeded
+                | ErrorCode::ResourceExhausted
+                | ErrorCode::Aborted
                 | ErrorCode::Internal
                 | ErrorCode::Unknown
                 | ErrorCode::DataLoss => RecoveryDecision::Retry,

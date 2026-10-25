@@ -16,11 +16,12 @@ use syntra_core::proto::{
     RpcResult,
 };
 use syntra_core::{decode_frame, encode_frame, ConnectionState, ValidationContext};
+use tinkle_schema::proto::follow_updates_response::Result as FollowResult;
 use tinkle_schema::proto::{
     peer_input::Target as PeerTarget, update::Payload as UpdatePayload, ConnectivityChanged,
     ContentOmitted, FollowUpdatesRequest, FollowUpdatesResponse, Message as TinkleMessage,
-    ObserveConnectivityRequest, ObserveConnectivityResponse, PeerInput, SendMessageRequest,
-    SendMessageResponse, Update,
+    ObserveConnectivityRequest, ObserveConnectivityResponse, PeerInput, ReadUpdatesRequest,
+    ReadUpdatesResponse, SendMessageRequest, SendMessageResponse, Update,
 };
 
 // -- Mock gateway ---------------------------------------------------------
@@ -32,6 +33,8 @@ struct MockLogInner {
     follows: Mutex<Vec<(String, u64)>>,
     /// Room streams rejected even from the origin (degraded-path tests).
     fail_rooms: Mutex<HashSet<String>>,
+    /// `ReadUpdates` pages served, in order (recovery-path tests).
+    reads: Mutex<Vec<(String, u64, i32)>>,
     /// Kill switches for live connections (pump-death tests).
     kill: Mutex<Vec<oneshot::Sender<()>>>,
 }
@@ -152,6 +155,7 @@ async fn mock_gateway(listener: TcpListener, log: MockLog) {
                     Some(Body::Cancel(_)) => continue,
                     _ => continue,
                 };
+                let wants_gap_notif = is_room7_follow(&req);
                 let resp_frame = handle_mock_request(id, req, &mut followed, &log).await;
                 if resp_frame_needs_notif(&resp_frame) {
                     let obs = ObserveConnectivityResponse {
@@ -177,6 +181,7 @@ async fn mock_gateway(listener: TcpListener, log: MockLog) {
                 if is_slow(&resp_frame) {
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 }
+                let room7_follow = wants_gap_notif && is_ok_result(&resp_frame);
                 let out = encode_frame(&resp_frame, ValidationContext::active(1)).unwrap();
                 if write
                     .send(tokio_tungstenite::tungstenite::Message::Binary(out.into()))
@@ -184,6 +189,12 @@ async fn mock_gateway(listener: TcpListener, log: MockLog) {
                     .is_err()
                 {
                     break;
+                }
+                if room7_follow {
+                    let nbuf = room7_gap_notification();
+                    let _ = write
+                        .send(tokio_tungstenite::tungstenite::Message::Binary(nbuf.into()))
+                        .await;
                 }
             }
         });
@@ -341,6 +352,48 @@ async fn handle_mock_request(
                 outcome: Some(Outcome::Payload(b)),
             }
         }
+        "/tinkle.v1.UpdatesService/ReadUpdates" => {
+            let r = ReadUpdatesRequest::decode(&*req.payload).unwrap_or(ReadUpdatesRequest {
+                stream: String::new(),
+                after_cursor: 0,
+                limit: 0,
+            });
+            log.reads
+                .lock()
+                .unwrap()
+                .push((r.stream.clone(), r.after_cursor, r.limit));
+            // Canned retained history: room:7 holds cursors 1..=5.
+            let (updates, head) = if r.stream == "room:7" {
+                let take = (r.limit.max(0) as u64).min(100);
+                let mut updates = Vec::new();
+                let mut c = r.after_cursor.saturating_add(1);
+                while c <= 5 && (updates.len() as u64) < take {
+                    updates.push(Update {
+                        event_id: String::new(),
+                        stream: "room:7".into(),
+                        cursor: c,
+                        occurred_at: None,
+                        source_seq: None,
+                        source_revision: None,
+                        payload: Some(UpdatePayload::ContentOmitted(ContentOmitted {})),
+                    });
+                    c = c.saturating_add(1);
+                }
+                (updates, 5)
+            } else {
+                (Vec::new(), r.after_cursor)
+            };
+            let resp = ReadUpdatesResponse {
+                updates,
+                replay_floor: 0,
+                head,
+            };
+            let mut b = Vec::new();
+            resp.encode(&mut b).unwrap();
+            RpcResult {
+                outcome: Some(Outcome::Payload(b)),
+            }
+        }
         _ => RpcResult {
             outcome: Some(Outcome::Error(ProtoRpcError {
                 code: 12,
@@ -353,6 +406,51 @@ async fn handle_mock_request(
         request_id: id,
         body: Some(Body::Result(result)),
     }
+}
+
+/// True when the request is a `FollowUpdates` for `room:7`.
+fn is_room7_follow(req: &RpcRequest) -> bool {
+    if req.method != "/tinkle.v1.UpdatesService/FollowUpdates" {
+        return false;
+    }
+    FollowUpdatesRequest::decode(&*req.payload)
+        .map(|r| r.stream == "room:7")
+        .unwrap_or(false)
+}
+
+/// True when the frame is a successful RPC result (not an error).
+fn is_ok_result(frame: &Frame) -> bool {
+    matches!(
+        &frame.body,
+        Some(Body::Result(r)) if matches!(&r.outcome, Some(Outcome::Payload(_)))
+    )
+}
+
+/// Live gap notification: cursor 5 on `room:7` with nothing applied.
+/// Exercises supervisor gap detection + Syntra recovery end to end.
+fn room7_gap_notification() -> Vec<u8> {
+    let update = Update {
+        event_id: String::new(),
+        stream: "room:7".into(),
+        cursor: 5,
+        occurred_at: None,
+        source_seq: None,
+        source_revision: None,
+        payload: Some(UpdatePayload::ContentOmitted(ContentOmitted {})),
+    };
+    let resp = FollowUpdatesResponse {
+        stream: "room:7".into(),
+        head: Some(5),
+        result: Some(FollowResult::Update(update)),
+    };
+    let mut pbuf = Vec::new();
+    resp.encode(&mut pbuf).unwrap();
+    let nf = Frame {
+        version: 1,
+        request_id: 0,
+        body: Some(Body::Notification(Notification { payload: pbuf })),
+    };
+    encode_frame(&nf, ValidationContext::active(1)).unwrap()
 }
 
 async fn start_mock_logged() -> (SocketAddr, MockLog) {
@@ -761,4 +859,74 @@ async fn current_cursor_reflects_session() {
     assert_eq!(c.current_cursor("user:42").await, Some(0));
     c.stop().await;
     assert_eq!(c.current_cursor("user:42").await, None);
+}
+
+// -- WS6: Syntra recovery transport -------------------------------------------
+
+#[tokio::test]
+async fn supervisor_recovers_gap_over_syntra_by_default() {
+    let (addr, log) = start_mock_logged().await;
+    // No grpc_endpoint: recovery must use the Syntra default transport.
+    let c = test_client(addr);
+    c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
+    c.start(vec![(7, 0)], vec![]).await.unwrap();
+
+    // The mock pushes live cursor 5 on room:7 with nothing applied: Gap.
+    // The supervisor recovers via Syntra ReadUpdates; the host only
+    // consumes events and acknowledges.
+    let mut seen_gap = false;
+    let mut applied = 0u64;
+    for _ in 0..60 {
+        let evt = tokio::time::timeout(std::time::Duration::from_secs(10), c.next_event()).await;
+        match evt {
+            Ok(Some(libtinkle::SyncEvent::Gap { stream, .. })) if stream == "room:7" => {
+                seen_gap = true;
+            }
+            Ok(Some(libtinkle::SyncEvent::UpdateReady { stream, cursor, .. }))
+                if stream == "room:7" =>
+            {
+                c.acknowledge(&stream, cursor).await.unwrap();
+                applied = applied.max(cursor);
+                if applied >= 5 {
+                    break;
+                }
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    assert!(seen_gap, "gap must surface before recovery");
+    assert_eq!(applied, 5, "retained suffix must replay through recovery");
+    // Recovery went through Syntra RPC pages from the durable cursor.
+    let reads = log.reads.lock().unwrap().clone();
+    assert!(!reads.is_empty(), "expected ReadUpdates pages, got none");
+    assert!(reads.iter().all(|(s, _, _)| s == "room:7"));
+    assert_eq!(reads[0].1, 0, "first page resumes from the durable cursor");
+    c.stop().await;
+}
+
+#[tokio::test]
+async fn updates_read_updates_uses_syntra_rpc() {
+    let (addr, log) = start_mock_logged().await;
+    let c = test_client(addr);
+    c.connect().await.unwrap();
+    let resp = c
+        .updates()
+        .read_updates(tinkle_schema::proto::ReadUpdatesRequest {
+            stream: "room:7".into(),
+            after_cursor: 2,
+            limit: 10,
+        })
+        .await
+        .unwrap();
+    assert_eq!(resp.head, 5);
+    assert_eq!(resp.replay_floor, 0);
+    let cursors: Vec<u64> = resp.updates.iter().map(|u| u.cursor).collect();
+    assert_eq!(cursors, vec![3, 4, 5]);
+    assert_eq!(
+        *log.reads.lock().unwrap(),
+        vec![("room:7".to_string(), 2, 10)]
+    );
+    c.close().await;
 }

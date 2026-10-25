@@ -167,8 +167,19 @@ impl<'a> Updates<'a> {
         Self { client }
     }
 
-    /// Bounded replay over actual gRPC (`ReadUpdates`).
+    /// Bounded replay over the live connection (`ReadUpdates` as a Syntra
+    /// RPC). The default recovery transport; pages re-enter the same
+    /// pipeline as live follows.
     pub async fn read_updates(
+        &self,
+        req: tinkle_schema::proto::ReadUpdatesRequest,
+    ) -> Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> {
+        self.client.read_updates_syntra(req).await
+    }
+
+    /// Bounded replay over a dedicated gRPC channel. Opt-in
+    /// (`RecoveryTransport::Grpc`); requires `grpc_endpoint` in config.
+    pub async fn read_updates_grpc(
         &self,
         req: tinkle_schema::proto::ReadUpdatesRequest,
     ) -> Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> {

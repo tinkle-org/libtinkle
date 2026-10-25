@@ -30,7 +30,7 @@ pub(crate) mod sqlite_store;
 pub(crate) mod sync;
 
 pub use client::{Client, SubscribeResult};
-pub use config::{ClientConfig, Credential, ReconnectPolicy};
+pub use config::{ClientConfig, Credential, ReconnectPolicy, RecoveryTransport};
 pub use cursor::{CursorStore, InMemoryCursorStore};
 pub use errors::{RecoveryDecision, TinkleError};
 pub use services::{Auth, Messages, Updates};

@@ -43,6 +43,10 @@ const EVENT_CHANNEL_CAPACITY: usize = 1024;
 /// Internal recovery signal from the sync pipeline to the connection
 /// supervisor. Hints only: stream states persist in the manager, and the
 /// supervisor watchdog covers lost signals. Never blocks the pump.
+///
+/// On wasm32 the supervisor does not run yet (see `Client::start`); signals
+/// are emitted but unread until the spawn_local adaptation lands.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 #[derive(Debug, Clone)]
 pub(crate) enum RecoverySignal {
     /// Notification pump exited; the transport is presumed dead.
@@ -209,6 +213,8 @@ impl SyncManager {
 
     /// Durable applied cursor for `stream` (persisted checkpoint, not
     /// volatile delivered progress). Recovery resumes from here.
+    /// Supervisor-only; unread on wasm32 until the supervisor lands there.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) async fn applied_cursor(&self, stream: &str) -> u64 {
         self.state.lock().await.cursors.get(stream)
     }
