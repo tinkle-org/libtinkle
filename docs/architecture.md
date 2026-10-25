@@ -8,9 +8,9 @@ Tinkle application          methods, payload schemas, auth policy,
                             subscription interests, cursors, E2EE (yours)
        ↓
 libtinkle client            typed dispatch, subscriptions, reconnect,
-                            backoff, cursor persistence (this SDK)
+                            backoff, cursor persistence, gRPC catch-up (this SDK)
        ↓
-tinkle-schema                  prost bindings + realtime batch/cursor
+tinkle-schema                  prost + tonic bindings + sync validation
                             validation (no transport)
        ↓
 Syntra RPC / Events         correlation, deadlines, cancel, notifications
@@ -37,15 +37,16 @@ Network                     tokio-tungstenite + rustls (native) /
   message = one `Frame`, no length prefix, binary only, `syntra.v1`
   subprotocol, `/syntra/v1/ws` path, Ping/Pong liveness, close-code
   mapping, TLS 1.3 verification (native) / `ws_stream_wasm` (browser).
-- `tinkle-schema`: `tinkle.v1` prost types, 169 canonical method identifiers
-  (`/tinkle.v1.<Service>/<Method>`), `RealtimeNotification`
-  single-decoder validation, complete-batch grammar, `(stream, cursor)`
-  dedup, gap/stale/reset rules, `position_order`, floor/head checks.
+- `tinkle-schema`: `tinkle.v1` prost + tonic types, 172 canonical method identifiers
+  (`/tinkle.v1.<Service>/<Method>`), `Update` single-decoder validation,
+  `(stream, cursor)` dedup, gap/stale/rebuild rules, `position_order`, floor/head checks.
+  `UpdatesService`: `ReadUpdates` (gRPC catch-up), `FollowUpdates` and
+  `ObserveConnectivity` (Syntra follow binding).
 - `libtinkle`: `Client` (connect/call/subscribe/reconnect/suspend),
   `Credential` (redacted + zeroized), `CursorStore` injection,
-  backoff policy, typed facades (`messages()`, `auth()` + crate-internal
-  realtime dispatch). This is the ONLY public Rust API; internal modules
-  are `pub(crate)`, `SubscriptionManager` never leaves the crate.
+  backoff policy, typed facades (`messages()`, `auth()`, `updates()`).
+  This is the ONLY public Rust API; internal modules
+  are `pub(crate)`, `SyncManager` never leaves the crate.
 - `tinkle-ffi` (public FFI): UniFFI `TinkleClient` object + `FfiError` +
   `FfiCursorStore` foreign trait over a shared process-wide Tokio runtime.
   Swift/Kotlin implement storage natively; no Syntra type crosses FFI.
@@ -85,7 +86,7 @@ host. Receive: WS binary → `Frame` → validate → `result` completes the
 pending RPC by id (notifications interleave without completing) →
 prost-decode typed response or map `RpcError{code,message}`.
 
-Realtime: `SubscribeBatched` confirms interests (not replay) →
-`Notification{payload=RealtimeNotification}` → validate complete batch →
-atomically commit effects + `final_cursor` → persist via `CursorStore`.
-Presence is ephemeral; reset head is diagnostic only.
+Sync: `FollowUpdates` confirms interests (not replay) →
+`Notification{payload=FollowUpdatesResponse}` → validate single `Update` →
+apply data, then `acknowledge(stream, cursor)` persists via `CursorStore`.
+Connectivity is ephemeral; rebuild head is diagnostic only.

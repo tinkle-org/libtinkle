@@ -1,26 +1,23 @@
 //! Live-gateway integration: handshake, concurrent RPCs, cancellation,
-//! notification interleaving, reconnect, cursor recovery, errors,
-//! malformed frames. Spins an in-process Syntra WSS-equivalent (WS
-//! plaintext on loopback, restricted-development only) mock gateway.
+//! notification interleaving, reconnect, sync recovery. Spins an in-process
+//! Syntra WSS-equivalent mock gateway.
 
 use futures_util::{SinkExt, StreamExt};
 use prost::Message;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 
+use libtinkle::CursorStore;
 use syntra_core::proto::{
     frame::Body, rpc_result::Outcome, Frame, Notification, RpcError as ProtoRpcError, RpcRequest,
     RpcResult,
 };
-// Upstream codec helpers: syntra-core types are prost 0.13 internally,
-// workspace Tinkle types are prost 0.14. Boundary stays opaque Vec<u8>.
 use syntra_core::{decode_frame, encode_frame, ConnectionState, ValidationContext};
 use tinkle_schema::proto::{
-    peer_input::Target as PeerTarget, realtime_event::Kind as EK,
-    realtime_notification::Kind as NK, Message as TinkleMessage, PeerInput, RealtimeBatch,
-    RealtimeChatPosition, RealtimeEvent, RealtimeEventType, RealtimeMessageSnapshot,
-    RealtimeNotification, SendMessageRequest, SendMessageResponse, SubscribeRequest,
-    SubscribeResponse,
+    peer_input::Target as PeerTarget, update::Payload as UpdatePayload, ConnectivityChanged,
+    ContentOmitted, FollowUpdatesRequest, FollowUpdatesResponse, Message as TinkleMessage,
+    ObserveConnectivityRequest, ObserveConnectivityResponse, PeerInput, SendMessageRequest,
+    SendMessageResponse, Update,
 };
 
 // -- Mock gateway ---------------------------------------------------------
@@ -29,15 +26,13 @@ async fn mock_gateway(listener: TcpListener) {
     loop {
         let (stream, _) = match listener.accept().await {
             Ok(v) => v,
-            Err(_) => break,
+            Err(_) => return,
         };
         tokio::spawn(async move {
             use tokio_tungstenite::tungstenite::handshake::server::ErrorResponse;
             use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
-            // Large Err is tungstenite's handshake API shape, not our design.
             #[allow(clippy::result_large_err)]
             let callback = |req: &Request, mut resp: Response| -> Result<Response, ErrorResponse> {
-                // Select syntra.v1 when offered (WS §1C).
                 let offered = req
                     .headers()
                     .get("sec-websocket-protocol")
@@ -58,7 +53,6 @@ async fn mock_gateway(listener: TcpListener) {
                 Err(_) => return,
             };
             let (mut write, mut read) = ws.split();
-            // 1. hello -> ready.
             let hello_msg = match read.next().await {
                 Some(Ok(m)) => m,
                 _ => return,
@@ -94,7 +88,6 @@ async fn mock_gateway(listener: TcpListener) {
             {
                 return;
             }
-            // 2. RPC loop.
             while let Some(msg) = read.next().await {
                 let msg = match msg {
                     Ok(m) => m,
@@ -116,24 +109,21 @@ async fn mock_gateway(listener: TcpListener) {
                 };
                 let (id, req) = match frame.body {
                     Some(Body::Request(r)) => (frame.request_id, r),
-                    Some(Body::Cancel(_)) => continue, // advisory; original still completes
+                    Some(Body::Cancel(_)) => continue,
                     _ => continue,
                 };
                 let resp_frame = handle_mock_request(id, req).await;
-                // Notification-interleaving case: send a valid presence
-                // notification BEFORE the terminal result.
                 if resp_frame_needs_notif(&resp_frame) {
-                    let presence = tinkle_schema::proto::RealtimeOnline {
-                        user_id: 42,
-                        online: true,
-                        known: true,
-                        revision: None,
-                    };
-                    let notif = RealtimeNotification {
-                        kind: Some(NK::Presence(presence)),
+                    let obs = ObserveConnectivityResponse {
+                        update: Some(ConnectivityChanged {
+                            user_id: 42,
+                            online: true,
+                            known: true,
+                            revision: 1,
+                        }),
                     };
                     let mut pbuf = Vec::new();
-                    notif.encode(&mut pbuf).unwrap();
+                    obs.encode(&mut pbuf).unwrap();
                     let nf = Frame {
                         version: 1,
                         request_id: 0,
@@ -144,8 +134,6 @@ async fn mock_gateway(listener: TcpListener) {
                         .send(tokio_tungstenite::tungstenite::Message::Binary(nbuf.into()))
                         .await;
                 }
-                // Out-of-order case: slow methods sleep server-side so a
-                // fast second RPC completes first (client must correlate).
                 if is_slow(&resp_frame) {
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 }
@@ -229,16 +217,36 @@ async fn handle_mock_request(id: u64, req: RpcRequest) -> Frame {
                 outcome: Some(Outcome::Payload(b)),
             }
         }
-        "/tinkle.v1.Realtime/SubscribeBatched" => {
-            let r = SubscribeRequest::decode(&*req.payload).unwrap_or(SubscribeRequest {
-                own_cursor: None,
-                rooms: vec![],
-                watch_user_ids: vec![],
+        "/tinkle.v1.UpdatesService/FollowUpdates" => {
+            let r = FollowUpdatesRequest::decode(&*req.payload).unwrap_or(FollowUpdatesRequest {
+                stream: String::new(),
+                after_cursor: 0,
             });
-            let resp = SubscribeResponse {
-                stream: "user:42".into(),
-                after_cursor: r.own_cursor.unwrap_or(0),
-                head: None,
+            let stream = if r.stream.is_empty() {
+                "user:42".to_string()
+            } else {
+                r.stream
+            };
+            let resp = FollowUpdatesResponse {
+                stream,
+                head: Some(r.after_cursor),
+                result: None,
+            };
+            let mut b = Vec::new();
+            resp.encode(&mut b).unwrap();
+            RpcResult {
+                outcome: Some(Outcome::Payload(b)),
+            }
+        }
+        "/tinkle.v1.UpdatesService/ObserveConnectivity" => {
+            let _ = ObserveConnectivityRequest::decode(&*req.payload);
+            let resp = ObserveConnectivityResponse {
+                update: Some(ConnectivityChanged {
+                    user_id: 42,
+                    online: true,
+                    known: true,
+                    revision: 1,
+                }),
             };
             let mut b = Vec::new();
             resp.encode(&mut b).unwrap();
@@ -247,8 +255,6 @@ async fn handle_mock_request(id: u64, req: RpcRequest) -> Frame {
             }
         }
         "/tinkle.v1.MessagesService/GetHistory" | "/tinkle.v1.MessagesService/GetDialogs" => {
-            // Empty success payloads are meaningful; typed decoders accept defaults.
-            // Return properly encoded empty responses instead of raw empty bytes.
             let b = if req.method.contains("GetHistory") {
                 let r = tinkle_schema::proto::GetHistoryResponse {
                     messages: vec![],
@@ -278,7 +284,7 @@ async fn handle_mock_request(id: u64, req: RpcRequest) -> Frame {
         }
         _ => RpcResult {
             outcome: Some(Outcome::Error(ProtoRpcError {
-                code: 12, // UNIMPLEMENTED
+                code: 12,
                 message: "unknown method".into(),
             })),
         },
@@ -298,8 +304,6 @@ async fn start_mock() -> SocketAddr {
 }
 
 fn test_client(addr: SocketAddr) -> libtinkle::Client {
-    // Builder-style construction: resilient to ConnectionConfig gaining
-    // new fields (e.g. max_rpc_timeout).
     let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
     libtinkle::Client::new(
         cfg,
@@ -338,14 +342,12 @@ async fn concurrent_out_of_order() {
     let addr = start_mock().await;
     let c = test_client(addr);
     c.connect().await.unwrap();
-    // Slow first, fast second; server completes second first.
     let c_slow = c.clone();
     let h_slow = tokio::spawn(async move {
         c_slow
             .call_raw("/example.Echo/Slow", b"slow".to_vec(), 5000)
             .await
     });
-    // Ensure the slow request is in flight first.
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     let c_fast = c.clone();
     let h_fast = tokio::spawn(async move {
@@ -392,13 +394,8 @@ async fn notification_interleaving_does_not_complete_rpc() {
         .await
         .unwrap();
     assert_eq!(out, b"WITH_NOTIF");
-    // The interleaved presence notification was routed to the subscription
-    // pump (validated as RealtimeNotification), not to the RPC waiter.
-    // Give the pump a moment, then check an event arrived.
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let ev = c.next_event().await;
-    // Presence is ephemeral; the mock sent one, so we expect it (or None on
-    // timing races — either way the RPC above already proved interleaving).
     let _ = ev;
     c.close().await;
 }
@@ -416,64 +413,84 @@ async fn unknown_method_maps_to_unimplemented() {
     c.close().await;
 }
 
+fn omitted_update(stream: &str, cursor: u64) -> Update {
+    Update {
+        event_id: String::new(),
+        stream: stream.into(),
+        cursor,
+        occurred_at: None,
+        source_seq: None,
+        source_revision: None,
+        payload: Some(UpdatePayload::ContentOmitted(ContentOmitted {})),
+    }
+}
+
 #[tokio::test]
-async fn subscribe_and_cursor_recovery() {
+async fn subscribe_and_direct_validation() {
     let addr = start_mock().await;
     let c = test_client(addr);
     c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
     let resp = c.subscribe(vec![], vec![]).await.unwrap();
     assert_eq!(resp.stream, "user:42");
-    // Simulate a durable batch notification and verify checkpoint commit.
-    // Build a minimal snapshot+position batch at cursor 1.
-    let stream = "user:42";
-    let order = tinkle_schema::realtime::position_order(1, None);
-    let batch = RealtimeBatch {
-        stream: stream.into(),
-        events: vec![
-            RealtimeEvent {
-                event_id: "11111111-1111-4111-8111-111111111111".into(),
-                stream: stream.into(),
-                cursor: 1,
-                occurred_at: None,
-                source_seq: None,
-                source_revision: None,
-                r#type: RealtimeEventType::MessageSnapshot as i32,
-                kind: Some(EK::MessageSnapshot(RealtimeMessageSnapshot {
-                    message: None,
-                    random_id: None,
-                })),
-            },
-            RealtimeEvent {
-                event_id: "11111111-1111-4111-8111-111111111111".into(),
-                stream: stream.into(),
-                cursor: 1,
-                occurred_at: None,
-                source_seq: None,
-                source_revision: None,
-                r#type: RealtimeEventType::ChatPosition as i32,
-                kind: Some(EK::ChatPosition(RealtimeChatPosition {
-                    chat_key: "room:1".into(),
-                    order,
-                })),
-            },
-        ],
-        final_cursor: 1,
-    };
-    let notif = RealtimeNotification {
-        kind: Some(NK::Batch(batch)),
-    };
-    let mut buf = Vec::new();
-    notif.encode(&mut buf).unwrap();
-    // Drive through the subscription path via a second client pump is
-    // complex; validate directly that the batch commits and duplicates dedup.
-    let v = tinkle_schema::realtime::validate_notification(&buf).unwrap();
-    assert!(matches!(
-        v,
-        tinkle_schema::realtime::ValidatedNotification::Batch(_)
-    ));
+    // Direct validation only (no pipeline delivery here).
+    // ContentOmitted carries no source identity by design.
+    let update = omitted_update("user:42", 1);
+    let v = tinkle_schema::sync::validate_update(&update).unwrap();
+    assert_eq!(v.cursor, 1);
     c.close().await;
-    // Reconnect keeps working with fresh id space.
     c.reconnect().await.unwrap();
     assert!(c.is_connected().await);
     c.close().await;
+}
+
+#[tokio::test]
+async fn sync_pipeline_buffers_consecutive_updates_before_ack() {
+    use std::sync::Arc;
+    let store = libtinkle::InMemoryCursorStore::new();
+    let mgr =
+        libtinkle::SyncManager::new("user:42", store.clone() as Arc<dyn libtinkle::CursorStore>);
+    for cursor in 1..=3u64 {
+        mgr.handle_update(omitted_update("user:42", cursor))
+            .await
+            .unwrap();
+    }
+    for expected in 1..=3u64 {
+        let evt = mgr.next_event().await.unwrap();
+        assert!(
+            matches!(
+                evt,
+                libtinkle::SyncEvent::UpdateReady { cursor, .. } if cursor == expected
+            ),
+            "expected UpdateReady {expected}, got {evt:?}"
+        );
+    }
+    assert_eq!(
+        store.load("user:42", "user:42").await.unwrap(),
+        None,
+        "receipt alone must not persist"
+    );
+    for cursor in 1..=3u64 {
+        mgr.acknowledge("user:42", cursor).await.unwrap();
+        let evt = mgr.next_event().await.unwrap();
+        assert!(matches!(
+            evt,
+            libtinkle::SyncEvent::Applied { cursor: c, .. } if c == cursor
+        ));
+    }
+    assert_eq!(store.load("user:42", "user:42").await.unwrap(), Some(3));
+}
+
+#[tokio::test]
+async fn acknowledge_without_connection_fails_closed() {
+    use std::sync::Arc;
+    let store = libtinkle::InMemoryCursorStore::new();
+    let cfg = libtinkle::ClientConfig::new("ws://127.0.0.1:1/syntra/v1/ws").insecure_dev();
+    let c = libtinkle::Client::new(
+        cfg,
+        libtinkle::Credential::from_session_token("t"),
+        store.clone() as Arc<dyn libtinkle::CursorStore>,
+    );
+    // Without a connection, acknowledge fails closed (no silent advance).
+    assert!(c.acknowledge("user:42", 1).await.is_err());
 }

@@ -3,15 +3,16 @@
 use thiserror::Error;
 
 use syntra_core::error::{ErrorCode, SyntraError};
-use tinkle_schema::realtime::RealtimeError;
+use tinkle_schema::sync::SyncError;
 
-/// Public errors returned by [`crate::Client`].
 #[derive(Debug, Error, Clone)]
 pub enum TinkleError {
     #[error(transparent)]
     Syntra(#[from] SyntraError),
-    #[error("realtime: {0}")]
-    Realtime(String),
+    #[error("sync: {0}")]
+    Sync(String),
+    #[error("grpc: {0}")]
+    Grpc(String),
     #[error("codec: {0}")]
     Codec(String),
     #[error("not connected: {0}")]
@@ -28,7 +29,8 @@ impl TinkleError {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Syntra(e) => e.code(),
-            Self::Realtime(_) => ErrorCode::Internal,
+            Self::Sync(_) => ErrorCode::Internal,
+            Self::Grpc(_) => ErrorCode::Unavailable,
             Self::Codec(_) => ErrorCode::InvalidArgument,
             Self::NotConnected(_) => ErrorCode::Unavailable,
             Self::Subscription(_) => ErrorCode::FailedPrecondition,
@@ -45,8 +47,8 @@ impl TinkleError {
     }
 }
 
-impl From<RealtimeError> for TinkleError {
-    fn from(e: RealtimeError) -> Self {
-        Self::Realtime(e.to_string())
+impl From<SyncError> for TinkleError {
+    fn from(e: SyncError) -> Self {
+        Self::Sync(e.to_string())
     }
 }

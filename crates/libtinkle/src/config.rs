@@ -85,6 +85,9 @@ impl ReconnectPolicy {
 /// High-level client configuration.
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
+    /// gRPC base endpoint for `ReadUpdates` catch-up, e.g. `https://gateway.example.com`.
+    /// When `None`, catch-up must go through the follow binding only.
+    pub grpc_endpoint: Option<String>,
     /// WSS URL, e.g. `wss://gateway.example.com/syntra/v1/ws`.
     pub url: String,
     /// Allow `ws://` (development loopback/isolated nets only).
@@ -101,12 +104,19 @@ pub struct ClientConfig {
 impl ClientConfig {
     pub fn new(url: impl Into<String>) -> Self {
         Self {
+            grpc_endpoint: None,
             url: url.into(),
             allow_insecure: false,
             connection: ConnectionConfig::default(),
             reconnect: ReconnectPolicy::default(),
             user_agent: None,
         }
+    }
+
+    /// gRPC endpoint for catch-up (`ReadUpdates` over actual gRPC).
+    pub fn with_grpc_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.grpc_endpoint = Some(endpoint.into());
+        self
     }
 
     /// Development-only plaintext. Production MUST use `wss://`.

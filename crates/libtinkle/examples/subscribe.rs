@@ -1,4 +1,4 @@
-//! Subscribe to realtime batches and print validated events.
+//! Subscribe to sync updates and print validated events.
 //!
 //! ```sh
 //! TINKLE_URL=wss://gateway.test.example.com/syntra/v1/ws \
@@ -30,10 +30,18 @@ async fn main() -> anyhow::Result<()> {
         sub.stream, sub.after_cursor
     );
 
-    // Presence is ephemeral; batches commit cursors atomically.
+    // Connectivity is ephemeral; updates commit only after application.
     for _ in 0..10 {
         match tokio::time::timeout(std::time::Duration::from_secs(30), client.next_event()).await {
-            Ok(Some(ev)) => println!("event: {ev:?}"),
+            Ok(Some(ev)) => {
+                println!("event: {ev:?}");
+                if let libtinkle::SyncEvent::UpdateReady { stream, cursor, .. } = ev {
+                    // Apply here, then persist the checkpoint.
+                    if let Err(e) = client.acknowledge(&stream, cursor).await {
+                        eprintln!("acknowledge failed: {e}");
+                    }
+                }
+            }
             Ok(None) => break,
             Err(_) => {
                 println!("no events within 30s; still subscribed");

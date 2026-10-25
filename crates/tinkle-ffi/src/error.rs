@@ -21,8 +21,8 @@ pub enum FfiError {
     Timeout,
     #[error("operation was cancelled")]
     Cancelled,
-    #[error("realtime error: {0}")]
-    Realtime(String),
+    #[error("sync error: {0}")]
+    Sync(String),
     #[error("codec error: {0}")]
     Codec(String),
     #[error("cursor store error: {0}")]
@@ -63,11 +63,12 @@ impl From<libtinkle::TinkleError> for FfiError {
             }
             libtinkle::TinkleError::NotConnected(_) => Self::NotConnected,
             libtinkle::TinkleError::ReconnectExhausted { .. } => Self::ReconnectExhausted,
-            libtinkle::TinkleError::Realtime(msg) => Self::Realtime(msg),
+            libtinkle::TinkleError::Sync(msg) => Self::Sync(msg),
+            libtinkle::TinkleError::Grpc(msg) => Self::Network(msg),
             libtinkle::TinkleError::Codec(msg) => Self::Codec(msg),
             libtinkle::TinkleError::CursorStore(msg) => Self::Storage(msg),
-            // Subscription setup failures are realtime-domain failures.
-            libtinkle::TinkleError::Subscription(msg) => Self::Realtime(msg),
+            // Subscription setup failures are sync-domain failures.
+            libtinkle::TinkleError::Subscription(msg) => Self::Sync(msg),
         }
     }
 }

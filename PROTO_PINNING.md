@@ -1,6 +1,6 @@
 # Proto pinning (BSR Rust SDKs via public Cargo index)
 
-This workspace consumes BSR-generated prost bindings directly, with no
+This workspace consumes BSR-generated bindings directly, with no
 vendored `.proto` copies and no local `prost-build` codegen. The public
 index needs no token. Authenticated-index credentials are unnecessary
 for these public modules.
@@ -16,36 +16,25 @@ index = "sparse+https://buf.build/gen/cargo/public/"
 
 - Syntra protocol types now come from published `syntra-core`
   `=1.0.0-rc.1` (with `syntra-runtime` / `syntra-ws` at the same pin).
-  Local prototype crates `crates/syntra-core` and `crates/syntra-ws`
-  were removed.
-- Syntra proto runtime: `prost` `0.13.5` internally (see `Cargo.lock`:
-  `syntra-core` / `syntra-runtime` / `syntra-ws` depend on
-  `prost 0.13.5`). Tinkle still uses BSR prost `0.14` (below).
+- Syntra proto runtime: `prost` `0.13.5` internally. Tinkle uses BSR prost `0.14`.
 - Boundary is opaque `Vec<u8>`: Tinkle payload bytes cross into Syntra
-  frames without sharing prost types. `prost 0.13.5` is the Syntra
-  internal runtime; `prost 0.14` (locked to `0.14.4` per `Cargo.lock`)
-  is the Tinkle workspace requirement — distinct roles, no type mixing.
+  frames without sharing prost types.
 
-## Tinkle (`buf.build/tinklecorp/tinkle-proto`)
+## Tinkle (`buf.build/tinkle-org/schema`)
 
-- Plugin: same `community/neoeinstein-prost` prost data plugin.
-- Crate: `tinklecorp_tinkle-proto_community_neoeinstein-prost`
-- Pinned version: `0.5.0-20261020173106-64b4706c3194.2`
-  (`buf registry sdk version --module=buf.build/tinklecorp/tinkle-proto --plugin=buf.build/community/neoeinstein-prost`)
-- Module commit: `64b4706c319441c3a36f9bde125d5594`
-- Runtime: `prost` `0.14` (locked to `0.14.4` per `Cargo.lock`).
-- Method identifiers (`tinkle-schema::methods`, 169 entries) were verified
+- Module commit: `a444aece5d594f5ca3308858cb33c879`
+- Prost data crate: `tinkle-org_schema_community_neoeinstein-prost`
+  pinned `0.5.0-20261025011045-a444aece5d59.2`
+  (`buf registry sdk version --module=buf.build/tinkle-org/schema --plugin=buf.build/community/neoeinstein-prost`)
+- Tonic client crate: `tinkle-org_schema_community_neoeinstein-tonic`
+  pinned `0.5.0-20261025011045-a444aece5d59.4`
+  (`buf registry sdk version --module=buf.build/tinkle-org/schema --plugin=buf.build/community/neoeinstein-tonic`)
+- Runtime: `prost` `0.14`, `tonic` `0.14`.
+- Method identifiers (`tinkle-schema::methods`, 172 entries) verified
   against these service definitions. Failures use Syntra `RpcResult.error`.
-
-## Related SDKs inspected (not used)
-
-- `tinklecorp_syntra_connectrpc_rust` (`0.9.0-20261020002338-abd0f913f41c.3`)
-  and `tinklecorp_tinkle-proto_connectrpc_rust`
-  (`0.9.0-20261020173106-64b4706c3194.3`): Connect-RPC client runtime on
-  `buffa` / `connectrpc`. Rejected here because this SDK must implement
-  Syntra transport itself and stay on prost data-only bindings.
-- `tinklecorp_*_anthropics_buffa` message crates: underlying buffa
-  messages for the connectrpc SDKs. Same reason.
+- `UpdatesService`: `ReadUpdates` (unary gRPC catch-up), `FollowUpdates`
+  and `ObserveConnectivity` (server-streaming; ongoing delivery over
+  Syntra notifications via the follow binding in `tinkle-schema::sync`).
 
 ## Upgrading
 
@@ -56,8 +45,9 @@ then run `cargo update` and `cargo test`.
 Tinkle binding only:
 
 ```sh
-buf registry sdk version --module=buf.build/tinklecorp/tinkle-proto --plugin=buf.build/community/neoeinstein-prost
+buf registry sdk version --module=buf.build/tinkle-org/schema --plugin=buf.build/community/neoeinstein-prost
+buf registry sdk version --module=buf.build/tinkle-org/schema --plugin=buf.build/community/neoeinstein-tonic
 ```
 
-Copy the version verbatim into the workspace `Cargo.toml`. Do not
-construct it by hand. `cargo update -p <crate>` then `cargo test --workspace`.
+Copy the versions verbatim into the workspace `Cargo.toml`. Do not
+construct them by hand. `cargo update -p <crate>` then `cargo test --workspace`.

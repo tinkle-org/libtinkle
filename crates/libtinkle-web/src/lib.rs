@@ -12,9 +12,8 @@
 //!   `wasm32` (currently `tokio::spawn`, which panics without an active
 //!   Tokio runtime). Until then WASM remains compile-verified only.
 //! - `IndexedDB CursorStore`: implement `libtinkle::CursorStore` over
-//!   IndexedDB (e.g. via `rexie`/`idb`) for durable per-principal cursors,
-//!   replacing `InMemoryCursorStore` used here. Persist `final_cursor` only
-//!   after batch effects commit; isolate by authenticated principal.
+//!   IndexedDB for durable per-principal cursors. Persist only after
+//!   application effects commit (see `SyncManager::acknowledge`); isolate by authenticated principal.
 //! - Client registry: keep connected `Client`s in a global map (e.g.
 //!   `HashMap<client_id, Client>`) so JS can call/subscribe/close across
 //!   invocations instead of one-shot connect.

@@ -1,14 +1,11 @@
 //! Typed service facades.
 //!
-//! Method bindings are maintained from verified public descriptors
-//! (`tinkle-schema::methods::ALL_METHODS`, generated from the vendored
-//! `tinkle/v1/*.proto` service definitions). The generic
+//! Method bindings are maintained from BSR `tinkle-org/schema` descriptors
+//! (`tinkle-schema::methods::ALL_METHODS`). The generic
 //! [`Service::call_typed`] serializes the request protobuf, constructs the
 //! Syntra `RpcRequest`, allocates a nonzero `request_id`, sends through
 //! the active connection, awaits the matching `RpcResult`, decodes the
-//! typed response, and returns typed errors. Representative hand-written
-//! helpers (messages, auth, realtime) demonstrate the pattern; all other
-//! methods use the same generic path without manual duplication.
+//! typed response, and returns typed errors.
 
 use prost::Message;
 
@@ -47,9 +44,6 @@ impl<'a> Messages<'a> {
         &self,
         req: tinkle_schema::proto::SendMessageRequest,
     ) -> Result<tinkle_schema::proto::SendMessageResponse, TinkleError> {
-        // Persist the exact request + nonzero signed random_id before
-        // sending (REALTIME.md §6). A lost result means unknown outcome;
-        // retry the unchanged request/key with fresh transport correlation.
         if req.random_id == 0 {
             return Err(TinkleError::Codec(
                 "SendMessageRequest.random_id must be nonzero".to_string(),
@@ -132,46 +126,74 @@ impl<'a> Auth<'a> {
         &self,
         req: tinkle_schema::proto::SignInRequest,
     ) -> Result<tinkle_schema::proto::SignInResponse, TinkleError> {
-        call_typed(
+        let resp: tinkle_schema::proto::SignInResponse = call_typed(
             self.client,
             tinkle_schema::methods::authservice::SIGN_IN,
             &req,
             30_000,
         )
-        .await
+        .await?;
+        // Learn the authenticated principal (`user:<id>`) for sync scope.
+        if let Some(user) = resp.user.as_ref() {
+            let id = match user.user_type.as_ref() {
+                Some(tinkle_schema::proto::user::UserType::Data(d)) => Some(d.id),
+                Some(tinkle_schema::proto::user::UserType::Empty(e)) => Some(e.id),
+                None => None,
+            };
+            if let Some(id) = id {
+                if id > 0 {
+                    self.client.set_principal_user_id(id).await;
+                }
+            }
+        }
+        Ok(resp)
     }
 }
 
-/// Realtime subscription RPCs (Syntra dispatcher identifiers, not gRPC).
-pub struct Realtime<'a> {
+/// Updates service: gRPC catch-up plus Syntra follow binding.
+pub struct Updates<'a> {
     client: &'a Client,
 }
 
-impl<'a> Realtime<'a> {
+impl<'a> Updates<'a> {
     pub(crate) fn new(client: &'a Client) -> Self {
         Self { client }
     }
 
-    pub async fn subscribe_batched(
+    /// Bounded replay over actual gRPC (`ReadUpdates`).
+    pub async fn read_updates(
         &self,
-        req: tinkle_schema::proto::SubscribeRequest,
-    ) -> Result<tinkle_schema::proto::SubscribeResponse, TinkleError> {
+        req: tinkle_schema::proto::ReadUpdatesRequest,
+    ) -> Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> {
+        self.client.read_updates_grpc(req).await
+    }
+
+    /// Start a follow watch over Syntra (`FollowUpdates`). The correlated
+    /// result confirms the subscription; durable changes then arrive as
+    /// `FollowUpdatesResponse` notifications.
+    pub async fn follow(
+        &self,
+        req: tinkle_schema::proto::FollowUpdatesRequest,
+    ) -> Result<tinkle_schema::proto::FollowUpdatesResponse, TinkleError> {
+        // Empty stream selects the caller's own user stream; the gateway
+        // resolves it from authentication and echoes the concrete stream.
         call_typed(
             self.client,
-            tinkle_schema::methods::realtime::SUBSCRIBE_BATCHED,
+            tinkle_schema::sync::FOLLOW_METHOD,
             &req,
             30_000,
         )
         .await
     }
 
-    pub async fn unsubscribe_batched(
+    /// Start connectivity observations over Syntra (`ObserveConnectivity`).
+    pub async fn observe_connectivity(
         &self,
-        req: tinkle_schema::proto::UnsubscribeRequest,
-    ) -> Result<tinkle_schema::proto::UnsubscribeResponse, TinkleError> {
+        req: tinkle_schema::proto::ObserveConnectivityRequest,
+    ) -> Result<tinkle_schema::proto::ObserveConnectivityResponse, TinkleError> {
         call_typed(
             self.client,
-            tinkle_schema::methods::realtime::UNSUBSCRIBE_BATCHED,
+            tinkle_schema::sync::OBSERVE_METHOD,
             &req,
             30_000,
         )

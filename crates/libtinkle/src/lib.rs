@@ -1,4 +1,4 @@
-//! `libtinkle`: Tinkle client runtime over Syntra.
+//! `libtinkle`: Tinkle client runtime over Syntra + gRPC catch-up.
 //!
 //! The same logical client runtime is reusable across iOS, Android,
 //! and WebAssembly/browser. Platform adapters (FFI, UniFFI, wasm-bindgen)
@@ -7,37 +7,36 @@
 //! Boundaries:
 //! - `syntra-core` owns framing, handshake, correlation, errors.
 //! - `syntra-ws` owns WSS/WS byte transport.
-//! - `tinkle-schema` owns Tinkle payload schemas + realtime validation.
+//! - `tinkle-schema` owns Tinkle payload schemas + sync validation.
 //! - This crate owns connection lifecycle, typed RPC dispatch,
-//!   subscriptions, cursors, reconnect, and backoff.
+//!   sync coordination, cursors, reconnect, and backoff.
 //!
-//! No gRPC client is required for standard Syntra application calls.
-//! Ciphertext, if E2EE is integrated later, is constructed at the
-//! application encryption layer before entering Syntra.
+//! Catch-up uses actual gRPC `ReadUpdates`; ongoing delivery uses Syntra
+//! notifications carrying `FollowUpdatesResponse` bytes.
 
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod cache_projector;
 pub(crate) mod client;
 pub(crate) mod config;
 pub(crate) mod cursor;
 pub(crate) mod errors;
+pub(crate) mod grpc;
 pub(crate) mod reconnect;
 pub(crate) mod services;
-pub(crate) mod subscription;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sqlite_store;
+pub(crate) mod sync;
 
-pub use client::Client;
+pub use client::{Client, SubscribeResult};
 pub use config::{ClientConfig, Credential, ReconnectPolicy};
 pub use cursor::{CursorStore, InMemoryCursorStore};
 pub use errors::TinkleError;
-pub use services::{Auth, Messages, Realtime};
-pub use subscription::RealtimeEvent;
+pub use services::{Auth, Messages, Updates};
+#[cfg(not(target_arch = "wasm32"))]
+pub use sqlite_store::SqliteCursorStore;
+pub use sync::{SyncEvent, SyncManager};
 /// Re-exported error code for [`TinkleError::code`].
-///
-/// `TinkleError::code` returns `syntra_core::error::ErrorCode`; apps can
-/// name the type through this re-export instead of depending on
-/// `syntra-core` directly.
 pub use syntra_core::error::ErrorCode;
-/// Re-exported cancellation token for [`Client::call_raw_cancellable`].
-///
-/// `Client::call_raw_cancellable` takes `&syntra_runtime::CancelToken`;
-/// apps can name the type through this re-export instead of depending on
-/// `syntra-runtime` directly.
+/// Re-exported cancellation token.
 pub use syntra_runtime::CancelToken;

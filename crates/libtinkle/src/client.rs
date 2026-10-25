@@ -1,15 +1,23 @@
-//! High-level typed client: `connect → call → subscribe → reconnect`.
+//! High-level typed client: `connect → call → sync → reconnect`.
 //!
 //! Conceptual use:
 //! ```ignore
 //! client.connect().await?;
-//! let resp = client.messages().send_message(req).await?;
+//! client.subscribe(vec![], vec![]).await?;
+//! while let Some(evt) = client.next_event().await {
+//!     if let SyncEvent::UpdateReady { stream, cursor, update } = evt {
+//!         // apply update + required refreshes, then:
+//!         client.acknowledge(&stream, cursor).await?;
+//!     }
+//! }
 //! ```
 //!
 //! The SDK serializes the public request protobuf, constructs the Syntra
 //! `RpcRequest`, allocates a nonzero `request_id`, sends through the
 //! active connection, awaits the matching `RpcResult`, decodes the typed
-//! response, and returns typed errors. Never auto-retries unsafe
+//! response, and returns typed errors. Catch-up uses actual gRPC
+//! `ReadUpdates`; ongoing delivery uses Syntra `FollowUpdates` /
+//! `ObserveConnectivity` notifications. Never auto-retries unsafe
 //! mutations without an application idempotency policy.
 
 use std::sync::Arc;
@@ -22,18 +30,26 @@ use crate::config::{ClientConfig, Credential};
 use crate::cursor::CursorStore;
 use crate::errors::TinkleError;
 use crate::reconnect::{backoff_sleep, should_retry};
-use crate::services::{Auth, Messages, Realtime};
-use crate::subscription::{Interests, RealtimeEvent, SubscriptionManager};
+use crate::services::{Auth, Messages, Updates};
+use crate::sync::{Interests, SyncEvent, SyncManager};
 
 struct Live {
     handle: syntra_ws::WsHandle,
     connection_id: String,
     version: u32,
-    sub_mgr: Arc<SubscriptionManager>,
+    sync_mgr: Arc<SyncManager>,
     pump: tokio::task::JoinHandle<()>,
 }
 
-/// Typed Tinkle client over Syntra.
+/// Result of establishing sync interests.
+#[derive(Debug, Clone)]
+pub struct SubscribeResult {
+    pub stream: String,
+    pub after_cursor: u64,
+    pub head: Option<u64>,
+}
+
+/// Typed Tinkle client over Syntra + gRPC catch-up.
 ///
 /// Cheap to clone (shares connection + cursors). The same logical runtime
 /// is reusable across iOS/Android/WASM via thin platform adapters.
@@ -42,12 +58,10 @@ pub struct Client {
     config: ClientConfig,
     credential: Credential,
     store: Arc<dyn CursorStore>,
+    #[cfg(not(target_arch = "wasm32"))]
+    sqlite: Option<Arc<tinkle_storage::Storage>>,
     live: Arc<RwLock<Option<Live>>>,
-    /// Authenticated principal label for cursor scope, e.g. `user:123`.
-    /// Set after first successful subscribe; used for durable isolation.
     principal: Arc<RwLock<String>>,
-    /// Subscription interests that survive reconnect (Live + its
-    /// SubscriptionManager are discarded on close).
     interests: Arc<tokio::sync::Mutex<Interests>>,
 }
 
@@ -57,10 +71,36 @@ impl Client {
             config,
             credential,
             store,
+            #[cfg(not(target_arch = "wasm32"))]
+            sqlite: None,
             live: Arc::new(RwLock::new(None)),
             principal: Arc::new(RwLock::new("unknown".to_string())),
             interests: Arc::new(tokio::sync::Mutex::new(Interests::default())),
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new_sqlite(
+        config: ClientConfig,
+        credential: Credential,
+        storage: Arc<tinkle_storage::Storage>,
+    ) -> Self {
+        let store: Arc<dyn CursorStore> =
+            Arc::new(crate::sqlite_store::SqliteCursorStore::new(storage.clone()));
+        Self {
+            config,
+            credential,
+            store,
+            sqlite: Some(storage),
+            live: Arc::new(RwLock::new(None)),
+            principal: Arc::new(RwLock::new("unknown".to_string())),
+            interests: Arc::new(tokio::sync::Mutex::new(Interests::default())),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn sqlite_storage(&self) -> Option<Arc<tinkle_storage::Storage>> {
+        self.sqlite.clone()
     }
 
     pub fn config(&self) -> &ClientConfig {
@@ -75,9 +115,18 @@ impl Client {
         self.principal.read().await.clone()
     }
 
-    /// Selected Syntra version (`Frame.version` post-handshake).
-    pub async fn version(&self) -> Option<u32> {
-        self.live.read().await.as_ref().map(|l| l.version)
+    /// Set the authenticated principal from a known user id.
+    /// Called automatically after `sign_in`; apps with an existing
+    /// session token should call it after resolving their own id.
+    pub async fn set_principal_user_id(&self, user_id: i64) {
+        if user_id <= 0 {
+            return;
+        }
+        let p = format!("user:{user_id}");
+        *self.principal.write().await = p.clone();
+        if let Ok(mgr) = self.live_mgr().await {
+            mgr.set_principal(p).await;
+        }
     }
 
     /// Foreground connect: WSS Upgrade → Syntra handshake → ACTIVE.
@@ -98,20 +147,22 @@ impl Client {
         let connection_id = handle.connection_id.clone();
         let version = handle.version;
 
-        // WsHandle owns WS background tasks; Live owns the handle and
-        // explicit close() consumes it via WsHandle::close.
         let principal = self.principal.read().await.clone();
-        let sub_mgr = SubscriptionManager::new(principal, self.store.clone());
+        let sync_mgr = SyncManager::new(principal, self.store.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(sqlite) = self.sqlite.clone() {
+            sync_mgr.set_sqlite_storage(sqlite).await;
+        }
 
         // Notification pump: Initiator → validate → cursors → app events.
         // Interleaved notifications never complete an RPC (core routes them
         // here, not to pending waiters).
         let pump_conn = conn.clone();
-        let pump_mgr = sub_mgr.clone();
+        let pump_mgr = sync_mgr.clone();
         let pump = tokio::spawn(async move {
             while let Some(payload) = pump_conn.next_notification().await {
                 if let Err(e) = pump_mgr.handle_payload(&payload).await {
-                    tracing::debug!(error = %e, "notification handling reported gap/reset/checkpoint");
+                    tracing::debug!(error = %e, "sync notification handling reported gap/rebuild");
                 }
             }
         });
@@ -120,7 +171,7 @@ impl Client {
             handle,
             connection_id,
             version,
-            sub_mgr,
+            sync_mgr,
             pump,
         });
         Ok(())
@@ -135,18 +186,16 @@ impl Client {
             .ok_or_else(|| TinkleError::NotConnected("call connect() first".into()))
     }
 
-    async fn live_mgr(&self) -> Result<Arc<SubscriptionManager>, TinkleError> {
+    async fn live_mgr(&self) -> Result<Arc<SyncManager>, TinkleError> {
         self.live
             .read()
             .await
             .as_ref()
-            .map(|l| l.sub_mgr.clone())
+            .map(|l| l.sync_mgr.clone())
             .ok_or_else(|| TinkleError::NotConnected("call connect() first".into()))
     }
 
-    /// Raw RPC: opaque bytes in/out. Validates method shape, allocates a
-    /// nonzero id, enforces bounded outstanding, awaits the matching
-    /// terminal result. Supports concurrent out-of-order completion.
+    /// Raw RPC: opaque bytes in/out.
     pub async fn call_raw(
         &self,
         method: &str,
@@ -159,8 +208,7 @@ impl Client {
             .map_err(TinkleError::Syntra)
     }
 
-    /// Cancellable RPC: `token.cancel()` sends best-effort `Cancel{}` for
-    /// the allocated id and returns `CANCELLED`. Completion wins races.
+    /// Cancellable RPC.
     pub async fn call_raw_cancellable(
         &self,
         method: &str,
@@ -174,7 +222,7 @@ impl Client {
             .map_err(TinkleError::Syntra)
     }
 
-    /// Typed service facades (method bindings from verified descriptors).
+    /// Typed service facades (method bindings from BSR descriptors).
     pub fn messages(&self) -> Messages<'_> {
         Messages::new(self)
     }
@@ -183,49 +231,208 @@ impl Client {
         Auth::new(self)
     }
 
-    pub(crate) fn realtime(&self) -> Realtime<'_> {
-        Realtime::new(self)
+    pub(crate) fn updates(&self) -> Updates<'_> {
+        Updates::new(self)
     }
 
-    /// Subscribe with durable cursor recovery. Hydrates memory from the
-    /// store, calls `SubscribeBatched`, records interests, and returns the
-    /// response (which confirms interests, not replay completion).
+    /// gRPC catch-up for one stream. Requires `grpc_endpoint` in config.
+    pub(crate) async fn read_updates_grpc(
+        &self,
+        req: tinkle_schema::proto::ReadUpdatesRequest,
+    ) -> Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> {
+        let endpoint = self
+            .config
+            .grpc_endpoint
+            .clone()
+            .ok_or_else(|| TinkleError::Grpc("grpc_endpoint not configured".into()))?;
+        let lower = endpoint.to_ascii_lowercase();
+        if self.config.allow_insecure {
+            if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+                return Err(TinkleError::Grpc(
+                    "grpc_endpoint must include http:// or https:// scheme".into(),
+                ));
+            }
+        } else if !lower.starts_with("https://") {
+            return Err(TinkleError::Grpc(
+                "grpc_endpoint must use https:// unless allow_insecure".into(),
+            ));
+        }
+        let token = self.credential.expose_secret().to_vec();
+        crate::grpc::read_updates_grpc(&endpoint, &token, req, 30_000).await
+    }
+
+    /// Catch up one stream over gRPC with paginated recovery.
+    ///
+    /// Pages `ReadUpdates` from `after`, validates floor/head, feeds each
+    /// update through the shared pipeline (buffered replay on gaps), and
+    /// retries transient failures.
+    pub async fn catch_up(
+        &self,
+        stream: &str,
+        after: u64,
+        limit: i32,
+    ) -> Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> {
+        self.recover_stream(stream, after, limit).await
+    }
+
+    async fn recover_stream(
+        &self,
+        stream: &str,
+        mut after: u64,
+        limit: i32,
+    ) -> Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> {
+        let mgr = self.live_mgr().await?;
+        let limit = limit.clamp(1, 500);
+        let _ = mgr.hydrate_from_store(&[stream.to_string()]).await;
+        let _ = mgr.begin_recovery(stream).await;
+        let mut last_resp: Option<tinkle_schema::proto::ReadUpdatesResponse> = None;
+        let mut pages = 0u32;
+        let mut no_progress_pages = 0u32;
+        let result: Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> = async {
+            loop {
+                if pages >= 20 {
+                    break;
+                }
+                pages += 1;
+                let req = tinkle_schema::proto::ReadUpdatesRequest {
+                    stream: stream.to_string(),
+                    after_cursor: after,
+                    limit,
+                };
+                let mut attempt = 0u32;
+                let resp = loop {
+                    match self.read_updates_grpc(req.clone()).await {
+                        Ok(r) => break r,
+                        Err(_) if attempt < 2 => {
+                            attempt += 1;
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                100 * (1 << attempt),
+                            ))
+                            .await;
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                };
+                mgr.record_bounds(stream, resp.replay_floor, Some(resp.head))
+                    .await;
+                if after < resp.replay_floor {
+                    mgr.handle_expired(stream, Some(resp.head)).await;
+                    return Err(TinkleError::Sync(format!(
+                        "replay expired on {stream}: after {after} < floor {}",
+                        resp.replay_floor
+                    )));
+                }
+                if after > resp.head {
+                    return Err(TinkleError::Sync(format!(
+                        "after {after} > head {} on {stream}",
+                        resp.head
+                    )));
+                }
+                if resp.updates.is_empty() {
+                    last_resp = Some(resp);
+                    break;
+                }
+                let mut progressed = false;
+                for u in &resp.updates {
+                    if u.stream != stream {
+                        return Err(TinkleError::Sync(format!(
+                            "stream mismatch in page: got {} want {stream}",
+                            u.stream
+                        )));
+                    }
+                    if u.cursor <= after {
+                        continue;
+                    }
+                    match mgr.handle_update(u.clone()).await {
+                        Ok(()) => {
+                            if u.cursor > after {
+                                after = u.cursor;
+                                progressed = true;
+                            }
+                        }
+                        Err(e) => {
+                            let msg = e.to_string();
+                            if msg.contains("gap") || msg.contains("Gap") {
+                                break;
+                            }
+                            return Err(e);
+                        }
+                    }
+                }
+                last_resp = Some(resp.clone());
+                if !progressed {
+                    no_progress_pages += 1;
+                    if no_progress_pages >= 3 {
+                        break;
+                    }
+                } else {
+                    no_progress_pages = 0;
+                }
+                if (resp.updates.len() as i32) < limit || after >= resp.head {
+                    break;
+                }
+            }
+            last_resp.ok_or_else(|| TinkleError::Grpc("empty recovery: no pages".into()))
+        }
+        .await;
+        match &result {
+            Ok(_) => mgr.end_recovery(stream, true).await,
+            Err(_) => mgr.end_recovery(stream, false).await,
+        }
+        result
+    }
+
+    /// Subscribe with durable cursor recovery.
+    ///
+    /// Flow: learn principal (own-stream probe) → hydrate → gRPC catch-up
+    /// for own + rooms → start Syntra follows + connectivity observations.
+    /// Returns the own-stream confirmation; replay itself arrives as
+    /// `UpdateReady` events requiring explicit `acknowledge`.
     pub async fn subscribe(
         &self,
         rooms: Vec<(i64, u64)>,
         watch_user_ids: Vec<i64>,
-    ) -> Result<tinkle_schema::proto::SubscribeResponse, TinkleError> {
+    ) -> Result<SubscribeResult, TinkleError> {
         let mgr = self.live_mgr().await?;
-        // Learn the authenticated principal before any cursor lookup when
-        // it is still `unknown`, so hydrate/load uses the same principal
-        // as checkpoint saving and the first subscription sends the
-        // restored checkpoint instead of zero.
         if self.principal().await == "unknown" {
-            let probe = tinkle_schema::proto::SubscribeRequest {
-                own_cursor: None,
-                rooms: Vec::new(),
-                watch_user_ids: Vec::new(),
+            // Probe the authenticated own stream via the follow binding:
+            // an empty stream selects the caller's own user stream and the
+            // gateway echoes the concrete `user:<id>`.
+            let probe = tinkle_schema::proto::FollowUpdatesRequest {
+                stream: String::new(),
+                after_cursor: 0,
             };
-            let probe_resp = self.realtime().subscribe_batched(probe).await?;
-            let authenticated = probe_resp.stream.clone();
-            *self.principal.write().await = authenticated.clone();
-            mgr.set_principal(authenticated).await;
+            match self.updates().follow(probe).await {
+                Ok(resp) if !resp.stream.is_empty() => {
+                    let authenticated = resp.stream.clone();
+                    *self.principal.write().await = authenticated.clone();
+                    mgr.set_principal(authenticated).await;
+                }
+                _ => {
+                    // Gateway without empty-stream resolution: principal
+                    // must have been set via `sign_in` or
+                    // `set_principal_user_id`. Fail closed rather than
+                    // checkpointing under `unknown`.
+                    return Err(TinkleError::Subscription(
+                        "authenticated principal unknown; call set_principal_user_id after sign_in"
+                            .into(),
+                    ));
+                }
+            }
         }
-        // Hydrate own + room streams under the authenticated principal.
         let principal = self.principal().await;
-        let mut streams = vec![format!("user:{}", principal_user_suffix(&principal))];
+        let own_stream = if principal.starts_with("user:") {
+            principal.clone()
+        } else {
+            format!("user:{}", principal_user_suffix(&principal))
+        };
+        let mut streams = vec![own_stream.clone()];
         for (room_id, _) in &rooms {
             streams.push(format!("room:{room_id}"));
         }
-        // Best-effort hydrate; absent means zero (never start-live).
         let _ = mgr.hydrate_from_store(&streams).await;
 
-        // Build request with per-stream after cursors.
-        // Own cursor: load durable for the own stream.
-        // Room cursors: send the newer of the caller's value and the
-        // durable checkpoint so the first subscription reads the restored
-        // checkpoint.
-        let own_stream = streams.first().cloned().unwrap_or_default();
         let own_cursor = self.store.load(&principal, &own_stream).await?.unwrap_or(0);
         let mut effective_rooms = Vec::with_capacity(rooms.len());
         for (room_id, after) in &rooms {
@@ -233,32 +440,54 @@ impl Client {
             let stored = self.store.load(&principal, &stream).await?.unwrap_or(0);
             effective_rooms.push((*room_id, (*after).max(stored)));
         }
-        let req_rooms: Vec<tinkle_schema::proto::RealtimeRoomSubscription> = effective_rooms
-            .iter()
-            .map(
-                |(room_id, after)| tinkle_schema::proto::RealtimeRoomSubscription {
-                    room_id: *room_id,
-                    after_cursor: if *after == 0 { None } else { Some(*after) },
-                },
-            )
-            .collect();
 
-        let req = tinkle_schema::proto::SubscribeRequest {
-            own_cursor: if own_cursor == 0 {
-                None
-            } else {
-                Some(own_cursor)
-            },
-            rooms: req_rooms,
-            watch_user_ids: watch_user_ids.clone(),
+        // Best-effort gRPC catch-up for own stream when configured.
+        // Failures do not block follow establishment; gaps surface as events.
+        let mut head: Option<u64> = None;
+        if self.config.grpc_endpoint.is_some() {
+            match self.catch_up(&own_stream, own_cursor, 100).await {
+                Ok(resp) => {
+                    head = Some(resp.head);
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, "own-stream catch-up failed, continuing with follow");
+                }
+            }
+            for (room_id, after) in &effective_rooms {
+                let stream = format!("room:{room_id}");
+                let _ = self.catch_up(&stream, *after, 100).await;
+            }
+        }
+
+        // Start follows for own + rooms. Each follow replays retained
+        // suffix after the supplied cursor, covering commits between the
+        // gRPC page and subscription establishment.
+        let follow_own = tinkle_schema::proto::FollowUpdatesRequest {
+            stream: own_stream.clone(),
+            after_cursor: own_cursor,
         };
-        let resp = self.realtime().subscribe_batched(req).await?;
-        // `stream` is user:<verified-user-id> from authenticated identity.
-        // Set the manager's cursor principal before processing
-        // authenticated notifications so room cursor writes and reconnect
-        // loads share it instead of the initial `unknown` value.
-        *self.principal.write().await = resp.stream.clone();
-        mgr.set_principal(resp.stream.clone()).await;
+        let own_resp = self.updates().follow(follow_own).await?;
+        if !own_resp.stream.is_empty() && own_resp.stream != own_stream {
+            // Principal rotation: gateway resolved a different own stream.
+            *self.principal.write().await = own_resp.stream.clone();
+            mgr.set_principal(own_resp.stream.clone()).await;
+        }
+        for (room_id, after) in &effective_rooms {
+            let req = tinkle_schema::proto::FollowUpdatesRequest {
+                stream: format!("room:{room_id}"),
+                after_cursor: *after,
+            };
+            // Room follow failures surface immediately; own follow already
+            // established, so caller can retry rooms without losing own.
+            let _ = self.updates().follow(req).await?;
+        }
+        if !watch_user_ids.is_empty() {
+            let req = tinkle_schema::proto::ObserveConnectivityRequest {
+                user_ids: watch_user_ids.clone(),
+            };
+            let _ = self.updates().observe_connectivity(req).await;
+        }
+
         mgr.on_subscribed(effective_rooms.clone(), watch_user_ids.clone())
             .await;
         *self.interests.lock().await = Interests {
@@ -266,35 +495,41 @@ impl Client {
             watch_user_ids,
             subscribed: true,
         };
-        Ok(resp)
+        Ok(SubscribeResult {
+            stream: own_resp.stream.clone(),
+            after_cursor: own_cursor,
+            head: head.or(own_resp.head),
+        })
     }
 
-    /// Next realtime app event (batch/presence/gap/reset/checkpoint-failure).
-    pub async fn next_event(&self) -> Option<RealtimeEvent> {
+    /// Next sync event. `UpdateReady` must be followed by `acknowledge`
+    /// after successful application.
+    pub async fn next_event(&self) -> Option<SyncEvent> {
         let mgr = self.live_mgr().await.ok()?;
         mgr.next_event().await
     }
 
-    /// Graceful close: stop new RPCs, allow close grace, teardown.
-    /// In-flight RPCs get `UNAVAILABLE`/`CANCELLED`. State is discarded
-    /// except durable cursors + diagnostics.
+    /// Persist the checkpoint after applying the update.
+    pub async fn acknowledge(&self, stream: &str, cursor: u64) -> Result<(), TinkleError> {
+        let mgr = self.live_mgr().await?;
+        mgr.acknowledge(stream, cursor).await
+    }
+
+    /// Graceful close.
     pub async fn close(&self) {
         if let Some(live) = self.live.write().await.take() {
             live.handle.close().await;
             live.pump.abort();
-            live.sub_mgr.on_disconnect().await;
+            live.sync_mgr.on_disconnect().await;
         }
     }
 
-    /// Background suspension (mobile): graceful close, keep durable
-    /// cursors. No permanent background WebSocket is assumed.
+    /// Background suspension (mobile).
     pub async fn suspend(&self) {
         self.close().await;
     }
 
-    /// App restart / network change / wake: reconnect + re-handshake +
-    /// explicit resubscribe from persisted cursors. Push notifications
-    /// trigger this after wake (see docs/mobile-lifecycle.md).
+    /// Reconnect + re-handshake + explicit resubscribe from persisted cursors.
     pub async fn reconnect(&self) -> Result<(), TinkleError> {
         self.close().await;
         let policy = self.config.reconnect.clone();
@@ -302,10 +537,6 @@ impl Client {
         loop {
             match self.connect().await {
                 Ok(()) => {
-                    // Re-establish Client-level interests explicitly; id
-                    // space is fresh and Live was discarded on close.
-                    // Check `subscribed` (not list emptiness) so the own-user
-                    // stream is restored even when rooms/watch are empty.
                     let (subscribed, rooms, watch) = {
                         let g = self.interests.lock().await;
                         (g.subscribed, g.rooms.clone(), g.watch_user_ids.clone())
@@ -313,44 +544,11 @@ impl Client {
                     if subscribed {
                         let previous = self.principal().await;
                         if previous == "unknown" {
-                            // Principal not yet known: probe once to learn it
-                            // before reusing stored cursors. `subscribe()`
-                            // below then loads max(after, stored) under the
-                            // authenticated principal (no separate refresh
-                            // loop needed). 2 RPCs, unavoidable without a
-                            // separate identity RPC.
-                            let probe = tinkle_schema::proto::SubscribeRequest {
-                                own_cursor: None,
-                                rooms: Vec::new(),
-                                watch_user_ids: Vec::new(),
-                            };
-                            let authenticated = match self.realtime().subscribe_batched(probe).await
-                            {
-                                Ok(resp) => resp.stream,
-                                Err(e) => {
-                                    self.close().await;
-                                    return Err(e);
-                                }
-                            };
-                            *self.principal.write().await = authenticated.clone();
-                            if let Ok(mgr) = self.live_mgr().await {
-                                mgr.set_principal(authenticated.clone()).await;
-                            }
-                            // A subscription failure after connecting must not
-                            // leave the new connection half-open: close/reset
-                            // before propagating the original error so
-                            // is_connected() no longer reports success and a
-                            // later connect() can restore subscriptions.
                             if let Err(e) = self.subscribe(rooms, watch).await {
                                 self.close().await;
                                 return Err(e);
                             }
                         } else {
-                            // Common case: principal already known. Single RPC
-                            // via `subscribe()`, which loads max(after,
-                            // stored) under the known principal. If the
-                            // credential now maps to a different account, the
-                            // returned stream differs and we correct below.
                             let original_rooms = rooms.clone();
                             let watch_clone = watch.clone();
                             let resp = match self.subscribe(rooms, watch).await {
@@ -361,11 +559,6 @@ impl Client {
                                 }
                             };
                             if resp.stream != previous {
-                                // Rotation: the first subscribe may have sent
-                                // old-principal checkpoints. Re-subscribe
-                                // zeroed so the new principal starts from its
-                                // own durable checkpoints (subscribe()
-                                // recomputes max(0, stored_under_new)).
                                 let zeroed = original_rooms
                                     .into_iter()
                                     .map(|(id, _)| (id, 0))
@@ -391,26 +584,12 @@ impl Client {
         }
     }
 
-    /// Token expiry rotation: replace credential and re-handshake on a new
-    /// transport (re-auth on the same connection is forbidden by default).
-    // TODO(runtime-acceptance-credential): UNAUTHENTICATED triggers a single
-    // rotation + reconnect; acceptance must assert no hot re-auth loop.
     pub async fn rotate_credential(&mut self, next: Credential) -> Result<(), TinkleError> {
         self.close().await;
         self.credential = next;
-        // Keep the previous principal until the next subscribe learns the new
-        // one via `SubscribeResponse.stream`. Resetting to "unknown" would make
-        // the next reconnect's `authenticated != previous` check always true
-        // and discard room cursors even for the same account. Instead, the
-        // next `subscribe()`/`reconnect()` compares stored (previous) vs new
-        // and discards only on an actual principal change, preserving cursors
-        // when `authenticated == previous`. This works even though rotation
-        // itself does close+connect without resubscribe: interests survive and
-        // the follow-up resubscribe performs the comparison.
         self.connect().await
     }
 
-    /// Observability: outstanding RPC count.
     pub async fn pending_len(&self) -> usize {
         match self.live.read().await.as_ref() {
             Some(l) => l.handle.connection().pending_len(),
@@ -425,10 +604,12 @@ impl Client {
             .as_ref()
             .map(|l| l.connection_id.clone())
     }
+
+    pub async fn version(&self) -> Option<u32> {
+        self.live.read().await.as_ref().map(|l| l.version)
+    }
 }
 
 fn principal_user_suffix(principal: &str) -> String {
-    // principal labels are `user:<id>` after first subscribe; before that
-    // the label is "unknown" and the own stream hydrates as zero.
     principal.strip_prefix("user:").unwrap_or("0").to_string()
 }

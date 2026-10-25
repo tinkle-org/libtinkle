@@ -724,6 +724,8 @@ internal object IntegrityCheckingUniffiLib {
     internal fun ensureInitialized() = Unit
     external fun uniffi_tinkle_ffi_checksum_func_tinkle_ffi_init(
     ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_acknowledge(
+    ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_connect(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_next_event(
@@ -732,11 +734,25 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_send_message(
     ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_set_principal_user_id(
+    ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_shutdown(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_subscribe(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_suspend(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_sqlitestorage_clear_principal(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_sqlitestorage_get_chat_proto(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_sqlitestorage_get_messages(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_sqlitestorage_get_user_proto(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_sqlitestorage_list_dialogs(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_sqlitestorage_load_checkpoint(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_fficursorstore_load(
     ): Int
@@ -747,6 +763,12 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_tinkle_ffi_checksum_method_fficursorstore_clear_principal(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open_in_memory(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_constructor_inmemoryffistore_new(
     ): Int
@@ -777,6 +799,10 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_tinkle_ffi_fn_constructor_tinkleclient_new(`config`: RustBuffer.ByValue,`credential`: RustBuffer.ByValue,`store`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Long
+    external fun uniffi_tinkle_ffi_fn_constructor_tinkleclient_new_sqlite(`config`: RustBuffer.ByValue,`credential`: RustBuffer.ByValue,`storage`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_acknowledge(`ptr`: Long,`stream`: RustBuffer.ByValue,`cursor`: Long,
+    ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_connect(`ptr`: Long,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_next_event(`ptr`: Long,
@@ -785,11 +811,33 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_send_message(`ptr`: Long,`roomId`: Long,`text`: RustBuffer.ByValue,`randomId`: Long,
     ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_set_principal_user_id(`ptr`: Long,`userId`: Long,
+    ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_shutdown(`ptr`: Long,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_subscribe(`ptr`: Long,`rooms`: RustBuffer.ByValue,`watch`: RustBuffer.ByValue,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_suspend(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_clone_sqlitestorage(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_free_sqlitestorage(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_constructor_sqlitestorage_open(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_constructor_sqlitestorage_open_in_memory(uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_sqlitestorage_clear_principal(`ptr`: Long,`principal`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_sqlitestorage_get_chat_proto(`ptr`: Long,`principal`: RustBuffer.ByValue,`chatId`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_sqlitestorage_get_messages(`ptr`: Long,`principal`: RustBuffer.ByValue,`conversationKey`: RustBuffer.ByValue,`limit`: Int,`beforeId`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_sqlitestorage_get_user_proto(`ptr`: Long,`principal`: RustBuffer.ByValue,`userId`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_sqlitestorage_list_dialogs(`ptr`: Long,`principal`: RustBuffer.ByValue,`limit`: Int,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_sqlitestorage_load_checkpoint(`ptr`: Long,`principal`: RustBuffer.ByValue,`stream`: RustBuffer.ByValue,
     ): Long
     external fun uniffi_tinkle_ffi_fn_clone_fficursorstore(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Long
@@ -935,16 +983,22 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_func_tinkle_ffi_init() and 0xFFFF) != 34048) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_acknowledge() and 0xFFFF) != 704) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_connect() and 0xFFFF) != 48303) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_next_event() and 0xFFFF) != 18345) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_next_event() and 0xFFFF) != 57455) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect() and 0xFFFF) != 30012) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_send_message() and 0xFFFF) != 3916) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_set_principal_user_id() and 0xFFFF) != 20741) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_shutdown() and 0xFFFF) != 52153) {
@@ -954,6 +1008,24 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_suspend() and 0xFFFF) != 33260) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_clear_principal() and 0xFFFF) != 24979) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_get_chat_proto() and 0xFFFF) != 15884) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_get_messages() and 0xFFFF) != 15860) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_get_user_proto() and 0xFFFF) != 49315) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_list_dialogs() and 0xFFFF) != 28584) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_load_checkpoint() and 0xFFFF) != 33864) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_fficursorstore_load() and 0xFFFF) != 11126) {
@@ -969,6 +1041,15 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new() and 0xFFFF) != 22029) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite() and 0xFFFF) != 22154) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open() and 0xFFFF) != 49106) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open_in_memory() and 0xFFFF) != 8980) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_constructor_inmemoryffistore_new() and 0xFFFF) != 37004) {
@@ -1317,6 +1398,29 @@ public object FfiConverterUInt: FfiConverter<UInt, Int> {
 /**
  * @suppress
  */
+public object FfiConverterInt: FfiConverter<Int, Int> {
+    override fun lift(value: Int): Int {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Int {
+        return buf.getInt()
+    }
+
+    override fun lower(value: Int): Int {
+        return value
+    }
+
+    override fun allocationSize(value: Int) = 4UL
+
+    override fun write(value: Int, buf: ByteBuffer) {
+        buf.putInt(value)
+    }
+}
+
+/**
+ * @suppress
+ */
 public object FfiConverterULong: FfiConverter<ULong, Long> {
     override fun lift(value: Long): ULong {
         return value.toULong()
@@ -1437,6 +1541,25 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
         val byteBuf = toUtf8(value)
         buf.putInt(byteBuf.limit())
         buf.put(byteBuf)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
+    override fun read(buf: ByteBuffer): ByteArray {
+        val len = buf.getInt()
+        val byteArr = ByteArray(len)
+        buf.get(byteArr)
+        return byteArr
+    }
+    override fun allocationSize(value: ByteArray): ULong {
+        return 4UL + value.size.toULong()
+    }
+    override fun write(value: ByteArray, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        buf.put(value)
     }
 }
 
@@ -2333,9 +2456,435 @@ public object FfiConverterTypeInMemoryFfiStore: FfiConverter<InMemoryFfiStore, L
 
 
 /**
+ * Rust-owned SQLite database shared by iOS and Android.
+ */
+public interface SqliteStorageInterface {
+
+    suspend fun `clearPrincipal`(`principal`: kotlin.String)
+
+    suspend fun `getChatProto`(`principal`: kotlin.String, `chatId`: kotlin.Long): kotlin.ByteArray?
+
+    suspend fun `getMessages`(`principal`: kotlin.String, `conversationKey`: kotlin.String, `limit`: kotlin.UInt, `beforeId`: kotlin.Long?): List<FfiMessage>
+
+    suspend fun `getUserProto`(`principal`: kotlin.String, `userId`: kotlin.Long): kotlin.ByteArray?
+
+    suspend fun `listDialogs`(`principal`: kotlin.String, `limit`: kotlin.UInt): List<FfiDialog>
+
+    suspend fun `loadCheckpoint`(`principal`: kotlin.String, `stream`: kotlin.String): kotlin.ULong?
+
+    companion object
+}
+
+/**
+ * Rust-owned SQLite database shared by iOS and Android.
+ */
+open class SqliteStorage: Disposable, AutoCloseable, SqliteStorageInterface
+{
+
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
+    }
+
+    /**
+     * @suppress
+     *
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
+    }
+
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the handle being freed concurrently.
+        try {
+            return block(this.uniffiCloneHandle())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
+        override fun run() {
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_tinkle_ffi_fn_free_sqlitestorage(handle, status)
+            }
+        }
+    }
+
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
+        return uniffiRustCall() { status ->
+            UniffiLib.uniffi_tinkle_ffi_fn_clone_sqlitestorage(handle, status)
+        }
+    }
+
+
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `clearPrincipal`(`principal`: kotlin.String) {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_sqlitestorage_clear_principal(
+                uniffiHandle,
+
+        FfiConverterString.lower(`principal`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_void(future) },
+        // lift function
+        { },
+
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `getChatProto`(`principal`: kotlin.String, `chatId`: kotlin.Long) : kotlin.ByteArray? {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_sqlitestorage_get_chat_proto(
+                uniffiHandle,
+
+        FfiConverterString.lower(`principal`),
+        FfiConverterLong.lower(`chatId`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `getMessages`(`principal`: kotlin.String, `conversationKey`: kotlin.String, `limit`: kotlin.UInt, `beforeId`: kotlin.Long?) : List<FfiMessage> {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_sqlitestorage_get_messages(
+                uniffiHandle,
+
+        FfiConverterString.lower(`principal`),
+        FfiConverterString.lower(`conversationKey`),
+        FfiConverterUInt.lower(`limit`),
+        FfiConverterOptionalLong.lower(`beforeId`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeFfiMessage.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `getUserProto`(`principal`: kotlin.String, `userId`: kotlin.Long) : kotlin.ByteArray? {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_sqlitestorage_get_user_proto(
+                uniffiHandle,
+
+        FfiConverterString.lower(`principal`),
+        FfiConverterLong.lower(`userId`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `listDialogs`(`principal`: kotlin.String, `limit`: kotlin.UInt) : List<FfiDialog> {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_sqlitestorage_list_dialogs(
+                uniffiHandle,
+
+        FfiConverterString.lower(`principal`),
+        FfiConverterUInt.lower(`limit`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeFfiDialog.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `loadCheckpoint`(`principal`: kotlin.String, `stream`: kotlin.String) : kotlin.ULong? {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_sqlitestorage_load_checkpoint(
+                uniffiHandle,
+
+        FfiConverterString.lower(`principal`),
+        FfiConverterString.lower(`stream`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalULong.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+
+
+
+
+
+    companion object {
+
+    @Throws(FfiException::class) fun `open`(`path`: kotlin.String): SqliteStorage {
+            return FfiConverterTypeSqliteStorage.lift(
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_constructor_sqlitestorage_open(
+
+
+        FfiConverterString.lower(`path`),_status)
+}
+    )
+    }
+
+
+
+    @Throws(FfiException::class) fun `openInMemory`(): SqliteStorage {
+            return FfiConverterTypeSqliteStorage.lift(
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_constructor_sqlitestorage_open_in_memory(
+
+        _status)
+}
+    )
+    }
+
+
+
+    }
+
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSqliteStorage: FfiConverter<SqliteStorage, Long> {
+    override fun lower(value: SqliteStorage): Long {
+        return value.uniffiCloneHandle()
+    }
+
+    override fun lift(value: Long): SqliteStorage {
+        return SqliteStorage(UniffiWithHandle, value)
+    }
+
+    override fun read(buf: ByteBuffer): SqliteStorage {
+        return lift(buf.getLong())
+    }
+
+    override fun allocationSize(value: SqliteStorage) = 8UL
+
+    override fun write(value: SqliteStorage, buf: ByteBuffer) {
+        buf.putLong(lower(value))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a handle
+// to the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its handle should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the handle, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
  * UniFFI client object.
  */
 public interface TinkleClientInterface {
+
+    /**
+     * Persist the checkpoint after applying an `UpdateReady` event.
+     */
+    suspend fun `acknowledge`(`stream`: kotlin.String, `cursor`: kotlin.ULong)
 
     /**
      * Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
@@ -2343,9 +2892,9 @@ public interface TinkleClientInterface {
     suspend fun `connect`()
 
     /**
-     * Next realtime app event. `None` when the client is closed.
+     * Next sync app event. `None` when the client is closed.
      */
-    suspend fun `nextEvent`(): FfiRealtimeEvent?
+    suspend fun `nextEvent`(): FfiSyncEvent?
 
     /**
      * Reconnect + re-handshake + explicit resubscribe from persisted
@@ -2358,6 +2907,11 @@ public interface TinkleClientInterface {
      * Returns the server-assigned message id.
      */
     suspend fun `sendMessage`(`roomId`: kotlin.Long, `text`: kotlin.String, `randomId`: kotlin.ULong): kotlin.ULong
+
+    /**
+     * Set the authenticated principal from a known user id.
+     */
+    suspend fun `setPrincipalUserId`(`userId`: kotlin.Long)
 
     /**
      * Graceful shutdown: stop RPCs, tear down transport.
@@ -2499,6 +3053,33 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
 
     /**
+     * Persist the checkpoint after applying an `UpdateReady` event.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `acknowledge`(`stream`: kotlin.String, `cursor`: kotlin.ULong) {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_acknowledge(
+                uniffiHandle,
+
+        FfiConverterString.lower(`stream`),
+        FfiConverterULong.lower(`cursor`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_void(future) },
+        // lift function
+        { },
+
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
      * Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
      */
     @Throws(FfiException::class)
@@ -2524,10 +3105,10 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
 
     /**
-     * Next realtime app event. `None` when the client is closed.
+     * Next sync app event. `None` when the client is closed.
      */
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `nextEvent`() : FfiRealtimeEvent? {
+    override suspend fun `nextEvent`() : FfiSyncEvent? {
         return uniffiRustCallAsync(
         callWithHandle { uniffiHandle ->
             UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_next_event(
@@ -2539,7 +3120,7 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
         { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
         { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
         // lift function
-        { FfiConverterOptionalTypeFfiRealtimeEvent.lift(it) },
+        { FfiConverterOptionalTypeFfiSyncEvent.lift(it) },
         // Error FFI converter
         UniffiNullRustCallStatusErrorHandler,
     )
@@ -2596,6 +3177,31 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
         { FfiConverterULong.lift(it) },
         // Error FFI converter
         FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Set the authenticated principal from a known user id.
+     */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `setPrincipalUserId`(`userId`: kotlin.Long) {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_set_principal_user_id(
+                uniffiHandle,
+
+        FfiConverterLong.lower(`userId`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_void(future) },
+        // lift function
+        { },
+
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
     )
     }
 
@@ -2680,11 +3286,28 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
 
 
+    companion object {
 
     /**
-     * @suppress
-     */
-    companion object
+     * Create a client sharing one native SQLite file. Rust applies incoming
+     * updates and commits cache + checkpoint atomically, then emits
+     * `Applied`; UI reads the shared cache instead of acknowledging.
+     */ fun `newSqlite`(`config`: ClientConfigFfi, `credential`: kotlin.String, `storage`: SqliteStorage): TinkleClient {
+            return FfiConverterTypeTinkleClient.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_constructor_tinkleclient_new_sqlite(
+
+
+        FfiConverterTypeClientConfigFfi.lower(`config`),
+        FfiConverterString.lower(`credential`),
+        FfiConverterTypeSqliteStorage.lower(`storage`),_status)
+}
+    )
+    }
+
+
+
+    }
 
 }
 
@@ -2732,6 +3355,11 @@ data class ClientConfigFfi (
      * Optional user-agent string.
      */
     var `userAgent`: kotlin.String?
+    ,
+    /**
+     * gRPC base endpoint for `ReadUpdates` catch-up.
+     */
+    var `grpcEndpoint`: kotlin.String?
 
 ){
 
@@ -2751,26 +3379,166 @@ public object FfiConverterTypeClientConfigFfi: FfiConverterRustBuffer<ClientConf
             FfiConverterString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
     override fun allocationSize(value: ClientConfigFfi) = (
             FfiConverterString.allocationSize(value.`url`) +
             FfiConverterBoolean.allocationSize(value.`allowInsecure`) +
-            FfiConverterOptionalString.allocationSize(value.`userAgent`)
+            FfiConverterOptionalString.allocationSize(value.`userAgent`) +
+            FfiConverterOptionalString.allocationSize(value.`grpcEndpoint`)
     )
 
     override fun write(value: ClientConfigFfi, buf: ByteBuffer) {
             FfiConverterString.write(value.`url`, buf)
             FfiConverterBoolean.write(value.`allowInsecure`, buf)
             FfiConverterOptionalString.write(value.`userAgent`, buf)
+            FfiConverterOptionalString.write(value.`grpcEndpoint`, buf)
     }
 }
 
 
 
 /**
- * Subscribe confirmation (FFI-safe mirror of the proto response).
+ * FFI-safe cached dialog.
+ */
+data class FfiDialog (
+    var `peerKind`: kotlin.String
+    ,
+    var `peerId`: kotlin.Long
+    ,
+    var `topMessage`: kotlin.Long
+    ,
+    var `unreadCount`: kotlin.Int
+    ,
+    var `readInboxMaxId`: kotlin.Long
+    ,
+    var `readOutboxMaxId`: kotlin.Long
+    ,
+    var `pinned`: kotlin.Boolean
+    ,
+    var `dialogProto`: kotlin.ByteArray
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiDialog: FfiConverterRustBuffer<FfiDialog> {
+    override fun read(buf: ByteBuffer): FfiDialog {
+        return FfiDialog(
+            FfiConverterString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterInt.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterByteArray.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiDialog) = (
+            FfiConverterString.allocationSize(value.`peerKind`) +
+            FfiConverterLong.allocationSize(value.`peerId`) +
+            FfiConverterLong.allocationSize(value.`topMessage`) +
+            FfiConverterInt.allocationSize(value.`unreadCount`) +
+            FfiConverterLong.allocationSize(value.`readInboxMaxId`) +
+            FfiConverterLong.allocationSize(value.`readOutboxMaxId`) +
+            FfiConverterBoolean.allocationSize(value.`pinned`) +
+            FfiConverterByteArray.allocationSize(value.`dialogProto`)
+    )
+
+    override fun write(value: FfiDialog, buf: ByteBuffer) {
+            FfiConverterString.write(value.`peerKind`, buf)
+            FfiConverterLong.write(value.`peerId`, buf)
+            FfiConverterLong.write(value.`topMessage`, buf)
+            FfiConverterInt.write(value.`unreadCount`, buf)
+            FfiConverterLong.write(value.`readInboxMaxId`, buf)
+            FfiConverterLong.write(value.`readOutboxMaxId`, buf)
+            FfiConverterBoolean.write(value.`pinned`, buf)
+            FfiConverterByteArray.write(value.`dialogProto`, buf)
+    }
+}
+
+
+
+/**
+ * FFI-safe cached message.
+ */
+data class FfiMessage (
+    var `conversationKey`: kotlin.String
+    ,
+    var `messageId`: kotlin.Long
+    ,
+    var `peerKind`: kotlin.String
+    ,
+    var `peerId`: kotlin.Long
+    ,
+    var `fromId`: kotlin.Long
+    ,
+    var `body`: kotlin.String
+    ,
+    var `messageProto`: kotlin.ByteArray
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiMessage: FfiConverterRustBuffer<FfiMessage> {
+    override fun read(buf: ByteBuffer): FfiMessage {
+        return FfiMessage(
+            FfiConverterString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterByteArray.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiMessage) = (
+            FfiConverterString.allocationSize(value.`conversationKey`) +
+            FfiConverterLong.allocationSize(value.`messageId`) +
+            FfiConverterString.allocationSize(value.`peerKind`) +
+            FfiConverterLong.allocationSize(value.`peerId`) +
+            FfiConverterLong.allocationSize(value.`fromId`) +
+            FfiConverterString.allocationSize(value.`body`) +
+            FfiConverterByteArray.allocationSize(value.`messageProto`)
+    )
+
+    override fun write(value: FfiMessage, buf: ByteBuffer) {
+            FfiConverterString.write(value.`conversationKey`, buf)
+            FfiConverterLong.write(value.`messageId`, buf)
+            FfiConverterString.write(value.`peerKind`, buf)
+            FfiConverterLong.write(value.`peerId`, buf)
+            FfiConverterLong.write(value.`fromId`, buf)
+            FfiConverterString.write(value.`body`, buf)
+            FfiConverterByteArray.write(value.`messageProto`, buf)
+    }
+}
+
+
+
+/**
+ * Subscribe confirmation.
  */
 data class FfiSubscribeResponse (
     var `stream`: kotlin.String
@@ -2896,7 +3664,7 @@ sealed class FfiException: kotlin.Exception() {
             get() = ""
     }
 
-    class Realtime(
+    class Sync(
 
         val v1: kotlin.String
         ) : FfiException() {
@@ -2959,7 +3727,7 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
             2 -> FfiException.NotConnected()
             3 -> FfiException.Timeout()
             4 -> FfiException.Cancelled()
-            5 -> FfiException.Realtime(
+            5 -> FfiException.Sync(
                 FfiConverterString.read(buf),
                 )
             6 -> FfiException.Codec(
@@ -2995,7 +3763,7 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
                 // Add the size for the Int that specifies the variant plus the size needed for all fields
                 4UL
             )
-            is FfiException.Realtime -> (
+            is FfiException.Sync -> (
                 // Add the size for the Int that specifies the variant plus the size needed for all fields
                 4UL
                 + FfiConverterString.allocationSize(value.v1)
@@ -3041,7 +3809,7 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
                 buf.putInt(4)
                 Unit
             }
-            is FfiException.Realtime -> {
+            is FfiException.Sync -> {
                 buf.putInt(5)
                 FfiConverterString.write(value.v1, buf)
                 Unit
@@ -3073,15 +3841,25 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
 
 
 /**
- * App-visible realtime events. Owned primitives only; the underlying
- * proto batch is summarized as an event count, never exposed.
+ * App-visible sync events. Update payloads cross as protobuf bytes;
+ * hosts decode `tinkle.v1.Update` with their own generated bindings.
  */
-sealed class FfiRealtimeEvent {
+sealed class FfiSyncEvent {
 
-    data class BatchApplied(
+    data class UpdateReady(
         val `stream`: kotlin.String,
-        val `finalCursor`: kotlin.ULong,
-        val `eventCount`: kotlin.UInt) : FfiRealtimeEvent()
+        val `cursor`: kotlin.ULong,
+        val `updateProto`: kotlin.ByteArray) : FfiSyncEvent()
+
+    {
+
+
+        companion object
+    }
+
+    data class Applied(
+        val `stream`: kotlin.String,
+        val `cursor`: kotlin.ULong) : FfiSyncEvent()
 
     {
 
@@ -3091,7 +3869,7 @@ sealed class FfiRealtimeEvent {
 
     data class Duplicate(
         val `stream`: kotlin.String,
-        val `cursor`: kotlin.ULong) : FfiRealtimeEvent()
+        val `cursor`: kotlin.ULong) : FfiSyncEvent()
 
     {
 
@@ -3102,7 +3880,7 @@ sealed class FfiRealtimeEvent {
     data class Gap(
         val `stream`: kotlin.String,
         val `expected`: kotlin.ULong,
-        val `got`: kotlin.ULong) : FfiRealtimeEvent()
+        val `got`: kotlin.ULong) : FfiSyncEvent()
 
     {
 
@@ -3113,7 +3891,7 @@ sealed class FfiRealtimeEvent {
     data class Stale(
         val `stream`: kotlin.String,
         val `applied`: kotlin.ULong,
-        val `got`: kotlin.ULong) : FfiRealtimeEvent()
+        val `got`: kotlin.ULong) : FfiSyncEvent()
 
     {
 
@@ -3121,10 +3899,10 @@ sealed class FfiRealtimeEvent {
         companion object
     }
 
-    data class Presence(
+    data class Connectivity(
         val `userId`: kotlin.Long,
         val `online`: kotlin.Boolean,
-        val `known`: kotlin.Boolean) : FfiRealtimeEvent()
+        val `known`: kotlin.Boolean) : FfiSyncEvent()
 
     {
 
@@ -3132,9 +3910,19 @@ sealed class FfiRealtimeEvent {
         companion object
     }
 
-    data class ResetRequired(
+    data class Progress(
         val `stream`: kotlin.String,
-        val `head`: kotlin.ULong?) : FfiRealtimeEvent()
+        val `head`: kotlin.ULong?) : FfiSyncEvent()
+
+    {
+
+
+        companion object
+    }
+
+    data class RebuildRequired(
+        val `stream`: kotlin.String,
+        val `head`: kotlin.ULong?) : FfiSyncEvent()
 
     {
 
@@ -3145,7 +3933,7 @@ sealed class FfiRealtimeEvent {
     data class CheckpointFailed(
         val `stream`: kotlin.String,
         val `cursor`: kotlin.ULong,
-        val `error`: kotlin.String) : FfiRealtimeEvent()
+        val `error`: kotlin.String) : FfiSyncEvent()
 
     {
 
@@ -3166,38 +3954,46 @@ sealed class FfiRealtimeEvent {
 /**
  * @suppress
  */
-public object FfiConverterTypeFfiRealtimeEvent : FfiConverterRustBuffer<FfiRealtimeEvent>{
-    override fun read(buf: ByteBuffer): FfiRealtimeEvent {
+public object FfiConverterTypeFfiSyncEvent : FfiConverterRustBuffer<FfiSyncEvent>{
+    override fun read(buf: ByteBuffer): FfiSyncEvent {
         return when(buf.getInt()) {
-            1 -> FfiRealtimeEvent.BatchApplied(
+            1 -> FfiSyncEvent.UpdateReady(
                 FfiConverterString.read(buf),
                 FfiConverterULong.read(buf),
-                FfiConverterUInt.read(buf),
+                FfiConverterByteArray.read(buf),
                 )
-            2 -> FfiRealtimeEvent.Duplicate(
+            2 -> FfiSyncEvent.Applied(
                 FfiConverterString.read(buf),
                 FfiConverterULong.read(buf),
                 )
-            3 -> FfiRealtimeEvent.Gap(
+            3 -> FfiSyncEvent.Duplicate(
+                FfiConverterString.read(buf),
+                FfiConverterULong.read(buf),
+                )
+            4 -> FfiSyncEvent.Gap(
                 FfiConverterString.read(buf),
                 FfiConverterULong.read(buf),
                 FfiConverterULong.read(buf),
                 )
-            4 -> FfiRealtimeEvent.Stale(
+            5 -> FfiSyncEvent.Stale(
                 FfiConverterString.read(buf),
                 FfiConverterULong.read(buf),
                 FfiConverterULong.read(buf),
                 )
-            5 -> FfiRealtimeEvent.Presence(
+            6 -> FfiSyncEvent.Connectivity(
                 FfiConverterLong.read(buf),
                 FfiConverterBoolean.read(buf),
                 FfiConverterBoolean.read(buf),
                 )
-            6 -> FfiRealtimeEvent.ResetRequired(
+            7 -> FfiSyncEvent.Progress(
                 FfiConverterString.read(buf),
                 FfiConverterOptionalULong.read(buf),
                 )
-            7 -> FfiRealtimeEvent.CheckpointFailed(
+            8 -> FfiSyncEvent.RebuildRequired(
+                FfiConverterString.read(buf),
+                FfiConverterOptionalULong.read(buf),
+                )
+            9 -> FfiSyncEvent.CheckpointFailed(
                 FfiConverterString.read(buf),
                 FfiConverterULong.read(buf),
                 FfiConverterString.read(buf),
@@ -3206,17 +4002,17 @@ public object FfiConverterTypeFfiRealtimeEvent : FfiConverterRustBuffer<FfiRealt
         }
     }
 
-    override fun allocationSize(value: FfiRealtimeEvent): ULong = when(value) {
-        is FfiRealtimeEvent.BatchApplied -> {
+    override fun allocationSize(value: FfiSyncEvent): ULong = when(value) {
+        is FfiSyncEvent.UpdateReady -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
                 + FfiConverterString.allocationSize(value.`stream`)
-                + FfiConverterULong.allocationSize(value.`finalCursor`)
-                + FfiConverterUInt.allocationSize(value.`eventCount`)
+                + FfiConverterULong.allocationSize(value.`cursor`)
+                + FfiConverterByteArray.allocationSize(value.`updateProto`)
             )
         }
-        is FfiRealtimeEvent.Duplicate -> {
+        is FfiSyncEvent.Applied -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
@@ -3224,7 +4020,15 @@ public object FfiConverterTypeFfiRealtimeEvent : FfiConverterRustBuffer<FfiRealt
                 + FfiConverterULong.allocationSize(value.`cursor`)
             )
         }
-        is FfiRealtimeEvent.Gap -> {
+        is FfiSyncEvent.Duplicate -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`stream`)
+                + FfiConverterULong.allocationSize(value.`cursor`)
+            )
+        }
+        is FfiSyncEvent.Gap -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
@@ -3233,7 +4037,7 @@ public object FfiConverterTypeFfiRealtimeEvent : FfiConverterRustBuffer<FfiRealt
                 + FfiConverterULong.allocationSize(value.`got`)
             )
         }
-        is FfiRealtimeEvent.Stale -> {
+        is FfiSyncEvent.Stale -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
@@ -3242,7 +4046,7 @@ public object FfiConverterTypeFfiRealtimeEvent : FfiConverterRustBuffer<FfiRealt
                 + FfiConverterULong.allocationSize(value.`got`)
             )
         }
-        is FfiRealtimeEvent.Presence -> {
+        is FfiSyncEvent.Connectivity -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
@@ -3251,7 +4055,7 @@ public object FfiConverterTypeFfiRealtimeEvent : FfiConverterRustBuffer<FfiRealt
                 + FfiConverterBoolean.allocationSize(value.`known`)
             )
         }
-        is FfiRealtimeEvent.ResetRequired -> {
+        is FfiSyncEvent.Progress -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
@@ -3259,7 +4063,15 @@ public object FfiConverterTypeFfiRealtimeEvent : FfiConverterRustBuffer<FfiRealt
                 + FfiConverterOptionalULong.allocationSize(value.`head`)
             )
         }
-        is FfiRealtimeEvent.CheckpointFailed -> {
+        is FfiSyncEvent.RebuildRequired -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`stream`)
+                + FfiConverterOptionalULong.allocationSize(value.`head`)
+            )
+        }
+        is FfiSyncEvent.CheckpointFailed -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
@@ -3270,50 +4082,62 @@ public object FfiConverterTypeFfiRealtimeEvent : FfiConverterRustBuffer<FfiRealt
         }
     }
 
-    override fun write(value: FfiRealtimeEvent, buf: ByteBuffer) {
+    override fun write(value: FfiSyncEvent, buf: ByteBuffer) {
         when(value) {
-            is FfiRealtimeEvent.BatchApplied -> {
+            is FfiSyncEvent.UpdateReady -> {
                 buf.putInt(1)
                 FfiConverterString.write(value.`stream`, buf)
-                FfiConverterULong.write(value.`finalCursor`, buf)
-                FfiConverterUInt.write(value.`eventCount`, buf)
+                FfiConverterULong.write(value.`cursor`, buf)
+                FfiConverterByteArray.write(value.`updateProto`, buf)
                 Unit
             }
-            is FfiRealtimeEvent.Duplicate -> {
+            is FfiSyncEvent.Applied -> {
                 buf.putInt(2)
                 FfiConverterString.write(value.`stream`, buf)
                 FfiConverterULong.write(value.`cursor`, buf)
                 Unit
             }
-            is FfiRealtimeEvent.Gap -> {
+            is FfiSyncEvent.Duplicate -> {
                 buf.putInt(3)
+                FfiConverterString.write(value.`stream`, buf)
+                FfiConverterULong.write(value.`cursor`, buf)
+                Unit
+            }
+            is FfiSyncEvent.Gap -> {
+                buf.putInt(4)
                 FfiConverterString.write(value.`stream`, buf)
                 FfiConverterULong.write(value.`expected`, buf)
                 FfiConverterULong.write(value.`got`, buf)
                 Unit
             }
-            is FfiRealtimeEvent.Stale -> {
-                buf.putInt(4)
+            is FfiSyncEvent.Stale -> {
+                buf.putInt(5)
                 FfiConverterString.write(value.`stream`, buf)
                 FfiConverterULong.write(value.`applied`, buf)
                 FfiConverterULong.write(value.`got`, buf)
                 Unit
             }
-            is FfiRealtimeEvent.Presence -> {
-                buf.putInt(5)
+            is FfiSyncEvent.Connectivity -> {
+                buf.putInt(6)
                 FfiConverterLong.write(value.`userId`, buf)
                 FfiConverterBoolean.write(value.`online`, buf)
                 FfiConverterBoolean.write(value.`known`, buf)
                 Unit
             }
-            is FfiRealtimeEvent.ResetRequired -> {
-                buf.putInt(6)
+            is FfiSyncEvent.Progress -> {
+                buf.putInt(7)
                 FfiConverterString.write(value.`stream`, buf)
                 FfiConverterOptionalULong.write(value.`head`, buf)
                 Unit
             }
-            is FfiRealtimeEvent.CheckpointFailed -> {
-                buf.putInt(7)
+            is FfiSyncEvent.RebuildRequired -> {
+                buf.putInt(8)
+                FfiConverterString.write(value.`stream`, buf)
+                FfiConverterOptionalULong.write(value.`head`, buf)
+                Unit
+            }
+            is FfiSyncEvent.CheckpointFailed -> {
+                buf.putInt(9)
                 FfiConverterString.write(value.`stream`, buf)
                 FfiConverterULong.write(value.`cursor`, buf)
                 FfiConverterString.write(value.`error`, buf)
@@ -3363,6 +4187,38 @@ public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
 /**
  * @suppress
  */
+public object FfiConverterOptionalLong: FfiConverterRustBuffer<kotlin.Long?> {
+    override fun read(buf: ByteBuffer): kotlin.Long? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterLong.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Long?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterLong.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Long?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterLong.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?> {
     override fun read(buf: ByteBuffer): kotlin.String? {
         if (buf.get().toInt() == 0) {
@@ -3395,28 +4251,60 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
 /**
  * @suppress
  */
-public object FfiConverterOptionalTypeFfiRealtimeEvent: FfiConverterRustBuffer<FfiRealtimeEvent?> {
-    override fun read(buf: ByteBuffer): FfiRealtimeEvent? {
+public object FfiConverterOptionalByteArray: FfiConverterRustBuffer<kotlin.ByteArray?> {
+    override fun read(buf: ByteBuffer): kotlin.ByteArray? {
         if (buf.get().toInt() == 0) {
             return null
         }
-        return FfiConverterTypeFfiRealtimeEvent.read(buf)
+        return FfiConverterByteArray.read(buf)
     }
 
-    override fun allocationSize(value: FfiRealtimeEvent?): ULong {
+    override fun allocationSize(value: kotlin.ByteArray?): ULong {
         if (value == null) {
             return 1UL
         } else {
-            return 1UL + FfiConverterTypeFfiRealtimeEvent.allocationSize(value)
+            return 1UL + FfiConverterByteArray.allocationSize(value)
         }
     }
 
-    override fun write(value: FfiRealtimeEvent?, buf: ByteBuffer) {
+    override fun write(value: kotlin.ByteArray?, buf: ByteBuffer) {
         if (value == null) {
             buf.put(0)
         } else {
             buf.put(1)
-            FfiConverterTypeFfiRealtimeEvent.write(value, buf)
+            FfiConverterByteArray.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeFfiSyncEvent: FfiConverterRustBuffer<FfiSyncEvent?> {
+    override fun read(buf: ByteBuffer): FfiSyncEvent? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiSyncEvent.read(buf)
+    }
+
+    override fun allocationSize(value: FfiSyncEvent?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiSyncEvent.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiSyncEvent?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiSyncEvent.write(value, buf)
         }
     }
 }
@@ -3445,6 +4333,62 @@ public object FfiConverterSequenceLong: FfiConverterRustBuffer<List<kotlin.Long>
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterLong.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiDialog: FfiConverterRustBuffer<List<FfiDialog>> {
+    override fun read(buf: ByteBuffer): List<FfiDialog> {
+        val len = buf.getInt()
+        return List<FfiDialog>(len) {
+            FfiConverterTypeFfiDialog.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiDialog>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiDialog.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiDialog>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiDialog.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiMessage: FfiConverterRustBuffer<List<FfiMessage>> {
+    override fun read(buf: ByteBuffer): List<FfiMessage> {
+        val len = buf.getInt()
+        return List<FfiMessage>(len) {
+            FfiConverterTypeFfiMessage.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiMessage>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiMessage.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiMessage>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiMessage.write(it, buf)
         }
     }
 }

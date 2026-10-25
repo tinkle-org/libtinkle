@@ -22,7 +22,7 @@ pub struct RoomSub {
     pub after_cursor: u64,
 }
 
-/// Subscribe confirmation (FFI-safe mirror of the proto response).
+/// Subscribe confirmation.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct FfiSubscribeResponse {
     pub stream: String,
@@ -30,14 +30,18 @@ pub struct FfiSubscribeResponse {
     pub head: Option<u64>,
 }
 
-/// App-visible realtime events. Owned primitives only; the underlying
-/// proto batch is summarized as an event count, never exposed.
+/// App-visible sync events. Update payloads cross as protobuf bytes;
+/// hosts decode `tinkle.v1.Update` with their own generated bindings.
 #[derive(Debug, Clone, uniffi::Enum)]
-pub enum FfiRealtimeEvent {
-    BatchApplied {
+pub enum FfiSyncEvent {
+    UpdateReady {
         stream: String,
-        final_cursor: u64,
-        event_count: u32,
+        cursor: u64,
+        update_proto: Vec<u8>,
+    },
+    Applied {
+        stream: String,
+        cursor: u64,
     },
     Duplicate {
         stream: String,
@@ -53,12 +57,16 @@ pub enum FfiRealtimeEvent {
         applied: u64,
         got: u64,
     },
-    Presence {
+    Connectivity {
         user_id: i64,
         online: bool,
         known: bool,
     },
-    ResetRequired {
+    Progress {
+        stream: String,
+        head: Option<u64>,
+    },
+    RebuildRequired {
         stream: String,
         head: Option<u64>,
     },
@@ -69,22 +77,26 @@ pub enum FfiRealtimeEvent {
     },
 }
 
-impl From<libtinkle::RealtimeEvent> for FfiRealtimeEvent {
-    fn from(e: libtinkle::RealtimeEvent) -> Self {
+impl From<libtinkle::SyncEvent> for FfiSyncEvent {
+    fn from(e: libtinkle::SyncEvent) -> Self {
         match e {
-            libtinkle::RealtimeEvent::BatchApplied {
+            libtinkle::SyncEvent::UpdateReady {
                 stream,
-                final_cursor,
-                batch,
-            } => Self::BatchApplied {
-                stream,
-                final_cursor,
-                event_count: batch.events.len() as u32,
-            },
-            libtinkle::RealtimeEvent::Duplicate { stream, cursor } => {
+                cursor,
+                update,
+            } => {
+                use prost::Message as _;
+                Self::UpdateReady {
+                    stream,
+                    cursor,
+                    update_proto: update.encode_to_vec(),
+                }
+            }
+            libtinkle::SyncEvent::Applied { stream, cursor } => Self::Applied { stream, cursor },
+            libtinkle::SyncEvent::Duplicate { stream, cursor } => {
                 Self::Duplicate { stream, cursor }
             }
-            libtinkle::RealtimeEvent::Gap {
+            libtinkle::SyncEvent::Gap {
                 stream,
                 expected,
                 got,
@@ -93,7 +105,7 @@ impl From<libtinkle::RealtimeEvent> for FfiRealtimeEvent {
                 expected,
                 got,
             },
-            libtinkle::RealtimeEvent::Stale {
+            libtinkle::SyncEvent::Stale {
                 stream,
                 applied,
                 got,
@@ -102,15 +114,16 @@ impl From<libtinkle::RealtimeEvent> for FfiRealtimeEvent {
                 applied,
                 got,
             },
-            libtinkle::RealtimeEvent::Presence(p) => Self::Presence {
-                user_id: p.user_id,
-                online: p.online,
-                known: p.known,
+            libtinkle::SyncEvent::Connectivity(c) => Self::Connectivity {
+                user_id: c.user_id,
+                online: c.online,
+                known: c.known,
             },
-            libtinkle::RealtimeEvent::ResetRequired { stream, head } => {
-                Self::ResetRequired { stream, head }
+            libtinkle::SyncEvent::Progress { stream, head } => Self::Progress { stream, head },
+            libtinkle::SyncEvent::RebuildRequired { stream, head } => {
+                Self::RebuildRequired { stream, head }
             }
-            libtinkle::RealtimeEvent::CheckpointFailed {
+            libtinkle::SyncEvent::CheckpointFailed {
                 stream,
                 cursor,
                 error,
@@ -144,6 +157,24 @@ impl TinkleClient {
             config.into(),
             libtinkle::Credential::from_session_token(&credential),
             Arc::new(crate::store::FfiStoreAdapter(store)),
+        );
+        Arc::new(Self { inner })
+    }
+
+    /// Create a client sharing one native SQLite file. Rust applies incoming
+    /// updates and commits cache + checkpoint atomically, then emits
+    /// `Applied`; UI reads the shared cache instead of acknowledging.
+    #[uniffi::constructor]
+    pub fn new_sqlite(
+        config: ClientConfigFfi,
+        credential: String,
+        storage: Arc<crate::sqlite::SqliteStorage>,
+    ) -> Arc<Self> {
+        crate::runtime::init();
+        let inner = libtinkle::Client::new_sqlite(
+            config.into(),
+            libtinkle::Credential::from_session_token(&credential),
+            storage.native_handle(),
         );
         Arc::new(Self { inner })
     }
@@ -218,9 +249,9 @@ impl TinkleClient {
         })
     }
 
-    /// Next realtime app event. `None` when the client is closed.
-    pub async fn next_event(&self) -> Option<FfiRealtimeEvent> {
-        self.inner.next_event().await.map(FfiRealtimeEvent::from)
+    /// Next sync app event. `None` when the client is closed.
+    pub async fn next_event(&self) -> Option<FfiSyncEvent> {
+        self.inner.next_event().await.map(FfiSyncEvent::from)
     }
 
     /// Background suspension: graceful close, durable cursors kept.
@@ -238,6 +269,19 @@ impl TinkleClient {
     // retried for non-idempotent ops), WorkManager defers sync under Doze.
     pub async fn reconnect(&self) -> Result<(), FfiError> {
         self.inner.reconnect().await.map_err(FfiError::from)
+    }
+
+    /// Persist the checkpoint after applying an `UpdateReady` event.
+    pub async fn acknowledge(&self, stream: String, cursor: u64) -> Result<(), FfiError> {
+        self.inner
+            .acknowledge(&stream, cursor)
+            .await
+            .map_err(FfiError::from)
+    }
+
+    /// Set the authenticated principal from a known user id.
+    pub async fn set_principal_user_id(&self, user_id: i64) {
+        self.inner.set_principal_user_id(user_id).await;
     }
 
     // Named `shutdown` instead of `close` because UniFFI generates a

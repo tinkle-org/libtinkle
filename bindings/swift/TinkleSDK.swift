@@ -487,6 +487,22 @@ fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterInt32: FfiConverterPrimitive {
+    typealias FfiType = Int32
+    typealias SwiftType = Int32
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Int32, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
     typealias FfiType = UInt64
     typealias SwiftType = UInt64
@@ -583,6 +599,24 @@ fileprivate struct FfiConverterString: FfiConverter {
         let len = Int32(value.utf8.count)
         writeInt(&buf, len)
         writeBytes(&buf, value.utf8)
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
     }
 }
 
@@ -1137,9 +1171,251 @@ public func FfiConverterTypeInMemoryFfiStore_lower(_ value: InMemoryFfiStore) ->
 
 
 /**
+ * Rust-owned SQLite database shared by iOS and Android.
+ */
+public protocol SqliteStorageProtocol: AnyObject, Sendable {
+
+    func clearPrincipal(principal: String) async throws
+
+    func getChatProto(principal: String, chatId: Int64) async throws  -> Data?
+
+    func getMessages(principal: String, conversationKey: String, limit: UInt32, beforeId: Int64?) async throws  -> [FfiMessage]
+
+    func getUserProto(principal: String, userId: Int64) async throws  -> Data?
+
+    func listDialogs(principal: String, limit: UInt32) async throws  -> [FfiDialog]
+
+    func loadCheckpoint(principal: String, stream: String) async throws  -> UInt64?
+
+}
+/**
+ * Rust-owned SQLite database shared by iOS and Android.
+ */
+open class SqliteStorage: SqliteStorageProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tinkle_ffi_fn_clone_sqlitestorage(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tinkle_ffi_fn_free_sqlitestorage(handle, $0) }
+    }
+
+
+public static func `open`(path: String)throws  -> SqliteStorage  {
+    return try  FfiConverterTypeSqliteStorage_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_constructor_sqlitestorage_open(
+        FfiConverterString.lower(path),uniffiCallStatus
+    )
+})
+}
+
+public static func openInMemory()throws  -> SqliteStorage  {
+    return try  FfiConverterTypeSqliteStorage_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_constructor_sqlitestorage_open_in_memory(uniffiCallStatus
+    )
+})
+}
+
+
+
+open func clearPrincipal(principal: String)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_sqlitestorage_clear_principal(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(principal)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_void,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+open func getChatProto(principal: String, chatId: Int64)async throws  -> Data?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_sqlitestorage_get_chat_proto(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterInt64.lower(chatId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+open func getMessages(principal: String, conversationKey: String, limit: UInt32, beforeId: Int64?)async throws  -> [FfiMessage]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_sqlitestorage_get_messages(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterString.lower(conversationKey),FfiConverterUInt32.lower(limit),FfiConverterOptionInt64.lower(beforeId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiMessage.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+open func getUserProto(principal: String, userId: Int64)async throws  -> Data?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_sqlitestorage_get_user_proto(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterInt64.lower(userId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+open func listDialogs(principal: String, limit: UInt32)async throws  -> [FfiDialog]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_sqlitestorage_list_dialogs(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterUInt32.lower(limit)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiDialog.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+open func loadCheckpoint(principal: String, stream: String)async throws  -> UInt64?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_sqlitestorage_load_checkpoint(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterString.lower(stream)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionUInt64.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSqliteStorage: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = SqliteStorage
+
+    public static func lift(_ handle: UInt64) throws -> SqliteStorage {
+        return SqliteStorage(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: SqliteStorage) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SqliteStorage {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: SqliteStorage, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSqliteStorage_lift(_ handle: UInt64) throws -> SqliteStorage {
+    return try FfiConverterTypeSqliteStorage.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSqliteStorage_lower(_ value: SqliteStorage) -> UInt64 {
+    return FfiConverterTypeSqliteStorage.lower(value)
+}
+
+
+
+
+
+
+/**
  * UniFFI client object.
  */
 public protocol TinkleClientProtocol: AnyObject, Sendable {
+
+    /**
+     * Persist the checkpoint after applying an `UpdateReady` event.
+     */
+    func acknowledge(stream: String, cursor: UInt64) async throws
 
     /**
      * Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
@@ -1147,9 +1423,9 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
     func connect() async throws
 
     /**
-     * Next realtime app event. `None` when the client is closed.
+     * Next sync app event. `None` when the client is closed.
      */
-    func nextEvent() async  -> FfiRealtimeEvent?
+    func nextEvent() async  -> FfiSyncEvent?
 
     /**
      * Reconnect + re-handshake + explicit resubscribe from persisted
@@ -1162,6 +1438,11 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
      * Returns the server-assigned message id.
      */
     func sendMessage(roomId: Int64, text: String, randomId: UInt64) async throws  -> UInt64
+
+    /**
+     * Set the authenticated principal from a known user id.
+     */
+    func setPrincipalUserId(userId: Int64) async
 
     /**
      * Graceful shutdown: stop RPCs, tear down transport.
@@ -1249,7 +1530,42 @@ public convenience init(config: ClientConfigFfi, credential: String, store: FfiC
     }
 
 
+    /**
+     * Create a client sharing one native SQLite file. Rust applies incoming
+     * updates and commits cache + checkpoint atomically, then emits
+     * `Applied`; UI reads the shared cache instead of acknowledging.
+     */
+public static func newSqlite(config: ClientConfigFfi, credential: String, storage: SqliteStorage) -> TinkleClient  {
+    return try!  FfiConverterTypeTinkleClient_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_constructor_tinkleclient_new_sqlite(
+        FfiConverterTypeClientConfigFfi_lower(config),
+        FfiConverterString.lower(credential),
+        FfiConverterTypeSqliteStorage_lower(storage),uniffiCallStatus
+    )
+})
+}
 
+
+
+    /**
+     * Persist the checkpoint after applying an `UpdateReady` event.
+     */
+open func acknowledge(stream: String, cursor: UInt64)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_acknowledge(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(stream),FfiConverterUInt64.lower(cursor)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_void,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
 
     /**
      * Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
@@ -1271,9 +1587,9 @@ open func connect()async throws   {
 }
 
     /**
-     * Next realtime app event. `None` when the client is closed.
+     * Next sync app event. `None` when the client is closed.
      */
-open func nextEvent()async  -> FfiRealtimeEvent?  {
+open func nextEvent()async  -> FfiSyncEvent?  {
     return
         try!  await uniffiRustCallAsync(
             rustFutureFunc: {
@@ -1284,7 +1600,7 @@ open func nextEvent()async  -> FfiRealtimeEvent?  {
             pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
             completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
-            liftFunc: FfiConverterOptionTypeFfiRealtimeEvent.lift,
+            liftFunc: FfiConverterOptionTypeFfiSyncEvent.lift,
             errorHandler: nil
 
         )
@@ -1327,6 +1643,26 @@ open func sendMessage(roomId: Int64, text: String, randomId: UInt64)async throws
             freeFunc: ffi_tinkle_ffi_rust_future_free_u64,
             liftFunc: FfiConverterUInt64.lift,
             errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Set the authenticated principal from a known user id.
+     */
+open func setPrincipalUserId(userId: Int64)async   {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_set_principal_user_id(
+                        self.uniffiCloneHandle(),FfiConverterInt64.lower(userId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_void,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: nil
+
         )
 }
 
@@ -1454,6 +1790,10 @@ public struct ClientConfigFfi: Equatable, Hashable {
      * Optional user-agent string.
      */
     public var userAgent: String?
+    /**
+     * gRPC base endpoint for `ReadUpdates` catch-up.
+     */
+    public var grpcEndpoint: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -1466,10 +1806,14 @@ public struct ClientConfigFfi: Equatable, Hashable {
          */allowInsecure: Bool,
         /**
          * Optional user-agent string.
-         */userAgent: String?) {
+         */userAgent: String?,
+        /**
+         * gRPC base endpoint for `ReadUpdates` catch-up.
+         */grpcEndpoint: String?) {
         self.url = url
         self.allowInsecure = allowInsecure
         self.userAgent = userAgent
+        self.grpcEndpoint = grpcEndpoint
     }
 
 
@@ -1490,7 +1834,8 @@ public struct FfiConverterTypeClientConfigFfi: FfiConverterRustBuffer {
             try ClientConfigFfi(
                 url: FfiConverterString.read(from: &buf),
                 allowInsecure: FfiConverterBool.read(from: &buf),
-                userAgent: FfiConverterOptionString.read(from: &buf)
+                userAgent: FfiConverterOptionString.read(from: &buf),
+                grpcEndpoint: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -1498,6 +1843,7 @@ public struct FfiConverterTypeClientConfigFfi: FfiConverterRustBuffer {
         FfiConverterString.write(value.url, into: &buf)
         FfiConverterBool.write(value.allowInsecure, into: &buf)
         FfiConverterOptionString.write(value.userAgent, into: &buf)
+        FfiConverterOptionString.write(value.grpcEndpoint, into: &buf)
     }
 }
 
@@ -1518,7 +1864,165 @@ public func FfiConverterTypeClientConfigFfi_lower(_ value: ClientConfigFfi) -> R
 
 
 /**
- * Subscribe confirmation (FFI-safe mirror of the proto response).
+ * FFI-safe cached dialog.
+ */
+public struct FfiDialog: Equatable, Hashable {
+    public var peerKind: String
+    public var peerId: Int64
+    public var topMessage: Int64
+    public var unreadCount: Int32
+    public var readInboxMaxId: Int64
+    public var readOutboxMaxId: Int64
+    public var pinned: Bool
+    public var dialogProto: Data
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(peerKind: String, peerId: Int64, topMessage: Int64, unreadCount: Int32, readInboxMaxId: Int64, readOutboxMaxId: Int64, pinned: Bool, dialogProto: Data) {
+        self.peerKind = peerKind
+        self.peerId = peerId
+        self.topMessage = topMessage
+        self.unreadCount = unreadCount
+        self.readInboxMaxId = readInboxMaxId
+        self.readOutboxMaxId = readOutboxMaxId
+        self.pinned = pinned
+        self.dialogProto = dialogProto
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiDialog: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiDialog: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiDialog {
+        return
+            try FfiDialog(
+                peerKind: FfiConverterString.read(from: &buf),
+                peerId: FfiConverterInt64.read(from: &buf),
+                topMessage: FfiConverterInt64.read(from: &buf),
+                unreadCount: FfiConverterInt32.read(from: &buf),
+                readInboxMaxId: FfiConverterInt64.read(from: &buf),
+                readOutboxMaxId: FfiConverterInt64.read(from: &buf),
+                pinned: FfiConverterBool.read(from: &buf),
+                dialogProto: FfiConverterData.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiDialog, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.peerKind, into: &buf)
+        FfiConverterInt64.write(value.peerId, into: &buf)
+        FfiConverterInt64.write(value.topMessage, into: &buf)
+        FfiConverterInt32.write(value.unreadCount, into: &buf)
+        FfiConverterInt64.write(value.readInboxMaxId, into: &buf)
+        FfiConverterInt64.write(value.readOutboxMaxId, into: &buf)
+        FfiConverterBool.write(value.pinned, into: &buf)
+        FfiConverterData.write(value.dialogProto, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDialog_lift(_ buf: RustBuffer) throws -> FfiDialog {
+    return try FfiConverterTypeFfiDialog.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDialog_lower(_ value: FfiDialog) -> RustBuffer {
+    return FfiConverterTypeFfiDialog.lower(value)
+}
+
+
+/**
+ * FFI-safe cached message.
+ */
+public struct FfiMessage: Equatable, Hashable {
+    public var conversationKey: String
+    public var messageId: Int64
+    public var peerKind: String
+    public var peerId: Int64
+    public var fromId: Int64
+    public var body: String
+    public var messageProto: Data
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(conversationKey: String, messageId: Int64, peerKind: String, peerId: Int64, fromId: Int64, body: String, messageProto: Data) {
+        self.conversationKey = conversationKey
+        self.messageId = messageId
+        self.peerKind = peerKind
+        self.peerId = peerId
+        self.fromId = fromId
+        self.body = body
+        self.messageProto = messageProto
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiMessage: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiMessage: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiMessage {
+        return
+            try FfiMessage(
+                conversationKey: FfiConverterString.read(from: &buf),
+                messageId: FfiConverterInt64.read(from: &buf),
+                peerKind: FfiConverterString.read(from: &buf),
+                peerId: FfiConverterInt64.read(from: &buf),
+                fromId: FfiConverterInt64.read(from: &buf),
+                body: FfiConverterString.read(from: &buf),
+                messageProto: FfiConverterData.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiMessage, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.conversationKey, into: &buf)
+        FfiConverterInt64.write(value.messageId, into: &buf)
+        FfiConverterString.write(value.peerKind, into: &buf)
+        FfiConverterInt64.write(value.peerId, into: &buf)
+        FfiConverterInt64.write(value.fromId, into: &buf)
+        FfiConverterString.write(value.body, into: &buf)
+        FfiConverterData.write(value.messageProto, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMessage_lift(_ buf: RustBuffer) throws -> FfiMessage {
+    return try FfiConverterTypeFfiMessage.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMessage_lower(_ value: FfiMessage) -> RustBuffer {
+    return FfiConverterTypeFfiMessage.lower(value)
+}
+
+
+/**
+ * Subscribe confirmation.
  */
 public struct FfiSubscribeResponse: Equatable, Hashable {
     public var stream: String
@@ -1655,7 +2159,7 @@ enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
     case NotConnected
     case Timeout
     case Cancelled
-    case Realtime(String
+    case Sync(String
     )
     case Codec(String
     )
@@ -1699,7 +2203,7 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
         case 2: return .NotConnected
         case 3: return .Timeout
         case 4: return .Cancelled
-        case 5: return .Realtime(
+        case 5: return .Sync(
             try FfiConverterString.read(from: &buf)
             )
         case 6: return .Codec(
@@ -1741,7 +2245,7 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(4))
 
 
-        case let .Realtime(v1):
+        case let .Sync(v1):
             writeInt(&buf, Int32(5))
             FfiConverterString.write(v1, into: &buf)
 
@@ -1785,13 +2289,15 @@ public func FfiConverterTypeFfiError_lower(_ value: FfiError) -> RustBuffer {
 
 
 /**
- * App-visible realtime events. Owned primitives only; the underlying
- * proto batch is summarized as an event count, never exposed.
+ * App-visible sync events. Update payloads cross as protobuf bytes;
+ * hosts decode `tinkle.v1.Update` with their own generated bindings.
  */
 
-public enum FfiRealtimeEvent: Equatable, Hashable {
+public enum FfiSyncEvent: Equatable, Hashable {
 
-    case batchApplied(stream: String, finalCursor: UInt64, eventCount: UInt32
+    case updateReady(stream: String, cursor: UInt64, updateProto: Data
+    )
+    case applied(stream: String, cursor: UInt64
     )
     case duplicate(stream: String, cursor: UInt64
     )
@@ -1799,9 +2305,11 @@ public enum FfiRealtimeEvent: Equatable, Hashable {
     )
     case stale(stream: String, applied: UInt64, got: UInt64
     )
-    case presence(userId: Int64, online: Bool, known: Bool
+    case connectivity(userId: Int64, online: Bool, known: Bool
     )
-    case resetRequired(stream: String, head: UInt64?
+    case progress(stream: String, head: UInt64?
+    )
+    case rebuildRequired(stream: String, head: UInt64?
     )
     case checkpointFailed(stream: String, cursor: UInt64, error: String
     )
@@ -1813,90 +2321,108 @@ public enum FfiRealtimeEvent: Equatable, Hashable {
 }
 
 #if compiler(>=6)
-extension FfiRealtimeEvent: Sendable {}
+extension FfiSyncEvent: Sendable {}
 #endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public struct FfiConverterTypeFfiRealtimeEvent: FfiConverterRustBuffer {
-    typealias SwiftType = FfiRealtimeEvent
+public struct FfiConverterTypeFfiSyncEvent: FfiConverterRustBuffer {
+    typealias SwiftType = FfiSyncEvent
 
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiRealtimeEvent {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSyncEvent {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
-        case 1: return .batchApplied(stream: try FfiConverterString.read(from: &buf), finalCursor: try FfiConverterUInt64.read(from: &buf), eventCount: try FfiConverterUInt32.read(from: &buf)
+        case 1: return .updateReady(stream: try FfiConverterString.read(from: &buf), cursor: try FfiConverterUInt64.read(from: &buf), updateProto: try FfiConverterData.read(from: &buf)
         )
 
-        case 2: return .duplicate(stream: try FfiConverterString.read(from: &buf), cursor: try FfiConverterUInt64.read(from: &buf)
+        case 2: return .applied(stream: try FfiConverterString.read(from: &buf), cursor: try FfiConverterUInt64.read(from: &buf)
         )
 
-        case 3: return .gap(stream: try FfiConverterString.read(from: &buf), expected: try FfiConverterUInt64.read(from: &buf), got: try FfiConverterUInt64.read(from: &buf)
+        case 3: return .duplicate(stream: try FfiConverterString.read(from: &buf), cursor: try FfiConverterUInt64.read(from: &buf)
         )
 
-        case 4: return .stale(stream: try FfiConverterString.read(from: &buf), applied: try FfiConverterUInt64.read(from: &buf), got: try FfiConverterUInt64.read(from: &buf)
+        case 4: return .gap(stream: try FfiConverterString.read(from: &buf), expected: try FfiConverterUInt64.read(from: &buf), got: try FfiConverterUInt64.read(from: &buf)
         )
 
-        case 5: return .presence(userId: try FfiConverterInt64.read(from: &buf), online: try FfiConverterBool.read(from: &buf), known: try FfiConverterBool.read(from: &buf)
+        case 5: return .stale(stream: try FfiConverterString.read(from: &buf), applied: try FfiConverterUInt64.read(from: &buf), got: try FfiConverterUInt64.read(from: &buf)
         )
 
-        case 6: return .resetRequired(stream: try FfiConverterString.read(from: &buf), head: try FfiConverterOptionUInt64.read(from: &buf)
+        case 6: return .connectivity(userId: try FfiConverterInt64.read(from: &buf), online: try FfiConverterBool.read(from: &buf), known: try FfiConverterBool.read(from: &buf)
         )
 
-        case 7: return .checkpointFailed(stream: try FfiConverterString.read(from: &buf), cursor: try FfiConverterUInt64.read(from: &buf), error: try FfiConverterString.read(from: &buf)
+        case 7: return .progress(stream: try FfiConverterString.read(from: &buf), head: try FfiConverterOptionUInt64.read(from: &buf)
+        )
+
+        case 8: return .rebuildRequired(stream: try FfiConverterString.read(from: &buf), head: try FfiConverterOptionUInt64.read(from: &buf)
+        )
+
+        case 9: return .checkpointFailed(stream: try FfiConverterString.read(from: &buf), cursor: try FfiConverterUInt64.read(from: &buf), error: try FfiConverterString.read(from: &buf)
         )
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
-    public static func write(_ value: FfiRealtimeEvent, into buf: inout [UInt8]) {
+    public static func write(_ value: FfiSyncEvent, into buf: inout [UInt8]) {
         switch value {
 
 
-        case let .batchApplied(stream,finalCursor,eventCount):
+        case let .updateReady(stream,cursor,updateProto):
             writeInt(&buf, Int32(1))
             FfiConverterString.write(stream, into: &buf)
-            FfiConverterUInt64.write(finalCursor, into: &buf)
-            FfiConverterUInt32.write(eventCount, into: &buf)
+            FfiConverterUInt64.write(cursor, into: &buf)
+            FfiConverterData.write(updateProto, into: &buf)
 
 
-        case let .duplicate(stream,cursor):
+        case let .applied(stream,cursor):
             writeInt(&buf, Int32(2))
             FfiConverterString.write(stream, into: &buf)
             FfiConverterUInt64.write(cursor, into: &buf)
 
 
-        case let .gap(stream,expected,got):
+        case let .duplicate(stream,cursor):
             writeInt(&buf, Int32(3))
+            FfiConverterString.write(stream, into: &buf)
+            FfiConverterUInt64.write(cursor, into: &buf)
+
+
+        case let .gap(stream,expected,got):
+            writeInt(&buf, Int32(4))
             FfiConverterString.write(stream, into: &buf)
             FfiConverterUInt64.write(expected, into: &buf)
             FfiConverterUInt64.write(got, into: &buf)
 
 
         case let .stale(stream,applied,got):
-            writeInt(&buf, Int32(4))
+            writeInt(&buf, Int32(5))
             FfiConverterString.write(stream, into: &buf)
             FfiConverterUInt64.write(applied, into: &buf)
             FfiConverterUInt64.write(got, into: &buf)
 
 
-        case let .presence(userId,online,known):
-            writeInt(&buf, Int32(5))
+        case let .connectivity(userId,online,known):
+            writeInt(&buf, Int32(6))
             FfiConverterInt64.write(userId, into: &buf)
             FfiConverterBool.write(online, into: &buf)
             FfiConverterBool.write(known, into: &buf)
 
 
-        case let .resetRequired(stream,head):
-            writeInt(&buf, Int32(6))
+        case let .progress(stream,head):
+            writeInt(&buf, Int32(7))
+            FfiConverterString.write(stream, into: &buf)
+            FfiConverterOptionUInt64.write(head, into: &buf)
+
+
+        case let .rebuildRequired(stream,head):
+            writeInt(&buf, Int32(8))
             FfiConverterString.write(stream, into: &buf)
             FfiConverterOptionUInt64.write(head, into: &buf)
 
 
         case let .checkpointFailed(stream,cursor,error):
-            writeInt(&buf, Int32(7))
+            writeInt(&buf, Int32(9))
             FfiConverterString.write(stream, into: &buf)
             FfiConverterUInt64.write(cursor, into: &buf)
             FfiConverterString.write(error, into: &buf)
@@ -1909,15 +2435,15 @@ public struct FfiConverterTypeFfiRealtimeEvent: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeFfiRealtimeEvent_lift(_ buf: RustBuffer) throws -> FfiRealtimeEvent {
-    return try FfiConverterTypeFfiRealtimeEvent.lift(buf)
+public func FfiConverterTypeFfiSyncEvent_lift(_ buf: RustBuffer) throws -> FfiSyncEvent {
+    return try FfiConverterTypeFfiSyncEvent.lift(buf)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeFfiRealtimeEvent_lower(_ value: FfiRealtimeEvent) -> RustBuffer {
-    return FfiConverterTypeFfiRealtimeEvent.lower(value)
+public func FfiConverterTypeFfiSyncEvent_lower(_ value: FfiSyncEvent) -> RustBuffer {
+    return FfiConverterTypeFfiSyncEvent.lower(value)
 }
 
 
@@ -1940,6 +2466,30 @@ fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionInt64: FfiConverterRustBuffer {
+    typealias SwiftType = Int64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterInt64.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -1972,8 +2522,8 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterOptionTypeFfiRealtimeEvent: FfiConverterRustBuffer {
-    typealias SwiftType = FfiRealtimeEvent?
+fileprivate struct FfiConverterOptionData: FfiConverterRustBuffer {
+    typealias SwiftType = Data?
 
     public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
         guard let value = value else {
@@ -1981,13 +2531,37 @@ fileprivate struct FfiConverterOptionTypeFfiRealtimeEvent: FfiConverterRustBuffe
             return
         }
         writeInt(&buf, Int8(1))
-        FfiConverterTypeFfiRealtimeEvent.write(value, into: &buf)
+        FfiConverterData.write(value, into: &buf)
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
-        case 1: return try FfiConverterTypeFfiRealtimeEvent.read(from: &buf)
+        case 1: return try FfiConverterData.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiSyncEvent: FfiConverterRustBuffer {
+    typealias SwiftType = FfiSyncEvent?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiSyncEvent.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiSyncEvent.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -2013,6 +2587,56 @@ fileprivate struct FfiConverterSequenceInt64: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterInt64.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiDialog: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiDialog]
+
+    public static func write(_ value: [FfiDialog], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiDialog.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiDialog] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiDialog]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiDialog.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiMessage: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiMessage]
+
+    public static func write(_ value: [FfiMessage], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiMessage.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiMessage] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiMessage]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiMessage.read(from: &buf))
         }
         return seq
     }
@@ -2208,16 +2832,22 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_func_tinkle_ffi_init() != 34048) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_acknowledge() != 704) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_connect() != 48303) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_next_event() != 18345) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_next_event() != 57455) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect() != 30012) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_send_message() != 3916) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_set_principal_user_id() != 20741) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_shutdown() != 52153) {
@@ -2227,6 +2857,24 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_suspend() != 33260) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_clear_principal() != 24979) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_get_chat_proto() != 15884) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_get_messages() != 15860) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_get_user_proto() != 49315) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_list_dialogs() != 28584) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_load_checkpoint() != 33864) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_fficursorstore_load() != 11126) {
@@ -2242,6 +2890,15 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new() != 22029) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite() != 22154) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open() != 49106) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open_in_memory() != 8980) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_constructor_inmemoryffistore_new() != 37004) {

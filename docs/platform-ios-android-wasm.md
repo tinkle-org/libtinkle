@@ -9,7 +9,7 @@ logic. Syntra comes from crates.io (`syntra-core`/`syntra-runtime`/
 ## Runtime compatibility review (before choosing crates)
 
 - Core validation (`frame`, `method`, `state`, `ids`, `handshake`,
-  `realtime`) uses `prost` + `std` only — portable to iOS, Android
+  `sync`) uses `prost` + `std` only — portable to iOS, Android
   (via NDK), and `wasm32-unknown-unknown`.
 - Connection engine uses `tokio::sync` + `tokio::time`. Native targets
   run full `tokio` (multi-thread or current-thread). Browser targets run
