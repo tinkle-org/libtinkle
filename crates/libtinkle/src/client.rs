@@ -31,7 +31,7 @@ use syntra_runtime::{CancelToken, Initiator};
 
 use crate::config::{ClientConfig, Credential};
 use crate::cursor::CursorStore;
-use crate::errors::TinkleError;
+use crate::errors::{RecoveryDecision, TinkleError};
 use crate::reconnect::{backoff_sleep, should_retry};
 use crate::services::{Auth, Messages, Updates};
 use crate::sync::{Interests, SyncEvent, SyncManager, UNKNOWN_PRINCIPAL};
@@ -335,45 +335,63 @@ impl Client {
                     limit,
                 };
                 let mut attempt = 0u32;
-                let resp = loop {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let page = crate::grpc::read_updates_on_channel(
-                        &channel,
-                        token.as_slice(),
-                        req.clone(),
-                    )
-                    .await;
-                    #[cfg(target_arch = "wasm32")]
-                    let page = self.read_updates_grpc(req.clone()).await;
-                    match page {
-                        Ok(r) => break r,
-                        Err(e) => {
-                            if attempt < 2 && is_retryable_grpc_error(&e) {
-                                attempt += 1;
-                                tokio::time::sleep(std::time::Duration::from_millis(
-                                    100 * (1 << attempt),
-                                ))
-                                .await;
-                                continue;
-                            }
-                            return Err(e);
+                    let resp = loop {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let page = crate::grpc::read_updates_on_channel(
+                            &channel,
+                            token.as_slice(),
+                            req.clone(),
+                        )
+                        .await;
+                        #[cfg(target_arch = "wasm32")]
+                        let page = self.read_updates_grpc(req.clone()).await;
+                        match page {
+                            Ok(r) => break r,
+                            Err(e) => match e.recovery_decision() {
+                                RecoveryDecision::Retry if attempt < 2 => {
+                                    attempt += 1;
+                                    tokio::time::sleep(std::time::Duration::from_millis(
+                                        100 * (1 << attempt),
+                                    ))
+                                    .await;
+                                    continue;
+                                }
+                                RecoveryDecision::Rebuild => {
+                                    // Expired/unbridgeable history: stop
+                                    // paging and enter the rebuild path
+                                    // instead of retrying a window that can
+                                    // never succeed.
+                                    mgr.handle_expired(stream, None).await;
+                                    return Err(TinkleError::SyncError(
+                                        SyncError::RebuildRequired {
+                                            stream: stream.to_string(),
+                                            head: None,
+                                        },
+                                    ));
+                                }
+                                _ => return Err(e),
+                            },
                         }
-                    }
-                };
+                    };
                 mgr.record_bounds(stream, resp.replay_floor, Some(resp.head))
                     .await;
                 if after < resp.replay_floor {
                     mgr.handle_expired(stream, Some(resp.head)).await;
-                    return Err(TinkleError::Sync(format!(
-                        "replay expired on {stream}: after {after} < floor {}",
-                        resp.replay_floor
-                    )));
+                    return Err(TinkleError::SyncError(SyncError::RebuildRequired {
+                        stream: stream.to_string(),
+                        head: Some(resp.head),
+                    }));
                 }
                 if after > resp.head {
-                    return Err(TinkleError::Sync(format!(
-                        "after {after} > head {} on {stream}",
-                        resp.head
-                    )));
+                    // Our cursor is beyond everything retained: history past
+                    // head is unrecoverable. Never re-anchor to the head
+                    // silently; enter the rebuild path so the stream
+                    // reconstructs from an authoritative boundary.
+                    mgr.handle_expired(stream, Some(resp.head)).await;
+                    return Err(TinkleError::SyncError(SyncError::RebuildRequired {
+                        stream: stream.to_string(),
+                        head: Some(resp.head),
+                    }));
                 }
                 if resp.updates.is_empty() {
                     last_resp = Some(resp);
@@ -754,64 +772,4 @@ impl PrincipalResolver for ProbeFollowResolver {
 
 fn principal_user_suffix(principal: &str) -> String {
     principal.strip_prefix("user:").unwrap_or("0").to_string()
-}
-
-/// Retry only transient transport/status gRPC failures. Permanent local
-/// validation (bad endpoint, bearer, config) and permanent status codes
-/// (InvalidArgument, Unauthenticated, etc.) must surface immediately
-/// without sleeping. Variant-based first: `GrpcConfig`/`GrpcAuth` are
-/// never retryable by construction; the message heuristics below apply
-/// only to transport (`Grpc`) failures.
-fn is_retryable_grpc_error(e: &TinkleError) -> bool {
-    let msg = match e {
-        TinkleError::Grpc(m) => m.to_ascii_lowercase(),
-        _ => return false,
-    };
-    let compact: String = msg.chars().filter(|c| !c.is_whitespace()).collect();
-    const PERMANENT: &[&str] = &[
-        "notconfigured",
-        "mustinclude",
-        "mustuse",
-        "invalidendpoint",
-        "mustbeascii",
-        "invalidbearer",
-        "invalidargument",
-        "unauthenticated",
-        "permissiondenied",
-        "notfound",
-        "alreadyexists",
-        "failedprecondition",
-        "outofrange",
-        "unimplemented",
-    ];
-    for pat in PERMANENT {
-        if compact.contains(pat) {
-            return false;
-        }
-    }
-    const RETRYABLE: &[&str] = &[
-        "connect",
-        "transport",
-        "unavailable",
-        "deadline",
-        "timeout",
-        "timedout",
-        "resourceexhausted",
-        "aborted",
-        "internal",
-        "unknown",
-        "cancelled",
-        "reset",
-        "refused",
-        "eof",
-        "brokenpipe",
-        "temporarily",
-        "tryagain",
-    ];
-    for pat in RETRYABLE {
-        if compact.contains(pat) {
-            return true;
-        }
-    }
-    false
 }

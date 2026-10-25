@@ -66,6 +66,9 @@ impl From<libtinkle::TinkleError> for FfiError {
             libtinkle::TinkleError::Sync(msg) => Self::Sync(msg),
             libtinkle::TinkleError::SyncError(e) => Self::Sync(e.to_string()),
             libtinkle::TinkleError::Grpc(msg) => Self::Network(msg),
+            // Typed gRPC statuses keep their code in the core error; over
+            // FFI they surface as network failures with the status message.
+            libtinkle::TinkleError::GrpcStatus { message, .. } => Self::Network(message),
             // Local setup errors (bad endpoint, malformed credential) are
             // permanent and never retryable: surface as internal config
             // errors, not network failures.

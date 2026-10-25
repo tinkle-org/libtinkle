@@ -45,7 +45,35 @@ pub async fn connect_channel(endpoint: &str, timeout_ms: u32) -> Result<Channel,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-/// Read one bounded replay page over an already-connected channel.
+/// Map a tonic status code to the shared wire code. Recovery decisions key
+/// on this code; the human message is diagnostic only.
+fn grpc_code(code: tonic::Code) -> syntra_core::error::ErrorCode {
+    use syntra_core::error::ErrorCode as C;
+    match code {
+        tonic::Code::Ok => C::Unspecified,
+        tonic::Code::Cancelled => C::Cancelled,
+        tonic::Code::Unknown => C::Unknown,
+        tonic::Code::InvalidArgument => C::InvalidArgument,
+        tonic::Code::DeadlineExceeded => C::DeadlineExceeded,
+        tonic::Code::NotFound => C::NotFound,
+        tonic::Code::AlreadyExists => C::AlreadyExists,
+        tonic::Code::PermissionDenied => C::PermissionDenied,
+        tonic::Code::ResourceExhausted => C::ResourceExhausted,
+        tonic::Code::FailedPrecondition => C::FailedPrecondition,
+        tonic::Code::Aborted => C::Aborted,
+        tonic::Code::OutOfRange => C::OutOfRange,
+        tonic::Code::Unimplemented => C::Unimplemented,
+        tonic::Code::Internal => C::Internal,
+        tonic::Code::Unavailable => C::Unavailable,
+        tonic::Code::DataLoss => C::DataLoss,
+        tonic::Code::Unauthenticated => C::Unauthenticated,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Read one bounded replay page over an already-connected channel. Status
+/// failures keep their code in `TinkleError::GrpcStatus` so recovery can
+/// distinguish expired history from transient or auth failures.
 pub async fn read_updates_on_channel(
     channel: &Channel,
     token: &[u8],
@@ -58,10 +86,12 @@ pub async fn read_updates_on_channel(
         );
     let mut request = tonic::Request::new(req);
     request.metadata_mut().insert("authorization", bearer);
-    let resp = client
-        .read_updates(request)
-        .await
-        .map_err(|e| TinkleError::Grpc(format!("read_updates: {e}")))?;
+    let resp = client.read_updates(request).await.map_err(|s| {
+        TinkleError::GrpcStatus {
+            code: grpc_code(s.code()),
+            message: s.message().to_string(),
+        }
+    })?;
     Ok(resp.into_inner())
 }
 

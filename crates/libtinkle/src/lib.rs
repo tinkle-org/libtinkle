@@ -32,7 +32,7 @@ pub(crate) mod sync;
 pub use client::{Client, SubscribeResult};
 pub use config::{ClientConfig, Credential, ReconnectPolicy};
 pub use cursor::{CursorStore, InMemoryCursorStore};
-pub use errors::TinkleError;
+pub use errors::{RecoveryDecision, TinkleError};
 pub use services::{Auth, Messages, Updates};
 #[cfg(not(target_arch = "wasm32"))]
 pub use sqlite_store::SqliteCursorStore;

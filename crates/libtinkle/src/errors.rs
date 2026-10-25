@@ -15,6 +15,10 @@ pub enum TinkleError {
     SyncError(#[from] SyncError),
     #[error("grpc: {0}")]
     Grpc(String),
+    /// gRPC status with its code preserved. Recovery decisions key on the
+    /// code, never on message text.
+    #[error("grpc status {code:?}: {message}")]
+    GrpcStatus { code: ErrorCode, message: String },
     /// Permanent local gRPC setup failure: endpoint missing, blank,
     /// wrong scheme, or non-`https` without `allow_insecure`. Never
     /// retryable — fix the config, not the network.
@@ -42,6 +46,7 @@ impl TinkleError {
             Self::Syntra(e) => e.code(),
             Self::Sync(_) | Self::SyncError(_) => ErrorCode::Internal,
             Self::Grpc(_) => ErrorCode::Unavailable,
+            Self::GrpcStatus { code, .. } => *code,
             Self::GrpcConfig(_) => ErrorCode::FailedPrecondition,
             Self::GrpcAuth(_) => ErrorCode::InvalidArgument,
             Self::Codec(_) => ErrorCode::InvalidArgument,
@@ -74,5 +79,124 @@ impl TinkleError {
             }
             _ => false,
         }
+    }
+
+    /// Classify a recovery-page failure. Transport-level `Grpc` failures
+    /// (connect/read framing, no status) are transient by construction;
+    /// everything else keys on the typed status code.
+    pub fn recovery_decision(&self) -> RecoveryDecision {
+        match self {
+            Self::GrpcStatus { code, .. } => match code {
+                ErrorCode::Unavailable
+                | ErrorCode::DeadlineExceeded
+                | ErrorCode::Aborted
+                | ErrorCode::ResourceExhausted
+                | ErrorCode::Internal
+                | ErrorCode::Unknown
+                | ErrorCode::DataLoss => RecoveryDecision::Retry,
+                ErrorCode::OutOfRange => RecoveryDecision::Rebuild,
+                ErrorCode::Unauthenticated | ErrorCode::PermissionDenied => RecoveryDecision::Auth,
+                _ => RecoveryDecision::Fail,
+            },
+            Self::Grpc(_) => RecoveryDecision::Retry,
+            _ => RecoveryDecision::Fail,
+        }
+    }
+}
+
+/// Recovery decision for a failed recovery page. Keys on typed codes;
+/// message text never drives recovery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryDecision {
+    /// Transient failure: back off and retry the page.
+    Retry,
+    /// History expired or unbridgeable: enter rebuild, do not retry pages.
+    Rebuild,
+    /// Authentication/authorization failure: re-authenticate, do not retry.
+    Auth,
+    /// Anything else: surface to the caller without retrying.
+    Fail,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn status(code: ErrorCode) -> TinkleError {
+        TinkleError::GrpcStatus {
+            code,
+            message: "injected".into(),
+        }
+    }
+
+    #[test]
+    fn classifier_keys_on_code_not_message() {
+        // Transient codes retry however the message reads.
+        for code in [
+            ErrorCode::Unavailable,
+            ErrorCode::DeadlineExceeded,
+            ErrorCode::Aborted,
+            ErrorCode::ResourceExhausted,
+            ErrorCode::Internal,
+            ErrorCode::Unknown,
+            ErrorCode::DataLoss,
+        ] {
+            assert_eq!(
+                status(code).recovery_decision(),
+                RecoveryDecision::Retry,
+                "{code:?} must retry"
+            );
+        }
+        // An OutOfRange message mentioning timeouts still rebuilds.
+        assert_eq!(
+            TinkleError::GrpcStatus {
+                code: ErrorCode::OutOfRange,
+                message: "timeout reading past retention".into(),
+            }
+            .recovery_decision(),
+            RecoveryDecision::Rebuild
+        );
+        // Transport failures without a status are transient.
+        assert_eq!(
+            TinkleError::Grpc("connect: refused".into()).recovery_decision(),
+            RecoveryDecision::Retry
+        );
+        // Auth failures never retry pages.
+        for code in [ErrorCode::Unauthenticated, ErrorCode::PermissionDenied] {
+            assert_eq!(
+                status(code).recovery_decision(),
+                RecoveryDecision::Auth,
+                "{code:?} must not retry"
+            );
+        }
+        // Permanent codes and local config errors fail fast.
+        for code in [
+            ErrorCode::InvalidArgument,
+            ErrorCode::NotFound,
+            ErrorCode::AlreadyExists,
+            ErrorCode::FailedPrecondition,
+            ErrorCode::Unimplemented,
+            ErrorCode::Cancelled,
+        ] {
+            assert_eq!(
+                status(code).recovery_decision(),
+                RecoveryDecision::Fail,
+                "{code:?} must fail fast"
+            );
+        }
+        assert_eq!(
+            TinkleError::GrpcConfig("bad endpoint".into()).recovery_decision(),
+            RecoveryDecision::Fail
+        );
+        assert_eq!(
+            TinkleError::NotConnected("x".into()).recovery_decision(),
+            RecoveryDecision::Fail
+        );
+    }
+
+    #[test]
+    fn grpc_status_preserves_code() {
+        let e = status(ErrorCode::OutOfRange);
+        assert_eq!(e.code(), ErrorCode::OutOfRange);
     }
 }
