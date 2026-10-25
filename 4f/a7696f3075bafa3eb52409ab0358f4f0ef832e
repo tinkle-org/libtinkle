@@ -1,0 +1,52 @@
+crates/libtinkle/src/sync.rs
+  s_317cc69b10b27f::t_36c41a6f0cdf50 46-49
+  s_317cc69b10b27f::t_b78de54ecfe2fa 216-217
+crates/libtinkle/tests/client_integration.rs
+  s_317cc69b10b27f::t_4d3529617e1561 454,863-901,903-932
+  s_317cc69b10b27f::t_b573f2e6eb2157 902
+  s_317cc69b10b27f::t_e63d976882c8cf 19,23-24,36-37
+  s_317cc69b10b27f::t_57682482e10892 184
+  s_317cc69b10b27f::t_db6a08ab32653e 193-198,355-396,411-453
+  s_317cc69b10b27f::t_730fcd3daa2bfe 158
+  s_317cc69b10b27f::t_2d6c9d7f5dd436 455
+crates/libtinkle/src/services.rs
+  s_317cc69b10b27f::t_e6504caa8eaa47 170-172,176-182
+  s_317cc69b10b27f::t_a625a29f468f3d 183-184
+crates/libtinkle/src/client.rs
+  s_317cc69b10b27f::t_202f4aab9d7443 592,594
+  s_317cc69b10b27f::t_114746386c5df4 26
+  s_317cc69b10b27f::t_16f2a1a4aa8466 349,899-916
+  s_317cc69b10b27f::t_e9f42d616f86a7 920-921,939,984-985,1009-1010
+  s_317cc69b10b27f::t_f96f9986b08dfd 24-25
+  s_317cc69b10b27f::t_97221611dfc18b 320-321,332-348
+  s_317cc69b10b27f::t_deda347f9288d6 59-63,65,851-854
+  s_317cc69b10b27f::t_2a740672bf8671 394-396,398-419,432-457
+  s_317cc69b10b27f::t_4314840ab6916c 1093-1096,1099-1105,1107,1112,1115,1117
+  s_317cc69b10b27f::t_0acc8c2fccbd36 18-21
+  s_317cc69b10b27f::t_e044b0196c03c2 918-919,930-932
+  s_317cc69b10b27f::t_3b5168da0fb88d 350
+crates/libtinkle/src/errors.rs
+  s_317cc69b10b27f::t_4be4cf0dacd2e6 114
+  s_317cc69b10b27f::t_01dd63eecbff47 85-88,103-113,115-116
+crates/libtinkle/src/config.rs
+  s_317cc69b10b27f::t_52dd2333017c8a 50-64,105-108,110,131
+  s_317cc69b10b27f::t_766a45548025d1 167,171-172
+crates/libtinkle/src/lib.rs
+  s_317cc69b10b27f::t_998171337b18b0 33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4fa7696f3075bafa3eb52409ab0358f4f0ef832e",
+  "prompts": {},
+  "sessions": {
+    "s_317cc69b10b27f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e8be5aff6ffeD4ZIiLFcKcEDWB",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    }
+  }
+}
