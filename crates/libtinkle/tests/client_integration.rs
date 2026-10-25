@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 
 use libtinkle::CursorStore;
 use syntra_core::proto::{
@@ -31,6 +32,8 @@ struct MockLogInner {
     follows: Mutex<Vec<(String, u64)>>,
     /// Room streams rejected even from the origin (degraded-path tests).
     fail_rooms: Mutex<HashSet<String>>,
+    /// Kill switches for live connections (pump-death tests).
+    kill: Mutex<Vec<oneshot::Sender<()>>>,
 }
 
 type MockLog = Arc<MockLogInner>;
@@ -84,6 +87,8 @@ async fn mock_gateway(listener: TcpListener, log: MockLog) {
             // connection; room continuation with a nonzero cursor requires a
             // scope proof the client cannot mint.
             let mut followed: HashSet<String> = HashSet::new();
+            let (kill_tx, mut kill_rx) = oneshot::channel();
+            log.kill.lock().unwrap().push(kill_tx);
             let (mut write, mut read) = ws.split();
             let hello_msg = match read.next().await {
                 Some(Ok(m)) => m,
@@ -120,10 +125,13 @@ async fn mock_gateway(listener: TcpListener, log: MockLog) {
             {
                 return;
             }
-            while let Some(msg) = read.next().await {
-                let msg = match msg {
-                    Ok(m) => m,
-                    Err(_) => break,
+            loop {
+                let msg = tokio::select! {
+                    msg = read.next() => match msg {
+                        Some(Ok(m)) => m,
+                        _ => break,
+                    },
+                    _ = &mut kill_rx => break,
                 };
                 if msg.is_close() {
                     break;
@@ -672,4 +680,85 @@ async fn persistently_rejected_room_degrades_without_losing_own_follow() {
         ]
     );
     c.close().await;
+}
+
+// -- WS2: supervised lifecycle -------------------------------------------------
+
+/// Kill the most recent mock connection (simulates transport death).
+fn kill_one(log: &MockLog) {
+    let tx = log.kill.lock().unwrap().pop();
+    if let Some(tx) = tx {
+        let _ = tx.send(());
+    }
+}
+
+async fn wait_for<F>(mut cond: F, what: &str)
+where
+    F: FnMut() -> bool,
+{
+    for _ in 0..100 {
+        if cond() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("timed out waiting for {what}");
+}
+
+#[tokio::test]
+async fn supervisor_reconnects_after_pump_death() {
+    let (addr, log) = start_mock_logged().await;
+    let c = test_client(addr);
+    c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
+    let res = c.start(vec![], vec![]).await.unwrap();
+    assert_eq!(res.stream, "user:42");
+    assert!(c.is_connected().await);
+    assert_eq!(own_follows(&log).len(), 1);
+
+    // Transport dies; the supervisor must re-establish without host help.
+    kill_one(&log);
+    wait_for(
+        || own_follows(&log).len() >= 2,
+        "supervisor to re-establish the follow",
+    )
+    .await;
+    assert!(c.is_connected().await);
+    assert_eq!(own_follows(&log).len(), 2);
+    // Exactly one own-stream follow per connection, no duplicates.
+    assert_eq!(own_follows(&log), vec![("user:42".to_string(), 0); 2]);
+    // A second start() shares the supervisor instead of duplicating it.
+    c.start(vec![], vec![]).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(own_follows(&log).len(), 2);
+    c.stop().await;
+}
+
+#[tokio::test]
+async fn stop_prevents_resurrection() {
+    let (addr, log) = start_mock_logged().await;
+    let c = test_client(addr);
+    c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
+    c.start(vec![], vec![]).await.unwrap();
+    c.stop().await;
+    assert!(!c.is_connected().await);
+    kill_one(&log);
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // No supervisor, no resurrection.
+    assert_eq!(own_follows(&log).len(), 1);
+    assert!(!c.is_connected().await);
+}
+
+#[tokio::test]
+async fn current_cursor_reflects_session() {
+    let (addr, _log) = start_mock_logged().await;
+    let c = test_client(addr);
+    assert_eq!(c.current_cursor("user:42").await, None);
+    c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
+    c.start(vec![], vec![]).await.unwrap();
+    assert_eq!(c.current_cursor("user:42").await, Some(0));
+    c.stop().await;
+    assert_eq!(c.current_cursor("user:42").await, None);
 }

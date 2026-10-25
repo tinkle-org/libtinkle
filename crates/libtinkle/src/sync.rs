@@ -33,6 +33,28 @@ use crate::errors::TinkleError;
 /// an account switch and resets sync state.
 pub(crate) const UNKNOWN_PRINCIPAL: &str = "unknown";
 
+/// Capacity of the app-visible event queue. Durable delivery events
+/// (`UpdateReady`, `Gap`, `RebuildRequired`, `CheckpointFailed`) apply
+/// backpressure when full; informational events (`Progress`, `Duplicate`,
+/// `Stale`, `Connectivity`, `Applied`) are dropped instead. Durable state
+/// is always queryable via cursors, so drops never lose sync progress.
+const EVENT_CHANNEL_CAPACITY: usize = 1024;
+
+/// Internal recovery signal from the sync pipeline to the connection
+/// supervisor. Hints only: stream states persist in the manager, and the
+/// supervisor watchdog covers lost signals. Never blocks the pump.
+#[derive(Debug, Clone)]
+pub(crate) enum RecoverySignal {
+    /// Notification pump exited; the transport is presumed dead.
+    PumpDead,
+    /// Missing update; run bounded recovery from the durable cursor.
+    Gap { stream: String },
+    /// Stream sequence terminated; reconstruct from the origin.
+    Rebuild { stream: String },
+    /// Durable checkpoint save failed; retry recovery for the stream.
+    CheckpointFailed { stream: String },
+}
+
 /// App-visible sync events.
 #[derive(Debug, Clone)]
 pub enum SyncEvent {
@@ -123,6 +145,11 @@ pub struct SyncManager {
     event_tx: mpsc::Sender<SyncEvent>,
     event_rx: Mutex<mpsc::Receiver<SyncEvent>>,
     interests: Mutex<Interests>,
+    /// Best-effort recovery hints to the connection supervisor. `None` on
+    /// the manual path (no supervisor); set by the supervisor at `start`.
+    /// Emitted with `try_send`: a full or missing receiver never blocks
+    /// the pump.
+    signals: Mutex<Option<mpsc::Sender<RecoverySignal>>>,
 }
 
 /// Sync interests carried across reconnects.
@@ -136,7 +163,7 @@ pub(crate) struct Interests {
 
 impl SyncManager {
     pub fn new(principal: impl Into<String>, store: Arc<dyn CursorStore>) -> Arc<Self> {
-        let (tx, rx) = mpsc::channel(256);
+        let (tx, rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
         Arc::new(Self {
             state: Mutex::new(PrincipalState {
                 principal: principal.into(),
@@ -153,6 +180,7 @@ impl SyncManager {
             event_tx: tx,
             event_rx: Mutex::new(rx),
             interests: Mutex::new(Interests::default()),
+            signals: Mutex::new(None),
         })
     }
 
@@ -164,6 +192,25 @@ impl SyncManager {
     #[cfg(not(target_arch = "wasm32"))]
     async fn sqlite_clone(&self) -> Option<Arc<tinkle_storage::Storage>> {
         self.sqlite.lock().await.clone()
+    }
+
+    pub(crate) async fn set_signal_tx(&self, tx: mpsc::Sender<RecoverySignal>) {
+        *self.signals.lock().await = Some(tx);
+    }
+
+    /// Best-effort hint to the supervisor. Drops when no supervisor is
+    /// attached or its queue is full; stream states persist, so the
+    /// watchdog and subsequent signals cover the loss.
+    pub(crate) async fn emit_signal(&self, signal: RecoverySignal) {
+        if let Some(tx) = self.signals.lock().await.clone() {
+            let _ = tx.try_send(signal);
+        }
+    }
+
+    /// Durable applied cursor for `stream` (persisted checkpoint, not
+    /// volatile delivered progress). Recovery resumes from here.
+    pub(crate) async fn applied_cursor(&self, stream: &str) -> u64 {
+        self.state.lock().await.cursors.get(stream)
     }
 
     pub(crate) async fn begin_recovery(&self, stream: &str) -> bool {
@@ -291,6 +338,10 @@ impl SyncManager {
                 head,
             })
             .await;
+        self.emit_signal(RecoverySignal::Rebuild {
+            stream: stream.to_string(),
+        })
+        .await;
     }
 
     pub(crate) async fn on_subscribed(&self, rooms: Vec<(i64, u64)>, watch_user_ids: Vec<i64>) {
@@ -381,8 +432,12 @@ impl SyncManager {
                 let _ = self.store.remove_stream(&principal, &stream).await;
                 let _ = self
                     .event_tx
-                    .send(SyncEvent::RebuildRequired { stream, head })
+                    .send(SyncEvent::RebuildRequired {
+                        stream: stream.clone(),
+                        head,
+                    })
                     .await;
+                self.emit_signal(RecoverySignal::Rebuild { stream }).await;
                 Ok(())
             }
             ValidatedFollow::Progress { stream, head } => {
@@ -486,24 +541,20 @@ impl SyncManager {
         };
         match kind {
             Kind::Duplicate => {
-                let _ = self
-                    .event_tx
-                    .send(SyncEvent::Duplicate {
-                        stream: stream.clone(),
-                        cursor,
-                    })
-                    .await;
+                // Informational: droppable under pressure; cursors already
+                // cover the position.
+                let _ = self.event_tx.try_send(SyncEvent::Duplicate {
+                    stream: stream.clone(),
+                    cursor,
+                });
                 Ok(None)
             }
             Kind::Stale { applied } => {
-                let _ = self
-                    .event_tx
-                    .send(SyncEvent::Stale {
-                        stream: stream.clone(),
-                        applied,
-                        got: cursor,
-                    })
-                    .await;
+                let _ = self.event_tx.try_send(SyncEvent::Stale {
+                    stream: stream.clone(),
+                    applied,
+                    got: cursor,
+                });
                 Ok(None)
             }
             Kind::Gap { expected } => {
@@ -515,6 +566,10 @@ impl SyncManager {
                         got: cursor,
                     })
                     .await;
+                self.emit_signal(RecoverySignal::Gap {
+                    stream: stream.clone(),
+                })
+                .await;
                 Err(TinkleError::from(tinkle_schema::sync::SyncError::Gap {
                     stream: stream.clone(),
                     expected,
@@ -543,6 +598,10 @@ impl SyncManager {
                                         error: projection.clone(),
                                     })
                                     .await;
+                                self.emit_signal(RecoverySignal::CheckpointFailed {
+                                    stream: stream.clone(),
+                                })
+                                .await;
                                 return Err(TinkleError::Sync(projection));
                             }
                         };
@@ -605,6 +664,10 @@ impl SyncManager {
                                 error,
                             })
                             .await;
+                        self.emit_signal(RecoverySignal::CheckpointFailed {
+                            stream: stream.clone(),
+                        })
+                        .await;
                         return Err(TinkleError::CursorStore(format!(
                             "atomic apply failed: {e}"
                         )));
@@ -619,15 +682,15 @@ impl SyncManager {
                     // Persist through the CursorStore path as well when it is
                     // SQLite-backed this is a duplicate idempotent save; when
                     // it is foreign/InMemory it keeps those stores coherent.
-                    // Duplicate saves are harmless (same cursor).
+                    // Duplicate saves are harmless (same cursor). Applied is
+                    // informational in auto mode — the atomic commit above is
+                    // the durable truth — so it is droppable under pressure;
+                    // hosts query cursors for authoritative progress.
                     let _ = self.store.save(&principal, &stream, cursor).await;
-                    let _ = self
-                        .event_tx
-                        .send(SyncEvent::Applied {
-                            stream: stream.clone(),
-                            cursor,
-                        })
-                        .await;
+                    let _ = self.event_tx.try_send(SyncEvent::Applied {
+                        stream: stream.clone(),
+                        cursor,
+                    });
                     // ReadStateInvalidated carries no cacheable body, so the
                     // atomic commit above advances the checkpoint without
                     // refreshing unread/read state. Surface the payload so FFI
@@ -729,14 +792,11 @@ impl SyncManager {
                     }
                     drop(state);
                     if cursor < applied {
-                        let _ = self
-                            .event_tx
-                            .send(SyncEvent::Stale {
-                                stream: stream.to_string(),
-                                applied,
-                                got: cursor,
-                            })
-                            .await;
+                        let _ = self.event_tx.try_send(SyncEvent::Stale {
+                            stream: stream.to_string(),
+                            applied,
+                            got: cursor,
+                        });
                     }
                     return Ok(());
                 }
@@ -765,17 +825,20 @@ impl SyncManager {
                     error,
                 })
                 .await;
+            self.emit_signal(RecoverySignal::CheckpointFailed {
+                stream: stream.to_string(),
+            })
+            .await;
             return Err(TinkleError::CursorStore(format!(
                 "acknowledge save failed: {e}"
             )));
         }
-        let _ = self
-            .event_tx
-            .send(SyncEvent::Applied {
-                stream: stream.to_string(),
-                cursor,
-            })
-            .await;
+        // The caller just acknowledged: Applied confirms what it already
+        // knows, so it is droppable under pressure.
+        let _ = self.event_tx.try_send(SyncEvent::Applied {
+            stream: stream.to_string(),
+            cursor,
+        });
         Ok(())
     }
 
@@ -971,6 +1034,37 @@ mod tests {
             assert!(matches!(evt, SyncEvent::Applied { cursor: c, .. } if c == cursor));
         }
         assert_eq!(store.load("user:1", "user:1").await.unwrap(), Some(3));
+    }
+
+    #[tokio::test]
+    async fn large_backlog_flows_with_concurrent_consumer() {
+        // More updates than any bounded queue: with a draining consumer,
+        // background catch-up must complete, never deadlock. The checkpoint
+        // still advances only through explicit acknowledgment.
+        const N: u64 = 1200;
+        let store = MemStore::new();
+        let mgr = SyncManager::new("user:1", store.clone());
+        let drain = mgr.clone();
+        let consumer = tokio::spawn(async move {
+            let mut ready = 0u64;
+            while ready < N {
+                match drain.next_event().await {
+                    Some(SyncEvent::UpdateReady { .. }) => ready += 1,
+                    Some(_) => {}
+                    None => break,
+                }
+            }
+            ready
+        });
+        for cursor in 1..=N {
+            mgr.handle_update(omitted("user:1", cursor)).await.unwrap();
+        }
+        let ready = tokio::time::timeout(std::time::Duration::from_secs(30), consumer)
+            .await
+            .expect("backlog must not stall")
+            .unwrap();
+        assert_eq!(ready, N);
+        assert_eq!(store.load("user:1", "user:1").await.unwrap(), None);
     }
 
     #[tokio::test]

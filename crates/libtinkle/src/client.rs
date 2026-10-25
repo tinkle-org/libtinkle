@@ -20,11 +20,12 @@
 //! `ObserveConnectivity` notifications. Never auto-retries unsafe
 //! mutations without an application idempotency policy.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, oneshot, RwLock};
 use zeroize::Zeroizing;
 
 use syntra_runtime::{CancelToken, Initiator};
@@ -34,7 +35,7 @@ use crate::cursor::CursorStore;
 use crate::errors::{RecoveryDecision, TinkleError};
 use crate::reconnect::{backoff_sleep, should_retry};
 use crate::services::{Auth, Messages, Updates};
-use crate::sync::{Interests, SyncEvent, SyncManager, UNKNOWN_PRINCIPAL};
+use crate::sync::{Interests, RecoverySignal, SyncEvent, SyncManager, UNKNOWN_PRINCIPAL};
 use crate::ErrorCode;
 use tinkle_schema::sync::SyncError;
 
@@ -44,6 +45,18 @@ struct Live {
     version: u32,
     sync_mgr: Arc<SyncManager>,
     pump: tokio::task::JoinHandle<()>,
+}
+
+/// Supervisor state: exactly one monitor task per logical client.
+/// `epoch` guards handle installation against a concurrent `stop()`;
+/// `last_result` reflects the initial `start()` establishment.
+#[derive(Default)]
+struct SupState {
+    handle: Option<tokio::task::JoinHandle<()>>,
+    shutdown: Option<oneshot::Sender<()>>,
+    epoch: u64,
+    last_result: Option<SubscribeResult>,
+    last_reestablish: Option<std::time::Instant>,
 }
 
 /// Result of establishing sync interests.
@@ -75,9 +88,20 @@ pub struct Client {
     /// RPC fails so retries re-issue.
     follows: Arc<tokio::sync::Mutex<HashSet<String>>>,
     /// Serializes `subscribe` bodies: concurrent subscribes must not issue
-    /// duplicate follows or interleave hydration. The WS2 supervisor will own
-    /// this; until then this is the single-subscriber lock.
+    /// duplicate follows or interleave hydration.
     sub_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Recovery-signal sender installed by the supervisor. `connect()`
+    /// wires a clone into each new `SyncManager` and pump, so every
+    /// re-established connection reports to the same supervisor.
+    signal_tx: Arc<tokio::sync::Mutex<Option<mpsc::Sender<RecoverySignal>>>>,
+    /// Transport liveness as observed by the notification pump. Set on
+    /// connect, cleared when the pump exits. `is_connected` reflects this,
+    /// not just the presence of a `Live` handle.
+    transport_ok: Arc<AtomicBool>,
+    /// Supervisor lifecycle (handle, shutdown, epoch, last result).
+    sup_state: Arc<tokio::sync::Mutex<SupState>>,
+    /// Serializes `start()` so concurrent callers share one supervisor.
+    start_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Client {
@@ -93,6 +117,10 @@ impl Client {
             interests: Arc::new(tokio::sync::Mutex::new(Interests::default())),
             follows: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
             sub_lock: Arc::new(tokio::sync::Mutex::new(())),
+            signal_tx: Arc::new(tokio::sync::Mutex::new(None)),
+            transport_ok: Arc::new(AtomicBool::new(false)),
+            sup_state: Arc::new(tokio::sync::Mutex::new(SupState::default())),
+            start_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -114,6 +142,10 @@ impl Client {
             interests: Arc::new(tokio::sync::Mutex::new(Interests::default())),
             follows: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
             sub_lock: Arc::new(tokio::sync::Mutex::new(())),
+            signal_tx: Arc::new(tokio::sync::Mutex::new(None)),
+            transport_ok: Arc::new(AtomicBool::new(false)),
+            sup_state: Arc::new(tokio::sync::Mutex::new(SupState::default())),
+            start_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -126,8 +158,10 @@ impl Client {
         &self.config
     }
 
+    /// True only when a live connection exists AND its notification
+    /// pump has not exited. A dead pump with a stale handle reports false.
     pub async fn is_connected(&self) -> bool {
-        self.live.read().await.is_some()
+        self.live.read().await.is_some() && self.transport_ok.load(Ordering::SeqCst)
     }
 
     pub async fn principal(&self) -> String {
@@ -159,6 +193,11 @@ impl Client {
         if self.is_connected().await {
             return Ok(());
         }
+        // Stale handle without a live pump: tear down before redialing so
+        // a dead transport is never mistaken for a connection.
+        if self.live.read().await.is_some() {
+            self.teardown_connection().await;
+        }
         let ws_cfg = self.config.ws_config();
         let credential_bytes = self.credential.expose_secret().to_vec();
         let handle = syntra_ws::connect(ws_cfg, credential_bytes, self.config.connection.clone())
@@ -177,18 +216,28 @@ impl Client {
         if let Some(sqlite) = self.sqlite.clone() {
             sync_mgr.set_sqlite_storage(sqlite).await;
         }
+        // Supervisor reporting, when supervised: every re-established
+        // connection reports to the same supervisor.
+        if let Some(tx) = self.signal_tx.lock().await.clone() {
+            sync_mgr.set_signal_tx(tx).await;
+        }
 
         // Notification pump: Initiator → validate → cursors → app events.
         // Interleaved notifications never complete an RPC (core routes them
-        // here, not to pending waiters).
+        // here, not to pending waiters). Natural exit means the transport
+        // died: mark it and hint the supervisor (the watchdog covers a
+        // missed hint).
         let pump_conn = conn.clone();
         let pump_mgr = sync_mgr.clone();
+        let pump_ok = self.transport_ok.clone();
         let pump = tokio::spawn(async move {
             while let Some(payload) = pump_conn.next_notification().await {
                 if let Err(e) = pump_mgr.handle_payload(&payload).await {
                     tracing::debug!(error = %e, "sync notification handling reported gap/rebuild");
                 }
             }
+            pump_ok.store(false, Ordering::SeqCst);
+            pump_mgr.emit_signal(RecoverySignal::PumpDead).await;
         });
 
         *self.live.write().await = Some(Live {
@@ -198,6 +247,7 @@ impl Client {
             sync_mgr,
             pump,
         });
+        self.transport_ok.store(true, Ordering::SeqCst);
         Ok(())
     }
 
@@ -624,25 +674,58 @@ impl Client {
         mgr.acknowledge(stream, cursor).await
     }
 
-    /// Graceful close. Follow markers die with the socket: the next
-    /// connection must re-establish every follow from persisted cursors.
-    pub async fn close(&self) {
+    /// Connection teardown without touching the supervisor. Follow
+    /// markers die with the socket: the next connection must re-establish
+    /// every follow from persisted cursors.
+    async fn teardown_connection(&self) {
         if let Some(live) = self.live.write().await.take() {
             live.handle.close().await;
             live.pump.abort();
             live.sync_mgr.on_disconnect().await;
         }
         self.follows.lock().await.clear();
+        self.transport_ok.store(false, Ordering::SeqCst);
+    }
+
+    /// Graceful close. Also stops the sync supervisor when running; use
+    /// `reconnect` (or `start` again) to resume. Equivalent to `stop`.
+    pub async fn close(&self) {
+        self.stop().await;
+    }
+
+    /// Stop the sync supervisor (if running) and tear down the connection.
+    /// Idempotent. Supervised apps call this instead of `close`.
+    pub async fn stop(&self) {
+        self.stop_supervisor().await;
+        self.teardown_connection().await;
+    }
+
+    /// Abort the monitor task and detach recovery reporting. Bumps the
+    /// epoch so a `start()` that is concurrently establishing cannot
+    /// install a supervisor for the stopped generation.
+    async fn stop_supervisor(&self) {
+        let (handle, shutdown) = {
+            let mut sup = self.sup_state.lock().await;
+            sup.epoch += 1;
+            (sup.handle.take(), sup.shutdown.take())
+        };
+        if let Some(tx) = shutdown {
+            let _ = tx.send(());
+        }
+        if let Some(h) = handle {
+            h.abort();
+        }
+        *self.signal_tx.lock().await = None;
     }
 
     /// Background suspension (mobile).
     pub async fn suspend(&self) {
-        self.close().await;
+        self.teardown_connection().await;
     }
 
     /// Reconnect + re-handshake + explicit resubscribe from persisted cursors.
     pub async fn reconnect(&self) -> Result<(), TinkleError> {
-        self.close().await;
+        self.teardown_connection().await;
         let policy = self.config.reconnect.clone();
         let mut attempt: u32 = 0;
         loop {
@@ -656,7 +739,7 @@ impl Client {
                         let previous = self.principal().await;
                         if previous == UNKNOWN_PRINCIPAL {
                             if let Err(e) = self.subscribe(rooms, watch).await {
-                                self.close().await;
+                                self.teardown_connection().await;
                                 return Err(e);
                             }
                         } else {
@@ -665,7 +748,7 @@ impl Client {
                             let resp = match self.subscribe(rooms, watch).await {
                                 Ok(r) => r,
                                 Err(e) => {
-                                    self.close().await;
+                                    self.teardown_connection().await;
                                     return Err(e);
                                 }
                             };
@@ -675,7 +758,7 @@ impl Client {
                                     .map(|(id, _)| (id, 0))
                                     .collect::<Vec<_>>();
                                 if let Err(e) = self.subscribe(zeroed, watch_clone).await {
-                                    self.close().await;
+                                    self.teardown_connection().await;
                                     return Err(e);
                                 }
                             }
@@ -692,6 +775,198 @@ impl Client {
                     attempt += 1;
                 }
             }
+        }
+    }
+
+    /// Supervised lifecycle: establish the session, restore interests, and
+    /// start the sync supervisor, which owns automatic recovery and
+    /// reconnection from here on. The host only consumes `next_event()` and
+    /// acknowledges/applies updates; gaps, dead transports, and rebuilds
+    /// are handled inside the SDK.
+    ///
+    /// Idempotent: concurrent callers share the single supervisor and get
+    /// the initial establishment result. Call `stop()` (or `close()`) to
+    /// shut down; `connect`/`subscribe`/`reconnect` remain as documented
+    /// low-level primitives for manual control.
+    pub async fn start(
+        &self,
+        rooms: Vec<(i64, u64)>,
+        watch_user_ids: Vec<i64>,
+    ) -> Result<SubscribeResult, TinkleError> {
+        let _guard = self.start_lock.lock().await;
+        {
+            let sup = self.sup_state.lock().await;
+            if sup.handle.is_some() {
+                return sup.last_result.clone().ok_or_else(|| {
+                    TinkleError::NotConnected("supervisor running without result".into())
+                });
+            }
+        }
+        let epoch = self.sup_state.lock().await.epoch;
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (sig_tx, sig_rx) = mpsc::channel(64);
+        *self.signal_tx.lock().await = Some(sig_tx);
+        let result = self.establish(rooms, watch_user_ids).await;
+        match result {
+            Ok(res) => {
+                let mut sup = self.sup_state.lock().await;
+                if sup.epoch != epoch || sup.handle.is_some() {
+                    // A concurrent stop() won the race: do not install a
+                    // supervisor for the stopped generation.
+                    return Err(TinkleError::NotConnected("stopped during start".into()));
+                }
+                let task_client = self.clone();
+                let handle =
+                    tokio::spawn(async move { task_client.supervise(sig_rx, shutdown_rx).await });
+                sup.handle = Some(handle);
+                sup.shutdown = Some(shutdown_tx);
+                sup.last_result = Some(res.clone());
+                Ok(res)
+            }
+            Err(e) => {
+                // Leave no unsupervised half-established connection behind.
+                *self.signal_tx.lock().await = None;
+                self.teardown_connection().await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Connect (if needed) and subscribe. Signals are wired by `connect()`
+    /// from `signal_tx`, so supervised and manual paths share this.
+    async fn establish(
+        &self,
+        rooms: Vec<(i64, u64)>,
+        watch_user_ids: Vec<i64>,
+    ) -> Result<SubscribeResult, TinkleError> {
+        if !self.is_connected().await {
+            self.connect().await?;
+        }
+        self.subscribe(rooms, watch_user_ids).await
+    }
+
+    /// Supervisor monitor: exactly one per client. Reacts to pump death
+    /// and recovery hints; the interval tick is a backstop for missed
+    /// hints. Returns only on shutdown.
+    async fn supervise(
+        self,
+        mut sig_rx: mpsc::Receiver<RecoverySignal>,
+        mut shutdown: oneshot::Receiver<()>,
+    ) {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Per-stream (consecutive failures, last attempt): bounds hammering
+        // a persistently failing stream while allowing eventual recovery.
+        let mut degraded: HashMap<String, (u32, std::time::Instant)> = HashMap::new();
+        loop {
+            tokio::select! {
+                _ = &mut shutdown => break,
+                _ = tick.tick() => {
+                    if !self.is_connected().await {
+                        self.reestablish().await;
+                        degraded.clear();
+                    }
+                }
+                Some(signal) = sig_rx.recv() => {
+                    match signal {
+                        RecoverySignal::PumpDead => {
+                            self.reestablish().await;
+                            degraded.clear();
+                        }
+                        RecoverySignal::Gap { stream }
+                        | RecoverySignal::CheckpointFailed { stream } => {
+                            self.recover_one(&stream, &mut degraded).await;
+                        }
+                        RecoverySignal::Rebuild { stream } => {
+                            // Expiry already reset local state and fenced the
+                            // cache; reconstruct from the origin through the
+                            // standard recovery path. Persistent failure
+                            // leaves RebuildRequired in place.
+                            self.recover_one(&stream, &mut degraded).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Reconnect + resubscribe from persisted interests, with a cooldown so
+    /// overlapping triggers do not pile up (reconnect backs off internally).
+    async fn reestablish(&self) {
+        {
+            let mut sup = self.sup_state.lock().await;
+            let now = std::time::Instant::now();
+            if let Some(last) = sup.last_reestablish {
+                if now.duration_since(last) < std::time::Duration::from_secs(10) {
+                    return;
+                }
+            }
+            sup.last_reestablish = Some(now);
+        }
+        if self.is_connected().await {
+            return;
+        }
+        tracing::debug!("supervisor re-establishing connection");
+        if let Err(e) = self.reconnect().await {
+            tracing::debug!(error = %e, "supervisor re-establish failed, will retry");
+        }
+    }
+
+    /// Bounded recovery for one stream from its durable applied cursor.
+    /// Success clears the degraded record; anything else leaves stream
+    /// state (Gap/RebuildRequired events already emitted) for the host.
+    async fn recover_one(
+        &self,
+        stream: &str,
+        degraded: &mut HashMap<String, (u32, std::time::Instant)>,
+    ) {
+        let now = std::time::Instant::now();
+        if let Some((count, last)) = degraded.get(stream) {
+            if *count >= 3 && now.duration_since(*last) < std::time::Duration::from_secs(30) {
+                return;
+            }
+        }
+        let mgr = match self.live_mgr().await {
+            Ok(m) => m,
+            // No connection: the watchdog owns re-establishment; the next
+            // signal after reconnect retries recovery.
+            Err(_) => return,
+        };
+        let after = mgr.applied_cursor(stream).await;
+        let mut ok = false;
+        for _ in 0..3 {
+            match self.recover_stream(stream, after, 200).await {
+                Ok(_) => {
+                    ok = true;
+                    break;
+                }
+                Err(e) => match e.recovery_decision() {
+                    RecoveryDecision::Retry => {
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        continue;
+                    }
+                    // Rebuild/Auth/Fail: state already reflects the outcome
+                    // (RebuildRequired event or surfaced error); do not loop.
+                    _ => break,
+                },
+            }
+        }
+        if ok {
+            degraded.remove(stream);
+        } else {
+            let count = degraded.get(stream).map(|(c, _)| *c).unwrap_or(0) + 1;
+            degraded.insert(stream.to_string(), (count, now));
+        }
+    }
+
+    /// Best-effort effective cursor for `stream` (`applied` plus volatile
+    /// delivered progress). `None` when offline. Authoritative for UI
+    /// progress: informational events may drop under pressure, cursors do
+    /// not.
+    pub async fn current_cursor(&self, stream: &str) -> Option<u64> {
+        match self.live_mgr().await {
+            Ok(mgr) => Some(mgr.effective_cursor(stream).await),
+            Err(_) => None,
         }
     }
 
