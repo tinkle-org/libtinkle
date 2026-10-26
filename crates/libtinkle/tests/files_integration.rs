@@ -6,6 +6,7 @@ use futures_util::{SinkExt, StreamExt};
 use prost::Message;
 use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 
@@ -38,6 +39,20 @@ struct FilesState {
     files: HashMap<i64, Vec<u8>>,
     next_upload: i64,
     next_file: i64,
+    /// Observed `DownloadPart` requests as `(file_id, offset)`, in order.
+    downloads: Vec<(i64, i64)>,
+    /// When set, the gateway pauses its first `DownloadPart` response until
+    /// the test releases it (deterministic mid-flight cancellation).
+    download_gate: Option<Arc<DownloadGate>>,
+}
+
+/// One-shot pause for the first `DownloadPart` response.
+#[derive(Debug, Default)]
+struct DownloadGate {
+    /// Set once the mock reaches the paused response.
+    entered: AtomicBool,
+    /// The test notifies this to let the paused response through.
+    release: tokio::sync::Notify,
 }
 
 type Shared = Arc<Mutex<FilesState>>;
@@ -69,7 +84,10 @@ fn file_info_for(file_id: i64, bytes: &[u8]) -> tinkle_schema::proto::FileInfo {
     tinkle_schema::proto::FileInfo {
         file_id,
         size_bytes: bytes.len() as i64,
-        sha256: vec![0xABu8; 32].into(),
+        // Real digest: `DownloadManager` verifies size + SHA-256, so the
+        // mock must serve the truthful value (a placeholder would fail
+        // verification and hide manager-level regressions).
+        sha256: libtinkle::sha256(bytes).to_vec().into(),
         mime_type: None,
         file_name: None,
         encrypted: false,
@@ -338,6 +356,7 @@ fn handle_files(id: u64, req: RpcRequest, state: &Shared) -> Frame {
             if r.limit <= 0 {
                 return rpc_error(id, 3, "limit must be positive");
             }
+            st.downloads.push((r.file_id, r.offset));
             let start = r.offset as usize;
             let end = (start + r.limit as usize).min(bytes.len());
             let data = bytes[start..end].to_vec();
@@ -446,7 +465,21 @@ async fn mock_gateway(listener: TcpListener, state: Shared) {
                 };
                 // Keep the notification pump alive shape: after every Files
                 // response, also emit an opaque hint.
+                let is_download_part =
+                    req.method.as_str() == "/tinkle.v1.FilesService/DownloadPart";
                 let resp_frame = handle_files(id, req, &task_state);
+                // Deterministic mid-flight pause: the first DownloadPart
+                // response waits for the test's release. This runs outside
+                // `handle_files`, so the state mutex is never held across
+                // the wait.
+                if is_download_part {
+                    let gate = task_state.lock().unwrap().download_gate.clone();
+                    if let Some(g) = gate {
+                        if !g.entered.swap(true, Ordering::SeqCst) {
+                            g.release.notified().await;
+                        }
+                    }
+                }
                 let out = encode_frame(&resp_frame, ValidationContext::active(1)).unwrap();
                 if write
                     .send(tokio_tungstenite::tungstenite::Message::Binary(out.into()))
@@ -472,13 +505,15 @@ async fn mock_gateway(listener: TcpListener, state: Shared) {
 }
 
 async fn start_mock() -> SocketAddr {
+    start_mock_logged().await.0
+}
+
+async fn start_mock_logged() -> (SocketAddr, Shared) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(mock_gateway(
-        listener,
-        Arc::new(Mutex::new(FilesState::default())),
-    ));
-    addr
+    let state: Shared = Arc::new(Mutex::new(FilesState::default()));
+    tokio::spawn(mock_gateway(listener, state.clone()));
+    (addr, state)
 }
 
 fn test_client(addr: SocketAddr) -> libtinkle::Client {
@@ -833,5 +868,150 @@ async fn files_chunked_upload_download_happy_path() {
         .await
         .unwrap();
     assert!(aborted.aborted);
+    c.close().await;
+}
+
+/// Manager-level round trip: `UploadManager::upload_bytes` commits a file
+/// and `DownloadManager::download_bytes` returns the identical bytes. The
+/// download verifies size + SHA-256 against `GetFileInfo`, so this fails
+/// unless the mock serves the truthful digest.
+#[tokio::test]
+async fn files_managers_upload_download_round_trip() {
+    let addr = start_mock().await;
+    let c = test_client(addr);
+    c.connect().await.unwrap();
+    // Distinct principal: `download_bytes` join-in-flight is keyed by
+    // (principal, file_id), and parallel tests mint colliding file ids on
+    // separate mocks — isolation keeps their shared downloads apart.
+    c.set_principal_user_id(9001).await;
+
+    let data: Vec<u8> = b"manager round trip".to_vec();
+    let uploader = libtinkle::UploadManager::new(c.clone());
+    let file = uploader
+        .upload_bytes(
+            libtinkle::UploadParams::new("mgr-roundtrip-1".into(), data.len()),
+            data.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(file.size_bytes, data.len() as i64);
+
+    let downloader = libtinkle::DownloadManager::new(c.clone());
+    let out = downloader.download_bytes(file.file_id, None).await.unwrap();
+    assert_eq!(out, data);
+    c.close().await;
+}
+
+/// Cancel isolation through the shared join-in-flight: cancelling consumer
+/// A mid-download surfaces `Cancelled` for A while consumer B still
+/// receives the full bytes. The mock pauses its first `DownloadPart`
+/// response, so the cancel lands strictly mid-flight with no sleeps.
+#[tokio::test]
+async fn download_cancel_isolation_one_consumer_does_not_cancel_other() {
+    let (addr, log) = start_mock_logged().await;
+    let c = test_client(addr);
+    c.connect().await.unwrap();
+    // Distinct principal: isolates this test's join-in-flight entries from
+    // the other manager tests running in parallel (see above).
+    c.set_principal_user_id(9002).await;
+
+    let data: Vec<u8> = (0..10_000u32).map(|i| (i % 251) as u8).collect();
+    let file = libtinkle::UploadManager::new(c.clone())
+        .upload_bytes(
+            libtinkle::UploadParams::new("mgr-cancel-1".into(), data.len()),
+            data.clone(),
+        )
+        .await
+        .unwrap();
+
+    // Pause the first DownloadPart response before starting the consumers.
+    let gate = Arc::new(DownloadGate::default());
+    log.lock().unwrap().download_gate = Some(gate.clone());
+
+    let token = libtinkle::CancelToken::new();
+    let t = token.clone();
+    let mgr_a = libtinkle::DownloadManager::new(c.clone());
+    let mgr_b = libtinkle::DownloadManager::new(c.clone());
+    let fid = file.file_id;
+    let h_a = tokio::spawn(async move { mgr_a.download_bytes(fid, Some(t)).await });
+    let h_b = tokio::spawn(async move { mgr_b.download_bytes(fid, None).await });
+    // Wait until the mock reaches the paused response (bounded, so a hung
+    // mock fails instead of hanging the suite).
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while !gate.entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("mock must reach the paused DownloadPart");
+    // Cancel while the shared download is paused: no response has been
+    // delivered yet, so A must observe Cancelled rather than a racy select.
+    token.cancel();
+    let a = tokio::time::timeout(std::time::Duration::from_secs(10), h_a)
+        .await
+        .expect("cancelled consumer must finish while paused")
+        .expect("download task panicked");
+    assert!(
+        matches!(
+            a,
+            Err(libtinkle::TinkleError::Syntra(
+                syntra_core::error::SyntraError::Cancelled(_)
+            ))
+        ),
+        "cancelled consumer must report Cancelled, got {a:?}"
+    );
+    // Release the paused response: the survivor completes with full bytes.
+    // `notify_one` retains the permit, so the release cannot be lost even
+    // if the gateway has not parked its waiter yet (`notify_waiters`
+    // would drop a pre-park release and hang the test).
+    gate.release.notify_one();
+    let b = tokio::time::timeout(std::time::Duration::from_secs(30), h_b)
+        .await
+        .expect("surviving consumer must finish after release")
+        .expect("download task panicked");
+    assert_eq!(b.unwrap(), data, "surviving consumer must get full bytes");
+    c.close().await;
+}
+
+/// Downloads always start at offset 0 (no resume prefix): the first
+/// `DownloadPart` of every fresh `download_bytes` run requests offset 0.
+#[tokio::test]
+async fn download_restarts_at_offset_zero() {
+    let (addr, log) = start_mock_logged().await;
+    let c = test_client(addr);
+    c.connect().await.unwrap();
+    // Distinct principal: isolates this test's join-in-flight entries from
+    // the other manager tests running in parallel (see above).
+    c.set_principal_user_id(9003).await;
+
+    let data: Vec<u8> = b"offset zero".to_vec();
+    let file = libtinkle::UploadManager::new(c.clone())
+        .upload_bytes(
+            libtinkle::UploadParams::new("mgr-offset-1".into(), data.len()),
+            data.clone(),
+        )
+        .await
+        .unwrap();
+
+    let mgr = libtinkle::DownloadManager::new(c.clone());
+    let base = log.lock().unwrap().downloads.len();
+    let out = mgr.download_bytes(file.file_id, None).await.unwrap();
+    assert_eq!(out, data);
+    let first_run: Vec<(i64, i64)> = log.lock().unwrap().downloads[base..].to_vec();
+    assert!(!first_run.is_empty(), "download must request parts");
+    assert_eq!(
+        first_run[0].1, 0,
+        "fresh download must start at offset 0, got {first_run:?}"
+    );
+
+    let base2 = log.lock().unwrap().downloads.len();
+    let out2 = mgr.download_bytes(file.file_id, None).await.unwrap();
+    assert_eq!(out2, data);
+    let second_run: Vec<(i64, i64)> = log.lock().unwrap().downloads[base2..].to_vec();
+    assert!(!second_run.is_empty(), "re-download must request parts");
+    assert_eq!(
+        second_run[0].1, 0,
+        "re-download must restart at offset 0, got {second_run:?}"
+    );
     c.close().await;
 }

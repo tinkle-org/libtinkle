@@ -307,11 +307,16 @@ impl SyncManager {
     /// Untrack conversations and notify hosts so they can drop cached
     /// rows. Emits one `ConversationRemoved` per key (best-effort via the
     /// bounded event channel, like all `SyncEvent`s).
+    ///
+    /// Acquires `in_flight` first (then tracked, status, dirty), matching
+    /// `begin_reconcile`/`end_reconcile`: taking it later while holding
+    /// tracked/status could deadlock against a concurrent `end_reconcile`
+    /// holding `in_flight` and waiting on `status`.
     pub(crate) async fn untrack_targets(&self, target_keys: &[String]) {
         {
+            let mut flight = self.in_flight.lock().await;
             let mut tracked = self.tracked.lock().await;
             let mut status = self.status.lock().await;
-            let mut flight = self.in_flight.lock().await;
             let mut dirty = self.dirty.lock().await;
             for key in target_keys {
                 tracked.remove(key);
@@ -364,8 +369,18 @@ impl SyncManager {
             }
         }
         for key in to_demand {
-            self.emit_signal(RecoverySignal::Demand { target_key: key })
+            let enqueued = self
+                .emit_signal(RecoverySignal::Demand {
+                    target_key: key.clone(),
+                })
                 .await;
+            if !enqueued {
+                // Dropped under pressure: mark dirty so the supervisor tick
+                // sweep retries it. A clean idle target would otherwise
+                // stall until the next hint (the sweep only requeues
+                // failed/dirty/catch-up keys).
+                self.dirty.lock().await.insert(key);
+            }
         }
     }
 

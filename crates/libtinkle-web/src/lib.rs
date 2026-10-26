@@ -649,8 +649,24 @@ impl TinkleWebClient {
     }
 
     /// Reconnect + re-handshake + explicit resubscribe from tracked targets.
+    ///
+    /// `wasm32` runtime state: returns an unsupported-runtime error like
+    /// [`Self::connect`], since the core reconnect drives the same
+    /// notification pump. Native builds reconnect for testing.
     pub async fn reconnect(&self) -> Result<(), JsValue> {
-        self.inner.reconnect().await.map_err(tinkle_err)
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = &self.inner;
+            return Err(JsValue::from_str(
+                "unsupported runtime: libtinkle::Client::reconnect uses tokio::spawn for its \
+                 notification pump, which panics without an active Tokio runtime; \
+                 browser needs spawn_local adaptation before a connection can be established",
+            ));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.inner.reconnect().await.map_err(tinkle_err)
+        }
     }
 
     /// Graceful shutdown: stop RPCs, tear down transport.

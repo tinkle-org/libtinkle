@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use crate::{FfiCursorStore, FfiError};
+use crate::FfiError;
 
 /// FFI-safe cached message.
 #[derive(Debug, Clone, uniffi::Record)]
@@ -332,52 +332,6 @@ impl SqliteStorage {
         tokio::task::spawn_blocking(move || inner.clear_principal(&principal).map_err(map_err))
             .await
             .map_err(|e| FfiError::Storage(format!("storage task failed: {e}")))?
-    }
-}
-
-#[async_trait::async_trait]
-impl FfiCursorStore for SqliteStorage {
-    async fn load_journal(
-        &self,
-        principal: String,
-        target_key: String,
-    ) -> Result<Option<i64>, crate::FfiError> {
-        self.load_journal(principal, target_key).await
-    }
-
-    async fn save_journal(
-        &self,
-        principal: String,
-        target_key: String,
-        accept_seq: i64,
-    ) -> Result<(), crate::FfiError> {
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            inner
-                .save_journal(&principal, &target_key, accept_seq)
-                .map_err(map_err)
-        })
-        .await
-        .map_err(|e| FfiError::Storage(format!("storage task failed: {e}")))?
-    }
-
-    async fn remove_target(
-        &self,
-        principal: String,
-        target_key: String,
-    ) -> Result<(), crate::FfiError> {
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            inner
-                .remove_target(&principal, &target_key)
-                .map_err(map_err)
-        })
-        .await
-        .map_err(|e| FfiError::Storage(format!("storage task failed: {e}")))?
-    }
-
-    async fn clear_principal(&self, principal: String) -> Result<(), crate::FfiError> {
-        self.clear_principal(principal).await
     }
 }
 

@@ -518,7 +518,22 @@ impl PushManager {
                     let target_c = target_key.clone();
                     let has_evidence = tokio::task::spawn_blocking(move || {
                         if let Ok(jobs) = storage.list_background_sync_jobs(&wanted_c, None) {
-                            if !jobs.is_empty() {
+                            // Push-path jobs self-attest: a wake persists one
+                            // even while logged out, so they must never count
+                            // as prior-auth evidence (otherwise one logged-out
+                            // wake resurrects the next).
+                            if jobs
+                                .iter()
+                                .any(|j| j.kind != PUSH_JOB_KIND && j.kind != PUSH_ACCOUNT_JOB_KIND)
+                            {
+                                return true;
+                            }
+                        }
+                        // Principal-wide dialog state also counts: a signed-in
+                        // client may hold cached conversations without rows
+                        // for this exact target.
+                        if let Ok(dialogs) = storage.list_dialogs(&wanted_c, 1) {
+                            if !dialogs.is_empty() {
                                 return true;
                             }
                         }
@@ -805,6 +820,27 @@ impl PushManager {
                         complete(&storage, &wanted, &job_id, "failed").await;
                         return PushOutcome::Failed {
                             reason: format!("auth:{e}"),
+                        };
+                    }
+                    RecoveryDecision::Fail => {
+                        // Terminal only for genuinely permanent errors.
+                        // Local/infra failures (no connection, sync or
+                        // storage faults) release for retry instead of
+                        // completing the job as failed.
+                        if matches!(
+                            e,
+                            TinkleError::NotConnected(_)
+                                | TinkleError::Sync(_)
+                                | TinkleError::CursorStore(_)
+                        ) {
+                            release(&storage, &wanted, &job_id, &owner).await;
+                            return PushOutcome::Deferred {
+                                reason: format!("transient:{e}"),
+                            };
+                        }
+                        complete(&storage, &wanted, &job_id, "failed").await;
+                        return PushOutcome::Failed {
+                            reason: format!("invalid:{e}"),
                         };
                     }
                     _ => {

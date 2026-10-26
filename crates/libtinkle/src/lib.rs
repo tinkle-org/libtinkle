@@ -47,8 +47,8 @@ pub use config::{ClientConfig, Credential, ReconnectPolicy};
 pub use cursor::{CursorStore, InMemoryCursorStore};
 pub use errors::{RecoveryDecision, TinkleError};
 pub use files::{
-    DownloadManager, FileManager, UploadManager, UploadParams, FALLBACK_MAX_DOWNLOAD_PART_BYTES,
-    SHARED_FILE_SCOPE,
+    sha256, DownloadManager, FileManager, UploadManager, UploadParams,
+    FALLBACK_MAX_DOWNLOAD_PART_BYTES, SHARED_FILE_SCOPE,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use push::{

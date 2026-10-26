@@ -972,58 +972,43 @@ impl UploadManager {
             sha256: params.sha256.clone().map(Into::into),
             encrypted: params.encrypted,
         };
-        let mut active_key = params.idempotency_key.clone();
-        let mut active_req = begin_req.clone();
-        // ABORTED/EXPIRED → fresh key (one derivation; callers needing more
-        // rotate the key themselves).
-        let mut fresh_retried = false;
-        loop {
-            let begin_resp = match self.client.begin_upload(active_req.clone()).await {
-                Ok(r) => r,
-                Err(e) if is_ambiguous(&e) => {
-                    // Ambiguous Begin: the session may exist server-side.
-                    // Retry the IDENTICAL request (same key + same presence);
-                    // the server returns the same session.
-                    self.client.begin_upload(active_req.clone()).await?
-                }
-                Err(e) => return Err(e),
-            };
-            match decide_begin_status(&begin_resp)? {
-                BeginDecision::Completed(file) => {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    self.clear_session(&active_key).await;
-                    return Ok(file);
-                }
-                BeginDecision::NeedFreshKey => {
-                    if fresh_retried {
-                        return Err(TinkleError::Sync(
-                            "upload session aborted/expired; retry with a fresh idempotency_key"
-                                .into(),
-                        ));
-                    }
-                    fresh_retried = true;
-                    active_key = format!("{}:fresh:{}", params.idempotency_key, now_secs());
-                    active_req = BeginUploadRequest {
-                        idempotency_key: active_key.clone(),
-                        ..begin_req.clone()
-                    };
-                    continue;
-                }
-                BeginDecision::Active {
+        let active_key = params.idempotency_key.clone();
+        let active_req = begin_req.clone();
+        // ABORTED/EXPIRED → the caller must retry with a fresh key. The
+        // SDK never derives one: the idempotency key is the caller's
+        // contract, and silently swapping it could double-apply server-side.
+        let begin_resp = match self.client.begin_upload(active_req.clone()).await {
+            Ok(r) => r,
+            Err(e) if is_ambiguous(&e) => {
+                // Ambiguous Begin: the session may exist server-side.
+                // Retry the IDENTICAL request (same key + same presence);
+                // the server returns the same session.
+                self.client.begin_upload(active_req.clone()).await?
+            }
+            Err(e) => return Err(e),
+        };
+        match decide_begin_status(&begin_resp)? {
+            BeginDecision::Completed(file) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                self.clear_session(&active_key).await;
+                Ok(file)
+            }
+            BeginDecision::NeedFreshKey => Err(TinkleError::Sync(
+                "upload session aborted/expired; retry with a fresh idempotency_key".into(),
+            )),
+            BeginDecision::Active {
+                upload_id,
+                part_size,
+            } => {
+                self.run_active_session(
+                    &active_key,
+                    &active_req,
+                    &params,
                     upload_id,
                     part_size,
-                } => {
-                    return self
-                        .run_active_session(
-                            &active_key,
-                            &active_req,
-                            &params,
-                            upload_id,
-                            part_size,
-                            &data,
-                        )
-                        .await;
-                }
+                    &data,
+                )
+                .await
             }
         }
     }
@@ -1960,7 +1945,13 @@ impl DownloadManager {
         cancel: Option<crate::CancelToken>,
     ) -> Result<std::path::PathBuf, TinkleError> {
         let bytes = self.download_bytes(file_id, cancel).await?;
-        publish_atomic(final_path, &bytes).map_err(|e| TinkleError::Sync(e.to_string()))?;
+        // `publish_atomic` is synchronous (write + fsync + rename): keep it
+        // off the async executor like `publish_cache_entry` does.
+        let path_owned = final_path.to_path_buf();
+        tokio::task::spawn_blocking(move || publish_atomic(&path_owned, &bytes))
+            .await
+            .map_err(|e| TinkleError::Sync(format!("publish task failed: {e}")))?
+            .map_err(|e| TinkleError::Sync(e.to_string()))?;
         Ok(final_path.to_path_buf())
     }
 
@@ -2441,22 +2432,6 @@ mod tests {
         assert!(dec.begin_has_sha);
     }
 
-    #[tokio::test]
-    async fn cancel_isolation_one_consumer_does_not_cancel_other() {
-        use crate::CancelToken;
-        // Two independent tokens: cancelling one leaves the other usable.
-        // (Join-in-flight honors per-consumer cancel; the shared download
-        // continues for the uncancelled consumer.)
-        let a = CancelToken::new();
-        let b = CancelToken::new();
-        a.cancel();
-        assert!(a.is_cancelled());
-        assert!(!b.is_cancelled());
-        // A cancelled consumer fails fast before I/O.
-        let mgr_cancelled = (a.is_cancelled(), b.is_cancelled());
-        assert_eq!(mgr_cancelled, (true, false));
-    }
-
     #[test]
     fn file_manager_honors_pin_and_active_reader() {
         let mgr = FileManager::new();
@@ -2481,39 +2456,5 @@ mod tests {
         publish_atomic(&final_path, b"zz").unwrap();
         assert_eq!(std::fs::read(&final_path).unwrap(), b"zz");
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn interrupt_resume_continues_from_durable_offset() {
-        // Durable resume offset inside the file is honored; out-of-range
-        // offsets restart from 0 (never trust blindly).
-        let s = tinkle_storage::Storage::open_in_memory().unwrap();
-        s.upsert_file_transfer(
-            "user:1",
-            &tinkle_storage::FileTransferJob {
-                job_id: "download::7".into(),
-                kind: "download".into(),
-                file_scope: "".into(),
-                file_id: 7,
-                upload_id: "".into(),
-                state: "active".into(),
-                session_json: "v1|7|12|abc".into(),
-                temp_path: "".into(),
-                resume_offset: 5,
-                updated_at: 1,
-            },
-        )
-        .unwrap();
-        let got = s
-            .get_file_transfer("user:1", "download::7")
-            .unwrap()
-            .unwrap();
-        assert_eq!(got.resume_offset, 5);
-        // Offset arithmetic for resume: continue from offset+len(data).
-        let mut offset = got.resume_offset;
-        let chunk_len = 4i64;
-        offset += chunk_len;
-        assert_eq!(offset, 9);
     }
 }

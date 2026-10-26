@@ -414,10 +414,19 @@ impl Client {
         self.transport_ok.store(true, Ordering::SeqCst);
         // Reissue the retained watch set on the fresh connection.
         // `ObserveConnectivity` is per-connection; without this a reconnect
-        // silently drops presence observations.
+        // silently drops presence observations. Presence is optional: a
+        // terminal watch rejection (Fail) is logged and the healthy
+        // connection kept — only errors requiring recovery tear it down.
         if let Err(e) = self.reobserve_stored_watch().await {
-            self.teardown_connection().await;
-            return Err(e);
+            match e.recovery_decision() {
+                RecoveryDecision::Fail => {
+                    tracing::warn!(error = %e, "stored watch rejected; keeping connection");
+                }
+                _ => {
+                    self.teardown_connection().await;
+                    return Err(e);
+                }
+            }
         }
         Ok(())
     }
@@ -1019,6 +1028,13 @@ impl Client {
             let affected: Vec<i64> = page.changes.iter().map(|c| c.message_id).collect();
             #[cfg(not(target_arch = "wasm32"))]
             let mut affected: Vec<i64> = Vec::with_capacity(page.changes.len());
+            // Set when the native shard loop below reports per-shard, so the
+            // page-level ConversationChanged stays shard-less-only.
+            // (Mutability is cfg-gated: wasm has no shards to report.)
+            #[cfg(target_arch = "wasm32")]
+            let shard_reported = false;
+            #[cfg(not(target_arch = "wasm32"))]
+            let mut shard_reported = false;
             let new_cursor = page.last_accept_seq;
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(sqlite) = mgr.sqlite_clone().await {
@@ -1102,6 +1118,26 @@ impl Client {
                         }
                     }
                     affected.append(&mut shard_affected);
+                    // Report each shard as it commits: a later shard (or
+                    // page) can still fail, and already-committed progress
+                    // must be reported rather than lost with it. The
+                    // aggregates below then only fire for shard-less paths
+                    // (`affected` stays empty here).
+                    if !affected.is_empty() {
+                        shard_reported = true;
+                        let _ = mgr
+                            .emit_event(SyncEvent::ConversationChanged {
+                                target_key: target_key.to_string(),
+                                applied_accept_seq: shard_cursor,
+                            })
+                            .await;
+                        let _ = mgr
+                            .emit_event(SyncEvent::MessagesChanged {
+                                target_key: target_key.to_string(),
+                                message_ids: std::mem::take(&mut affected),
+                            })
+                            .await;
+                    }
                 }
             } else {
                 let _guard = mgr.checkpoint_save_lock().await;
@@ -1142,12 +1178,17 @@ impl Client {
             applied += page.changes.len() as u64;
             after = new_cursor;
             {
-                let _ = mgr
-                    .emit_event(SyncEvent::ConversationChanged {
-                        target_key: target_key.to_string(),
-                        applied_accept_seq: new_cursor,
-                    })
-                    .await;
+                // Native shards already reported per-shard above; the
+                // page-level ConversationChanged is for shard-less paths
+                // only (wasm, native cursor-only) to avoid duplicates.
+                if !shard_reported {
+                    let _ = mgr
+                        .emit_event(SyncEvent::ConversationChanged {
+                            target_key: target_key.to_string(),
+                            applied_accept_seq: new_cursor,
+                        })
+                        .await;
+                }
                 if !affected.is_empty() {
                     let _ = mgr
                         .emit_event(SyncEvent::MessagesChanged {
@@ -2106,6 +2147,13 @@ impl Client {
 
     #[cfg(not(target_arch = "wasm32"))]
     async fn recover_due(&self, demand: &mut HashMap<String, TargetDemand>) {
+        // Drop demand for untracked targets first: stale queued demand must
+        // not recreate reconciliation state after `unsubscribe`. Runs
+        // already in flight still complete (single-flight is untouched).
+        if let Ok(mgr) = self.live_mgr().await {
+            let tracked: HashSet<String> = mgr.tracked_keys().await.into_iter().collect();
+            demand.retain(|k, _| tracked.contains(k));
+        }
         let now = std::time::Instant::now();
         let due: Vec<String> = demand
             .iter()
@@ -2129,6 +2177,12 @@ impl Client {
             Err(_) => return,
         };
         let keys = mgr.tracked_keys().await;
+        // Prune demand for untracked targets before anything else: stale
+        // queued demand must not recreate reconciliation state after
+        // `unsubscribe`. Already-active runs still complete (single-flight
+        // entries in `in_flight` are untouched).
+        let tracked: HashSet<String> = keys.iter().cloned().collect();
+        demand.retain(|k, _| tracked.contains(k));
         if keys.is_empty() {
             return;
         }
@@ -2197,6 +2251,13 @@ impl Client {
             Ok(m) => m,
             Err(_) => return,
         };
+        // A queued signal can outlive `unsubscribe`: never reconcile a
+        // target the live manager no longer tracks. Drop its demand so it
+        // cannot restore removed state.
+        if !mgr.tracked_keys().await.iter().any(|k| k == target_key) {
+            demand.remove(target_key);
+            return;
+        }
         if mgr.is_reconciling(target_key).await {
             if let Some(d) = demand.get_mut(target_key) {
                 d.next_due = now + std::time::Duration::from_secs(5);

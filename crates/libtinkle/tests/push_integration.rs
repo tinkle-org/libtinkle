@@ -442,6 +442,36 @@ async fn push_after_logout_defers_and_wipes() {
     c.close().await;
 }
 
+/// Logged-out self-attestation guard: a push-path job persisted while
+/// logged out must not count as prior-auth evidence. Two consecutive
+/// wakes stay `logged_out` and write no message rows.
+#[tokio::test]
+async fn push_logged_out_wakes_do_not_self_resurrect() {
+    let addr = start_mock().await;
+    let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
+    let c = push_client(addr, storage.clone());
+    c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
+    assert!(c.logout().await.is_ok());
+
+    let mgr = libtinkle::PushManager::new(c.clone());
+    for evt in ["evt-lo-self-1", "evt-lo-self-2"] {
+        match mgr.process_push(push_envelope(evt, vec![401])).await {
+            libtinkle::PushOutcome::Deferred { reason } => assert_eq!(reason, "logged_out"),
+            other => panic!("logged-out wake must defer logged_out, got {other:?}"),
+        }
+    }
+    let rows = storage
+        .get_messages("user:42", "target:room:10", 20, None)
+        .unwrap();
+    assert!(
+        rows.is_empty(),
+        "logged-out wakes must write no rows, got {}",
+        rows.len()
+    );
+    c.close().await;
+}
+
 /// An expired deadline defers without touching the network; the durable
 /// job survives for the next wake.
 #[tokio::test]

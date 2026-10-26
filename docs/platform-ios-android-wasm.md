@@ -49,9 +49,14 @@ logic. Syntra comes from crates.io (`syntra-core`/`syntra-runtime`/
   and is not yet in the facade.
 - Storage: implement `CursorStore` over Core Data/SQLite (GRDB) or
   Keychain-backed SQLite; persist atomically with message indexes.
-- Push: APNs (including VoIP for calls) wakes the app; call
-  `sync_after_wake` (reconnect + resubscribe from tracked targets, then
-  `reconcile_now`). Do not hold a background WebSocket; iOS suspends it.
+- Push: APNs (including VoIP for calls) wakes the app; parse with
+  `parsePushPayload`, then drive `handlePushWake(envelope, timeoutSecs)`
+  for the durable push flow (independent connection, authoritative
+  fetch, shared-ingest commit, bounded reconcile). For foreground
+  refreshes use `reconnect` + `openPushNotification` (navigate via
+  `pushTargetKey`), and call `pushRecoverStaleJobs` at startup to
+  requeue leases leaked by a killed extension. Do not hold a background
+  WebSocket; iOS suspends it.
 - TLS: rustls native roots + system roots; ATS requires `wss://` (no
   `ws://` exceptions in production).
 
@@ -70,9 +75,11 @@ logic. Syntra comes from crates.io (`syntra-core`/`syntra-runtime`/
   not yet in the facade.
 - Storage: `CursorStore` over Room/SQLite + EncryptedSharedPreferences
   for the session token (never in cleartext prefs).
-- Push: FCM data messages trigger `sync_after_wake` (reconnect +
-  resubscribe from tracked targets, then `reconcile_now`). Respect Doze;
-  use `WorkManager` for deferred sync, not a foreground socket.
+- Push: FCM data messages trigger `parsePushPayload` +
+  `handlePushWake(envelope, timeoutSecs)` (same durable flow as iOS).
+  Respect Doze; use `WorkManager` for deferred sync, not a foreground
+  socket. Foreground refreshes go through `reconnect` +
+  `openPushNotification`; call `pushRecoverStaleJobs` at startup.
 - TLS: rustls native roots; Network Security Config pins `wss://` only.
 
 ## WebAssembly/browser
