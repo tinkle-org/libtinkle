@@ -22,13 +22,20 @@ uniffi::setup_scaffolding!();
 pub mod client;
 pub mod config;
 pub mod error;
+pub mod push;
 pub mod runtime;
 pub mod sqlite;
 pub mod store;
 
-pub use client::{FfiSubscribeResponse, FfiSyncEvent, RoomSub, TinkleClient};
+pub use client::{
+    FfiDialogsRequest, FfiHistoryRequest, FfiLoadPolicy, FfiReconcileStatus, FfiSubscribeResponse,
+    FfiSyncEvent, TargetSub, TinkleClient,
+};
 pub use config::ClientConfigFfi;
 pub use error::FfiError;
+pub use push::{
+    parse_push_payload, push_recover_stale_jobs, push_target_key, FfiPushEnvelope, FfiPushOutcome,
+};
 pub use runtime::tinkle_ffi_init;
 pub use sqlite::{FfiDialog, FfiMessage, SqliteStorage};
 pub use store::{FfiCursorStore, InMemoryFfiStore};

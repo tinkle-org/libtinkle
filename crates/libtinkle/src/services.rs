@@ -6,6 +6,10 @@
 //! Syntra `RpcRequest`, allocates a nonzero `request_id`, sends through
 //! the active connection, awaits the matching `RpcResult`, decodes the
 //! typed response, and returns typed errors.
+//!
+//! Reconciliation model: `Updates` is connectivity-only
+//! (`observe_connectivity`); journal paging (`get_target_changes`) and body
+//! fetches (`get_messages`) live on `Messages` via the new method consts.
 
 use prost::Message;
 
@@ -58,6 +62,41 @@ impl<'a> Messages<'a> {
         .await
     }
 
+    /// Fetch specific messages in one conversation (unary). Callers must
+    /// chunk to `MAX_MESSAGE_IDS_PER_REQUEST`; see `Client::get_messages`
+    /// for the chunking wrapper.
+    pub async fn get_messages(
+        &self,
+        req: tinkle_schema::proto::GetMessagesRequest,
+    ) -> Result<tinkle_schema::proto::GetMessagesResponse, TinkleError> {
+        call_typed(
+            self.client,
+            tinkle_schema::sync::GET_MESSAGES_METHOD,
+            &req,
+            30_000,
+        )
+        .await
+    }
+
+    /// List retained conversation mutations strictly after one accept
+    /// position (unary). Pages validate via `validate_changes_page`.
+    pub async fn get_target_changes(
+        &self,
+        req: tinkle_schema::proto::GetTargetChangesRequest,
+    ) -> Result<tinkle_schema::proto::GetTargetChangesResponse, TinkleError> {
+        call_typed(
+            self.client,
+            tinkle_schema::sync::GET_TARGET_CHANGES_METHOD,
+            &req,
+            30_000,
+        )
+        .await
+    }
+
+    /// Read-only message snapshot. Never advances journal cursors: history
+    /// is outside the retained mutation journal. Pair with
+    /// `Client::load_history` when the snapshot should also hydrate the
+    /// offline cache.
     pub async fn get_history(
         &self,
         req: tinkle_schema::proto::GetHistoryRequest,
@@ -71,6 +110,7 @@ impl<'a> Messages<'a> {
         .await
     }
 
+    /// Read-only dialog snapshot. Never advances journal cursors.
     pub async fn get_dialogs(
         &self,
         req: tinkle_schema::proto::GetDialogsRequest,
@@ -133,11 +173,6 @@ impl<'a> Auth<'a> {
             30_000,
         )
         .await?;
-        // Learn the authenticated principal (`user:<id>`) for sync scope.
-        // Only touch live sync state on an actual principal change:
-        // setting the principal clears cursors/pending/delivered, so a
-        // repeat sign-in for the same user must be a no-op. Switching to
-        // a different user requires resubscribing afterwards.
         if let Some(user) = resp.user.as_ref() {
             let id = match user.user_type.as_ref() {
                 Some(tinkle_schema::proto::user::UserType::Data(d)) => Some(d.id),
@@ -157,7 +192,217 @@ impl<'a> Auth<'a> {
     }
 }
 
-/// Updates service: gRPC catch-up plus Syntra follow binding.
+/// Files service (`/tinkle.v1.FilesService/*`).
+///
+/// All 7 unary RPCs validate locally per contract before touching the
+/// transport and use a 30s timeout. Chunking (multi-part upload/download
+/// loops) lives with the caller; see `Client` helpers.
+pub struct Files<'a> {
+    client: &'a Client,
+}
+
+impl<'a> Files<'a> {
+    pub(crate) fn new(client: &'a Client) -> Self {
+        Self { client }
+    }
+
+    pub async fn begin_upload(
+        &self,
+        req: tinkle_schema::proto::BeginUploadRequest,
+    ) -> Result<tinkle_schema::proto::BeginUploadResponse, TinkleError> {
+        if req.idempotency_key.is_empty() {
+            return Err(TinkleError::Codec(
+                "BeginUploadRequest.idempotency_key must be non-empty".to_string(),
+            ));
+        }
+        if req.size_bytes < 0 {
+            return Err(TinkleError::Codec(
+                "BeginUploadRequest.size_bytes must be non-negative".to_string(),
+            ));
+        }
+        if let Some(d) = req.sha256.as_ref() {
+            if d.len() != 32 {
+                return Err(TinkleError::Codec(
+                    "BeginUploadRequest.sha256 must be 32 bytes".to_string(),
+                ));
+            }
+        }
+        call_typed(
+            self.client,
+            tinkle_schema::methods::filesservice::BEGIN_UPLOAD,
+            &req,
+            30_000,
+        )
+        .await
+    }
+
+    pub async fn upload_part(
+        &self,
+        req: tinkle_schema::proto::UploadPartRequest,
+    ) -> Result<tinkle_schema::proto::UploadPartResponse, TinkleError> {
+        if req.upload_id.is_empty() {
+            return Err(TinkleError::Codec(
+                "UploadPartRequest.upload_id must be non-empty".to_string(),
+            ));
+        }
+        if req.part_index < 0 {
+            return Err(TinkleError::Codec(
+                "UploadPartRequest.part_index must be non-negative".to_string(),
+            ));
+        }
+        if req.data.is_empty() {
+            return Err(TinkleError::Codec(
+                "UploadPartRequest.data must be non-empty".to_string(),
+            ));
+        }
+        if let Some(d) = req.sha256.as_ref() {
+            if d.len() != 32 {
+                return Err(TinkleError::Codec(
+                    "UploadPartRequest.sha256 must be 32 bytes".to_string(),
+                ));
+            }
+        }
+        call_typed(
+            self.client,
+            tinkle_schema::methods::filesservice::UPLOAD_PART,
+            &req,
+            30_000,
+        )
+        .await
+    }
+
+    pub async fn get_upload_status(
+        &self,
+        req: tinkle_schema::proto::GetUploadStatusRequest,
+    ) -> Result<tinkle_schema::proto::GetUploadStatusResponse, TinkleError> {
+        if req.upload_id.is_empty() {
+            return Err(TinkleError::Codec(
+                "GetUploadStatusRequest.upload_id must be non-empty".to_string(),
+            ));
+        }
+        if let Some(n) = req.page_size {
+            if n <= 0 {
+                return Err(TinkleError::Codec(
+                    "GetUploadStatusRequest.page_size must be positive".to_string(),
+                ));
+            }
+        }
+        call_typed(
+            self.client,
+            tinkle_schema::methods::filesservice::GET_UPLOAD_STATUS,
+            &req,
+            30_000,
+        )
+        .await
+    }
+
+    pub async fn complete_upload(
+        &self,
+        req: tinkle_schema::proto::CompleteUploadRequest,
+    ) -> Result<tinkle_schema::proto::CompleteUploadResponse, TinkleError> {
+        if req.upload_id.is_empty() {
+            return Err(TinkleError::Codec(
+                "CompleteUploadRequest.upload_id must be non-empty".to_string(),
+            ));
+        }
+        if let Some(d) = req.sha256.as_ref() {
+            if d.len() != 32 {
+                return Err(TinkleError::Codec(
+                    "CompleteUploadRequest.sha256 must be 32 bytes".to_string(),
+                ));
+            }
+        }
+        call_typed(
+            self.client,
+            tinkle_schema::methods::filesservice::COMPLETE_UPLOAD,
+            &req,
+            30_000,
+        )
+        .await
+    }
+
+    pub async fn abort_upload(
+        &self,
+        req: tinkle_schema::proto::AbortUploadRequest,
+    ) -> Result<tinkle_schema::proto::AbortUploadResponse, TinkleError> {
+        if req.upload_id.is_empty() {
+            return Err(TinkleError::Codec(
+                "AbortUploadRequest.upload_id must be non-empty".to_string(),
+            ));
+        }
+        call_typed(
+            self.client,
+            tinkle_schema::methods::filesservice::ABORT_UPLOAD,
+            &req,
+            30_000,
+        )
+        .await
+    }
+
+    pub async fn get_file_info(
+        &self,
+        req: tinkle_schema::proto::GetFileInfoRequest,
+    ) -> Result<tinkle_schema::proto::GetFileInfoResponse, TinkleError> {
+        if req.file_id <= 0 {
+            return Err(TinkleError::Codec(
+                "GetFileInfoRequest.file_id must be positive".to_string(),
+            ));
+        }
+        call_typed(
+            self.client,
+            tinkle_schema::methods::filesservice::GET_FILE_INFO,
+            &req,
+            30_000,
+        )
+        .await
+    }
+
+    pub async fn download_part(
+        &self,
+        req: tinkle_schema::proto::DownloadPartRequest,
+    ) -> Result<tinkle_schema::proto::DownloadPartResponse, TinkleError> {
+        if req.file_id <= 0 {
+            return Err(TinkleError::Codec(
+                "DownloadPartRequest.file_id must be positive".to_string(),
+            ));
+        }
+        if req.offset < 0 {
+            return Err(TinkleError::Codec(
+                "DownloadPartRequest.offset must be non-negative".to_string(),
+            ));
+        }
+        if req.limit <= 0 {
+            return Err(TinkleError::Codec(
+                "DownloadPartRequest.limit must be positive".to_string(),
+            ));
+        }
+        call_typed(
+            self.client,
+            tinkle_schema::methods::filesservice::DOWNLOAD_PART,
+            &req,
+            30_000,
+        )
+        .await
+    }
+
+    /// Generic escape hatch for any other FilesService method.
+    pub async fn call<Req, Resp>(
+        &self,
+        method: &str,
+        req: &Req,
+        timeout_ms: u32,
+    ) -> Result<Resp, TinkleError>
+    where
+        Req: Message,
+        Resp: Message + Default,
+    {
+        call_typed(self.client, method, req, timeout_ms).await
+    }
+}
+
+/// Updates service: connectivity observations only. The durable update feed
+/// retired; reconciliation runs over `MessagesService/GetTargetChanges` +
+/// `GetMessages`, and notifications are opaque reconcile hints.
 pub struct Updates<'a> {
     client: &'a Client,
 }
@@ -165,43 +410,6 @@ pub struct Updates<'a> {
 impl<'a> Updates<'a> {
     pub(crate) fn new(client: &'a Client) -> Self {
         Self { client }
-    }
-
-    /// Bounded replay over the live connection (`ReadUpdates` as a Syntra
-    /// RPC). The default recovery transport; pages re-enter the same
-    /// pipeline as live follows.
-    pub async fn read_updates(
-        &self,
-        req: tinkle_schema::proto::ReadUpdatesRequest,
-    ) -> Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> {
-        self.client.read_updates_syntra(req).await
-    }
-
-    /// Bounded replay over a dedicated gRPC channel. Opt-in
-    /// (`RecoveryTransport::Grpc`); requires `grpc_endpoint` in config.
-    pub async fn read_updates_grpc(
-        &self,
-        req: tinkle_schema::proto::ReadUpdatesRequest,
-    ) -> Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> {
-        self.client.read_updates_grpc(req).await
-    }
-
-    /// Start a follow watch over Syntra (`FollowUpdates`). The correlated
-    /// result confirms the subscription; durable changes then arrive as
-    /// `FollowUpdatesResponse` notifications.
-    pub async fn follow(
-        &self,
-        req: tinkle_schema::proto::FollowUpdatesRequest,
-    ) -> Result<tinkle_schema::proto::FollowUpdatesResponse, TinkleError> {
-        // Empty stream selects the caller's own user stream; the gateway
-        // resolves it from authentication and echoes the concrete stream.
-        call_typed(
-            self.client,
-            tinkle_schema::sync::FOLLOW_METHOD,
-            &req,
-            30_000,
-        )
-        .await
     }
 
     /// Start connectivity observations over Syntra (`ObserveConnectivity`).

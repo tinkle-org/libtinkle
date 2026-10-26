@@ -897,6 +897,7 @@ dependencies = [
  "prost 0.14.4",
  "prost-types",
  "rand 0.8.8",
+ "serde_json",
  "syntra-core",
  "syntra-runtime",
  "syntra-ws",
@@ -916,9 +917,15 @@ dependencies = [
 name = "libtinkle-web"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "base64",
  "getrandom 0.2.17",
  "js-sys",
  "libtinkle",
+ "prost 0.14.4",
+ "serde",
+ "serde_json",
+ "tinkle-schema",
  "wasm-bindgen",
  "wasm-bindgen-futures",
 ]
@@ -1727,9 +1734,9 @@ dependencies = [
 
 [[package]]
 name = "tinkle-org_schema_community_neoeinstein-prost"
-version = "0.5.0-20261025011045-a444aece5d59.2"
+version = "0.5.0-20261026025606-782100705bf9.2"
 source = "sparse+https://buf.build/gen/cargo/public/"
-checksum = "bf952de9b46f6a8814e5aebe06529fb29e49f4022d09d57d289cbcfea15de98d"
+checksum = "d7c4c084cb4f534fd48af01ce69d7571649623bf0edd3ada31999c17d8cff73a"
 dependencies = [
  "prost 0.14.4",
  "prost-types",
@@ -1737,9 +1744,9 @@ dependencies = [
 
 [[package]]
 name = "tinkle-org_schema_community_neoeinstein-tonic"
-version = "0.5.0-20261025011045-a444aece5d59.4"
+version = "0.5.0-20261026025606-782100705bf9.4"
 source = "sparse+https://buf.build/gen/cargo/public/"
-checksum = "610de11f2b1ad079b33ac598bc685282f01edf53a726e4be58e6b92f6a53f56a"
+checksum = "5cb5d621f26ee4712e1dbb2ac8f42a58c47d007b836ad191985225db21229b5d"
 dependencies = [
  "tinkle-org_schema_community_neoeinstein-prost",
  "tonic",

@@ -1,25 +1,24 @@
-//! High-level typed client: `connect → call → sync → reconnect`.
+//! High-level typed client: `connect → subscribe → reconcile`.
 //!
 //! Conceptual use:
 //! ```ignore
 //! client.connect().await?;
-//! client.subscribe(vec![], vec![]).await?;
+//! client.set_principal_user_id(42).await;
+//! client.subscribe(vec![target]).await?;
 //! while let Some(evt) = client.next_event().await {
-//!     if let SyncEvent::UpdateReady { stream, cursor, update } = evt {
-//!         // apply update + required refreshes, then:
-//!         client.acknowledge(&stream, cursor).await?;
-//!     }
+//!     // ConversationChanged / MessagesChanged / Connectivity ...
 //! }
 //! ```
 //!
 //! The SDK serializes the public request protobuf, constructs the Syntra
 //! `RpcRequest`, allocates a nonzero `request_id`, sends through the
 //! active connection, awaits the matching `RpcResult`, decodes the typed
-//! response, and returns typed errors. Catch-up uses `ReadUpdates` over
-//! the same Syntra connection by default (dedicated gRPC is opt-in);
-//! ongoing delivery uses Syntra `FollowUpdates` / `ObserveConnectivity`
-//! notifications. Never auto-retries unsafe
-//! mutations without an application idempotency policy.
+//! response, and returns typed errors. Journal paging (`GetTargetChanges`)
+//! and body fetches (`GetMessages`) run over the same Syntra connection by
+//! default (dedicated gRPC is opt-in via `grpc_endpoint`); ongoing delivery
+//! is opaque `Notification` hints that kick per-target reconciliation.
+//! Never auto-retries unsafe mutations without an application idempotency
+//! policy.
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
@@ -27,6 +26,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
+#[cfg(not(target_arch = "wasm32"))]
 use zeroize::Zeroizing;
 
 use syntra_runtime::{CancelToken, Initiator};
@@ -35,10 +35,8 @@ use crate::config::{ClientConfig, Credential};
 use crate::cursor::CursorStore;
 use crate::errors::{RecoveryDecision, TinkleError};
 use crate::reconnect::{backoff_sleep, should_retry};
-use crate::services::{Auth, Messages, Updates};
-use crate::sync::{Interests, RecoverySignal, SyncEvent, SyncManager, UNKNOWN_PRINCIPAL};
-use crate::ErrorCode;
-use tinkle_schema::sync::SyncError;
+use crate::services::{Auth, Files, Messages, Updates};
+use crate::sync::{ReconcileStatus, RecoverySignal, SyncEvent, SyncManager, UNKNOWN_PRINCIPAL};
 
 struct Live {
     handle: syntra_ws::WsHandle,
@@ -48,86 +46,137 @@ struct Live {
     pump: tokio::task::JoinHandle<()>,
 }
 
-/// Supervisor state: exactly one monitor task per logical client.
-/// `epoch` guards handle installation against a concurrent `stop()`;
-/// `last_result` reflects the initial `start()` establishment.
 #[derive(Default)]
 struct SupState {
     handle: Option<tokio::task::JoinHandle<()>>,
     shutdown: Option<oneshot::Sender<()>>,
     epoch: u64,
-    // Supervisor-only: the monitor task cannot spawn on wasm32 (its future
-    // captures the connection handle, which is !Send on the browser
-    // executor). Autonomous supervision arrives with the spawn_local
-    // adaptation; manual connect/subscribe/recover work on wasm today.
     #[cfg(not(target_arch = "wasm32"))]
-    last_result: Option<SubscribeResult>,
+    last_result: Option<()>,
     #[cfg(not(target_arch = "wasm32"))]
     last_reestablish: Option<std::time::Instant>,
 }
 
-/// Result of establishing sync interests.
+/// Per-target reconcile demand tracked by the supervisor.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone)]
-pub struct SubscribeResult {
-    pub stream: String,
-    pub after_cursor: u64,
-    pub head: Option<u64>,
+struct TargetDemand {
+    failures: u32,
+    next_due: std::time::Instant,
 }
 
-/// Typed Tinkle client over Syntra + gRPC catch-up.
+#[cfg(not(target_arch = "wasm32"))]
+impl TargetDemand {
+    fn fresh() -> Self {
+        Self {
+            failures: 0,
+            next_due: std::time::Instant::now(),
+        }
+    }
+
+    fn backoff_for(failures: u32) -> std::time::Duration {
+        let shift = failures.min(5);
+        std::time::Duration::from_secs(2u64.saturating_mul(1 << shift).min(60))
+    }
+}
+
+/// Sync interests carried across reconnects: tracked conversation targets.
+#[derive(Debug, Default, Clone)]
+struct Interests {
+    targets: Vec<tinkle_schema::proto::Target>,
+    subscribed: bool,
+}
+
+/// Typed Tinkle client over Syntra + gRPC fallback.
 ///
 /// Cheap to clone (shares connection + cursors). The same logical runtime
 /// is reusable across iOS/Android/WASM via thin platform adapters.
 #[derive(Clone)]
 pub struct Client {
     config: ClientConfig,
-    credential: Credential,
+    credential: Arc<RwLock<Credential>>,
     store: Arc<dyn CursorStore>,
     #[cfg(not(target_arch = "wasm32"))]
     sqlite: Option<Arc<tinkle_storage::Storage>>,
     live: Arc<RwLock<Option<Live>>>,
     principal: Arc<RwLock<String>>,
     interests: Arc<tokio::sync::Mutex<Interests>>,
-    /// Follows established on the current connection, by resolved stream.
-    /// Connection-scoped: cleared whenever the socket dies (`close`), so a
-    /// new connection always re-establishes. Insert-before-request gives
-    /// at-most-once issuance per connection; the marker is removed if the
-    /// RPC fails so retries re-issue.
-    follows: Arc<tokio::sync::Mutex<HashSet<String>>>,
-    /// Serializes `subscribe` bodies: concurrent subscribes must not issue
-    /// duplicate follows or interleave hydration.
+    /// Serializes `subscribe` bodies: concurrent subscribes must not
+    /// interleave tracking + kicking.
     sub_lock: Arc<tokio::sync::Mutex<()>>,
-    /// Recovery-signal sender installed by the supervisor. `connect()`
-    /// wires a clone into each new `SyncManager` and pump, so every
-    /// re-established connection reports to the same supervisor.
+    /// Serializes the check-dial-install sequence in `connect`.
+    connect_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Recovery-signal sender installed by the supervisor.
     signal_tx: Arc<tokio::sync::Mutex<Option<mpsc::Sender<RecoverySignal>>>>,
-    /// Transport liveness as observed by the notification pump. Set on
-    /// connect, cleared when the pump exits. `is_connected` reflects this,
-    /// not just the presence of a `Live` handle.
+    /// Transport liveness as observed by the notification pump.
     transport_ok: Arc<AtomicBool>,
-    /// Supervisor lifecycle (handle, shutdown, epoch, last result).
     sup_state: Arc<tokio::sync::Mutex<SupState>>,
-    /// Serializes `start()` so concurrent callers share one supervisor.
     start_lock: Arc<tokio::sync::Mutex<()>>,
+    drain_mgrs: Arc<tokio::sync::Mutex<Vec<Arc<SyncManager>>>>,
+    suspended: Arc<AtomicBool>,
+    /// In-memory fallback for unfinished new-message catch-ups when the
+    /// `background_sync_jobs` table is unavailable (pre-v4 databases).
+    /// Durable jobs win when the table exists; this set keeps demand alive
+    /// either way so the next reconcile retries.
+    #[cfg(not(target_arch = "wasm32"))]
+    catchup_pending: Arc<tokio::sync::Mutex<HashSet<String>>>,
+}
+
+fn target_key_of(target: &tinkle_schema::proto::Target) -> Result<String, TinkleError> {
+    match &target.kind {
+        Some(tinkle_schema::proto::target::Kind::UserId(id)) => {
+            if *id <= 0 {
+                return Err(TinkleError::Codec("target id must be positive".into()));
+            }
+            Ok(format!("target:user:{id}"))
+        }
+        Some(tinkle_schema::proto::target::Kind::ChatId(id)) => {
+            if *id <= 0 {
+                return Err(TinkleError::Codec("target id must be positive".into()));
+            }
+            Ok(format!("target:room:{id}"))
+        }
+        None => Err(TinkleError::Codec("target kind missing".into())),
+    }
+}
+
+fn parse_target_key(target_key: &str) -> Result<tinkle_schema::proto::Target, TinkleError> {
+    let rest = target_key.strip_prefix("target:").ok_or_else(|| {
+        TinkleError::Codec("target_key must be target:user:<id> or target:room:<id>".into())
+    })?;
+    let (kind, id_str) = rest.split_once(':').ok_or_else(|| {
+        TinkleError::Codec("target_key must be target:user:<id> or target:room:<id>".into())
+    })?;
+    let id: i64 = id_str
+        .parse()
+        .map_err(|_| TinkleError::Codec("target_key id must be positive".into()))?;
+    if id <= 0 {
+        return Err(TinkleError::Codec("target_key id must be positive".into()));
+    }
+    tinkle_schema::sync::target_from_parts(kind, id).map_err(TinkleError::SyncError)
 }
 
 impl Client {
     pub fn new(config: ClientConfig, credential: Credential, store: Arc<dyn CursorStore>) -> Self {
         Self {
             config,
-            credential,
+            credential: Arc::new(RwLock::new(credential)),
             store,
             #[cfg(not(target_arch = "wasm32"))]
             sqlite: None,
             live: Arc::new(RwLock::new(None)),
             principal: Arc::new(RwLock::new(UNKNOWN_PRINCIPAL.to_string())),
             interests: Arc::new(tokio::sync::Mutex::new(Interests::default())),
-            follows: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
             sub_lock: Arc::new(tokio::sync::Mutex::new(())),
+            connect_lock: Arc::new(tokio::sync::Mutex::new(())),
             signal_tx: Arc::new(tokio::sync::Mutex::new(None)),
             transport_ok: Arc::new(AtomicBool::new(false)),
             sup_state: Arc::new(tokio::sync::Mutex::new(SupState::default())),
             start_lock: Arc::new(tokio::sync::Mutex::new(())),
+            drain_mgrs: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            suspended: Arc::new(AtomicBool::new(false)),
+            #[cfg(not(target_arch = "wasm32"))]
+            catchup_pending: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
         }
     }
 
@@ -141,18 +190,21 @@ impl Client {
             Arc::new(crate::sqlite_store::SqliteCursorStore::new(storage.clone()));
         Self {
             config,
-            credential,
+            credential: Arc::new(RwLock::new(credential)),
             store,
             sqlite: Some(storage),
             live: Arc::new(RwLock::new(None)),
             principal: Arc::new(RwLock::new(UNKNOWN_PRINCIPAL.to_string())),
             interests: Arc::new(tokio::sync::Mutex::new(Interests::default())),
-            follows: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
             sub_lock: Arc::new(tokio::sync::Mutex::new(())),
+            connect_lock: Arc::new(tokio::sync::Mutex::new(())),
             signal_tx: Arc::new(tokio::sync::Mutex::new(None)),
             transport_ok: Arc::new(AtomicBool::new(false)),
             sup_state: Arc::new(tokio::sync::Mutex::new(SupState::default())),
             start_lock: Arc::new(tokio::sync::Mutex::new(())),
+            drain_mgrs: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            suspended: Arc::new(AtomicBool::new(false)),
+            catchup_pending: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
         }
     }
 
@@ -165,8 +217,6 @@ impl Client {
         &self.config
     }
 
-    /// True only when a live connection exists AND its notification
-    /// pump has not exited. A dead pump with a stale handle reports false.
     pub async fn is_connected(&self) -> bool {
         self.live.read().await.is_some() && self.transport_ok.load(Ordering::SeqCst)
     }
@@ -175,14 +225,6 @@ impl Client {
         self.principal.read().await.clone()
     }
 
-    /// Set the authenticated principal from a known user id.
-    /// Called automatically after `sign_in`; apps with an existing
-    /// session token should call it after resolving their own id.
-    ///
-    /// Changing the principal resets live sync state (cursors, pending,
-    /// delivered) via `SyncManager::set_principal`, so resubscribe
-    /// afterwards to re-establish follows from persisted cursors.
-    /// Setting the same principal again is a no-op.
     pub async fn set_principal_user_id(&self, user_id: i64) {
         if user_id <= 0 {
             return;
@@ -194,19 +236,68 @@ impl Client {
         }
     }
 
-    /// Foreground connect: WSS Upgrade → Syntra handshake → ACTIVE.
-    /// No Syntra byte is sent before TLS + 101 (WSS §1F).
+    /// Push-path fence snapshot: current principal plus the live reconcile
+    /// generation when a connection exists (`None` on a cold push
+    /// extension with no `live` yet; principal equality still fences).
+    /// Native-only: the push wake pipeline (`push.rs`) is not compiled
+    /// for wasm.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) async fn push_fence_snapshot(&self) -> (String, Option<u64>) {
+        let principal = self.principal.read().await.clone();
+        let generation = match self.live.read().await.as_ref() {
+            Some(l) => Some(l.sync_mgr.generation().await),
+            None => None,
+        };
+        (principal, generation)
+    }
+
+    /// Push-path fence check: principal must still match, and a live
+    /// generation snapshot must still match the live scope. Native-only
+    /// (see `push_fence_snapshot`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) async fn push_fence_check(&self, principal: &str, generation: Option<u64>) -> bool {
+        if *self.principal.read().await != principal {
+            return false;
+        }
+        let Some(g) = generation else {
+            return true;
+        };
+        // Live tore down mid-push: principal equality above is the
+        // fence; a teardown alone is not a logout/switch.
+        let live = self.live.read().await;
+        let Some(l) = live.as_ref() else {
+            return true;
+        };
+        l.sync_mgr.check_fence(principal, g).await
+    }
+
+    /// Logout-scoped local reset: principal back to unknown, tracked
+    /// interests cleared, in-memory catch-up demand dropped, and the live
+    /// reconcile scope fenced via `set_principal`. Durable rows are wiped
+    /// separately via `Storage::clear_principal`. Native-only: called from
+    /// the push module's `logout`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) async fn reset_session_for_logout(&self) {
+        *self.principal.write().await = UNKNOWN_PRINCIPAL.to_string();
+        self.interests.lock().await.targets.clear();
+        self.interests.lock().await.subscribed = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        self.catchup_pending.lock().await.clear();
+        if let Ok(mgr) = self.live_mgr().await {
+            mgr.set_principal(UNKNOWN_PRINCIPAL.to_string()).await;
+        }
+    }
+
     pub async fn connect(&self) -> Result<(), TinkleError> {
+        let _connect_guard = self.connect_lock.lock().await;
         if self.is_connected().await {
             return Ok(());
         }
-        // Stale handle without a live pump: tear down before redialing so
-        // a dead transport is never mistaken for a connection.
         if self.live.read().await.is_some() {
             self.teardown_connection().await;
         }
         let ws_cfg = self.config.ws_config();
-        let credential_bytes = self.credential.expose_secret().to_vec();
+        let credential_bytes = self.credential.read().await.expose_secret().to_vec();
         let handle = syntra_ws::connect(ws_cfg, credential_bytes, self.config.connection.clone())
             .await
             .map_err(|e| {
@@ -218,42 +309,60 @@ impl Client {
         let version = handle.version;
 
         let principal = self.principal.read().await.clone();
-        let sync_mgr = SyncManager::new(principal, self.store.clone());
+        let sync_mgr = SyncManager::new(principal);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(sqlite) = self.sqlite.clone() {
             sync_mgr.set_sqlite_storage(sqlite).await;
         }
-        // Supervisor reporting, when supervised: every re-established
-        // connection reports to the same supervisor.
+        // Re-install tracked targets so the fresh pump demands correctly.
+        {
+            let targets = self.interests.lock().await.targets.clone();
+            if !targets.is_empty() {
+                sync_mgr.track_targets(targets).await;
+            }
+        }
         if let Some(tx) = self.signal_tx.lock().await.clone() {
             sync_mgr.set_signal_tx(tx).await;
         }
 
-        // Notification pump: Initiator → validate → cursors → app events.
-        // Interleaved notifications never complete an RPC (core routes them
-        // here, not to pending waiters). Natural exit means the transport
-        // died: mark it and hint the supervisor (the watchdog covers a
-        // missed hint).
+        // Notification pump: opaque hints only. A frame that decodes as a
+        // plausible connectivity observation (positive user_id) is emitted
+        // as an ephemeral event and nothing else; every other frame —
+        // decode failures and implausible observations included — is a
+        // reconcile hint. Accepted observations never double-trigger a
+        // reconcile sweep.
         let pump_conn = conn.clone();
         let pump_mgr = sync_mgr.clone();
         let pump_ok = self.transport_ok.clone();
         let pump = tokio::spawn(async move {
             while let Some(payload) = pump_conn.next_notification().await {
-                if let Err(e) = pump_mgr.handle_payload(&payload).await {
-                    tracing::debug!(error = %e, "sync notification handling reported gap/rebuild");
+                match tinkle_schema::sync::validate_connectivity_notification(&payload) {
+                    Ok(obs) if obs.user_id > 0 => {
+                        pump_mgr.emit_connectivity(obs).await;
+                    }
+                    _ => {
+                        pump_mgr.handle_hint(&payload).await;
+                    }
                 }
             }
             pump_ok.store(false, Ordering::SeqCst);
             pump_mgr.emit_signal(RecoverySignal::PumpDead).await;
         });
 
-        *self.live.write().await = Some(Live {
+        let mut live_w = self.live.write().await;
+        if live_w.is_some() {
+            drop(live_w);
+            handle.close().await;
+            return Ok(());
+        }
+        *live_w = Some(Live {
             handle,
             connection_id,
             version,
             sync_mgr,
             pump,
         });
+        drop(live_w);
         self.transport_ok.store(true, Ordering::SeqCst);
         Ok(())
     }
@@ -276,7 +385,6 @@ impl Client {
             .ok_or_else(|| TinkleError::NotConnected("call connect() first".into()))
     }
 
-    /// Raw RPC: opaque bytes in/out.
     pub async fn call_raw(
         &self,
         method: &str,
@@ -289,7 +397,6 @@ impl Client {
             .map_err(TinkleError::Syntra)
     }
 
-    /// Cancellable RPC.
     pub async fn call_raw_cancellable(
         &self,
         method: &str,
@@ -303,7 +410,6 @@ impl Client {
             .map_err(TinkleError::Syntra)
     }
 
-    /// Typed service facades (method bindings from BSR descriptors).
     pub fn messages(&self) -> Messages<'_> {
         Messages::new(self)
     }
@@ -316,453 +422,1358 @@ impl Client {
         Updates::new(self)
     }
 
-    /// gRPC catch-up for one stream. Requires `grpc_endpoint` in config.
-    /// Opt-in (`RecoveryTransport::Grpc`); the default recovery path is
-    /// [`Self::read_updates_syntra`].
-    pub(crate) async fn read_updates_grpc(
-        &self,
-        req: tinkle_schema::proto::ReadUpdatesRequest,
-    ) -> Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> {
-        let endpoint = self.validated_grpc_endpoint()?;
-        // Zeroized on drop; never logged, never placed in URLs.
-        let token: Zeroizing<Vec<u8>> = Zeroizing::new(self.credential.expose_secret().to_vec());
-        crate::grpc::read_updates_grpc(&endpoint, token.as_slice(), req, 30_000).await
+    pub fn files(&self) -> Files<'_> {
+        Files::new(self)
     }
 
-    /// Bounded replay over the existing WebSocket: `ReadUpdates` as a Syntra
-    /// RPC on the live connection. The default recovery transport — no
-    /// second connection to configure. Pages re-enter the same
-    /// validation/application pipeline as live follows.
-    pub(crate) async fn read_updates_syntra(
-        &self,
-        req: tinkle_schema::proto::ReadUpdatesRequest,
-    ) -> Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> {
-        use prost::Message as _;
-        let mut buf = Vec::with_capacity(req.encoded_len());
-        req.encode(&mut buf)
-            .map_err(|e| TinkleError::Codec(format!("encode ReadUpdates: {e}")))?;
-        let out = self
-            .call_raw(tinkle_schema::sync::READ_METHOD, buf, 30_000)
-            .await?;
-        tinkle_schema::proto::ReadUpdatesResponse::decode(&*out)
-            .map_err(|e| TinkleError::Codec(format!("decode ReadUpdates: {e}")))
+    /// Rust-owned file identity + eviction manager.
+    ///
+    /// Canonical `(scope, file_id)` identity with shared records; honors
+    /// `pinned` cache rows and active readers, refcounts via storage.
+    /// Without SQLite storage the manager still tracks active readers and
+    /// reports zero refcounts (wasm / memory-only clients).
+    pub fn file_manager(&self) -> crate::files::FileManager {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(s) = self.sqlite.clone() {
+            return crate::files::FileManager::with_storage(s);
+        }
+        crate::files::FileManager::new()
     }
 
-    /// Fetch the configured gRPC endpoint, failing fast with
-    /// `GrpcConfig` (FailedPrecondition) on missing/blank/scheme/https
-    /// violations instead of a retried `Grpc` (Unavailable) at page time.
+    /// Rust-owned upload manager (`BeginUpload` → `UploadPart` →
+    /// `CompleteUpload` with PR #54 status-decision semantics).
+    pub fn upload_manager(&self) -> crate::files::UploadManager {
+        crate::files::UploadManager::new(self.clone())
+    }
+
+    /// Rust-owned download manager (`GetFileInfo` → `DownloadPart` ranges
+    /// with size + SHA-256 verify and atomic publish).
+    pub fn download_manager(&self) -> crate::files::DownloadManager {
+        crate::files::DownloadManager::new(self.clone())
+    }
+
+    /// Upload bytes (minimal pass-through used by FFI/Web): returns the
+    /// committed `FileInfo`. Idempotency retries preserve the EXACT original
+    /// `BeginUploadRequest` (incl. `Option` presence).
+    pub async fn upload_bytes(
+        &self,
+        params: crate::files::UploadParams,
+        data: Vec<u8>,
+    ) -> Result<tinkle_schema::proto::FileInfo, TinkleError> {
+        self.upload_manager().upload_bytes(params, data).await
+    }
+
+    /// Download bytes (minimal pass-through used by FFI/Web): verifies
+    /// size + SHA-256. `cancel` is per-consumer (isolated from other
+    /// consumers of the same file).
+    pub async fn download_bytes(
+        &self,
+        file_id: i64,
+        cancel: Option<CancelToken>,
+    ) -> Result<Vec<u8>, TinkleError> {
+        self.download_manager()
+            .download_bytes(file_id, cancel)
+            .await
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn validated_grpc_endpoint(&self) -> Result<String, TinkleError> {
-        let endpoint = self.config.grpc_endpoint.clone().ok_or_else(|| {
-            TinkleError::GrpcConfig("grpc_endpoint not configured".into())
-        })?;
+        let endpoint = self
+            .config
+            .grpc_endpoint
+            .clone()
+            .ok_or_else(|| TinkleError::GrpcConfig("grpc_endpoint not configured".into()))?;
         ClientConfig::validate_grpc_endpoint(&endpoint, self.config.allow_insecure)?;
         Ok(endpoint)
     }
 
-    /// Catch up one stream over gRPC with paginated recovery.
-    ///
-    /// Pages `ReadUpdates` from `after`, validates floor/head, feeds each
-    /// update through the shared pipeline (buffered replay on gaps), and
-    /// retries transient failures.
-    pub async fn catch_up(
+    /// Fetch specific messages, chunking to `MAX_MESSAGE_IDS_PER_REQUEST`
+    /// internally. Syntra is primary; on retryable Syntra failures with a
+    /// configured `grpc_endpoint` (native only), falls back to dedicated
+    /// gRPC per chunk.
+    pub async fn get_messages(
         &self,
-        stream: &str,
-        after: u64,
-        limit: i32,
-    ) -> Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> {
-        self.recover_stream(stream, after, limit).await
-    }
-
-    async fn recover_stream(
-        &self,
-        stream: &str,
-        mut after: u64,
-        limit: i32,
-    ) -> Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> {
-        let mgr = self.live_mgr().await?;
-        let limit = limit.clamp(1, 500);
-        let _ = mgr.hydrate_from_store(&[stream.to_string()]).await;
-        if !mgr.begin_recovery(stream).await {
-            return Err(TinkleError::Sync(format!(
-                "concurrent recovery already in progress on {stream}"
-            )));
+        target: tinkle_schema::proto::Target,
+        message_ids: Vec<i64>,
+    ) -> Result<tinkle_schema::proto::GetMessagesResponse, TinkleError> {
+        if target.kind.is_none() {
+            return Err(TinkleError::Codec("target kind missing".into()));
         }
-        let mut last_resp: Option<tinkle_schema::proto::ReadUpdatesResponse> = None;
-        let mut pages = 0u32;
-        let mut no_progress_pages = 0u32;
-        let result: Result<tinkle_schema::proto::ReadUpdatesResponse, TinkleError> = async {
-            // Page source: Syntra RPC over the live connection by default;
-            // one shared gRPC channel per recovery run when opted in.
-            let use_grpc = self.config.recovery == crate::config::RecoveryTransport::Grpc;
-            #[cfg(not(target_arch = "wasm32"))]
-            let grpc_conn: Option<(
-                tonic::transport::Channel,
-                Zeroizing<Vec<u8>>,
-            )> = if use_grpc {
-                let endpoint = self.validated_grpc_endpoint()?;
-                // Zeroized on drop; never logged, never placed in URLs.
-                let token: Zeroizing<Vec<u8>> =
-                    Zeroizing::new(self.credential.expose_secret().to_vec());
-                // Fail fast on malformed credentials before opening the
-                // connection, not after the 10s connect timeout.
-                let _ = crate::grpc::bearer(token.as_slice())?;
-                let channel = crate::grpc::connect_channel(&endpoint, 30_000).await?;
-                Some((channel, token))
-            } else {
-                None
+        for id in &message_ids {
+            if *id <= 0 {
+                return Err(TinkleError::Codec("message_ids must be positive".into()));
+            }
+        }
+        if message_ids.is_empty() {
+            return Ok(tinkle_schema::proto::GetMessagesResponse {
+                messages: vec![],
+                users: vec![],
+                chats: vec![],
+            });
+        }
+        let chunks = tinkle_schema::sync::chunk_message_ids(&message_ids);
+        let mut messages = Vec::new();
+        let mut users = Vec::new();
+        let mut chats = Vec::new();
+        for chunk in chunks {
+            let req = tinkle_schema::proto::GetMessagesRequest {
+                target: Some(target),
+                message_ids: chunk,
             };
-            #[cfg(target_arch = "wasm32")]
-            if use_grpc {
-                return Err(TinkleError::GrpcConfig(
-                    "gRPC recovery unavailable on wasm; use Syntra transport".into(),
-                ));
-            }
-            loop {
-                if pages >= 20 {
-                    break;
-                }
-                pages += 1;
-                let req = tinkle_schema::proto::ReadUpdatesRequest {
-                    stream: stream.to_string(),
-                    after_cursor: after,
-                    limit,
-                };
-                let mut attempt = 0u32;
-                    let resp = loop {
-                        let page = match self.config.recovery {
-                            crate::config::RecoveryTransport::Syntra => {
-                                self.read_updates_syntra(req.clone()).await
-                            }
-                            crate::config::RecoveryTransport::Grpc => {
-                                #[cfg(not(target_arch = "wasm32"))]
-                                {
-                                    let (channel, token) = grpc_conn
-                                        .as_ref()
-                                        .expect("grpc connection established above");
-                                    crate::grpc::read_updates_on_channel(
-                                        channel,
-                                        token.as_slice(),
-                                        req.clone(),
-                                    )
-                                    .await
-                                }
-                                #[cfg(target_arch = "wasm32")]
-                                {
-                                    Err(TinkleError::GrpcConfig(
-                                        "gRPC recovery unavailable on wasm; use Syntra transport"
-                                            .into(),
-                                    ))
-                                }
-                            }
-                        };
-                        match page {
-                            Ok(r) => break r,
-                            Err(e) => match e.recovery_decision() {
-                                RecoveryDecision::Retry if attempt < 2 => {
-                                    attempt += 1;
-                                    tokio::time::sleep(std::time::Duration::from_millis(
-                                        100 * (1 << attempt),
-                                    ))
-                                    .await;
-                                    continue;
-                                }
-                                RecoveryDecision::Rebuild => {
-                                    // Expired/unbridgeable history: stop
-                                    // paging and enter the rebuild path
-                                    // instead of retrying a window that can
-                                    // never succeed.
-                                    mgr.handle_expired(stream, None).await;
-                                    return Err(TinkleError::SyncError(
-                                        SyncError::RebuildRequired {
-                                            stream: stream.to_string(),
-                                            head: None,
-                                        },
-                                    ));
-                                }
-                                _ => return Err(e),
-                            },
-                        }
-                    };
-                mgr.record_bounds(stream, resp.replay_floor, Some(resp.head))
-                    .await;
-                if after < resp.replay_floor {
-                    mgr.handle_expired(stream, Some(resp.head)).await;
-                    return Err(TinkleError::SyncError(SyncError::RebuildRequired {
-                        stream: stream.to_string(),
-                        head: Some(resp.head),
-                    }));
-                }
-                if after > resp.head {
-                    // Our cursor is beyond everything retained: history past
-                    // head is unrecoverable. Never re-anchor to the head
-                    // silently; enter the rebuild path so the stream
-                    // reconstructs from an authoritative boundary.
-                    mgr.handle_expired(stream, Some(resp.head)).await;
-                    return Err(TinkleError::SyncError(SyncError::RebuildRequired {
-                        stream: stream.to_string(),
-                        head: Some(resp.head),
-                    }));
-                }
-                if resp.updates.is_empty() {
-                    last_resp = Some(resp);
-                    break;
-                }
-                let mut progressed = false;
-                for u in &resp.updates {
-                    if u.stream != stream {
-                        return Err(TinkleError::Sync(format!(
-                            "stream mismatch in page: got {} want {stream}",
-                            u.stream
-                        )));
-                    }
-                    if u.cursor <= after {
-                        continue;
-                    }
-                    match mgr.handle_update(u.clone()).await {
-                        Ok(()) => {
-                            if u.cursor > after {
-                                after = u.cursor;
-                                progressed = true;
-                            }
-                        }
-                        Err(e) => {
-                            if matches!(e, TinkleError::SyncError(SyncError::Gap { .. })) {
-                                break;
-                            }
-                            return Err(e);
-                        }
-                    }
-                }
-                last_resp = Some(resp.clone());
-                if !progressed {
-                    no_progress_pages += 1;
-                    if no_progress_pages >= 3 {
-                        break;
-                    }
-                } else {
-                    no_progress_pages = 0;
-                }
-                if (resp.updates.len() as i32) < limit || after >= resp.head {
-                    break;
-                }
-            }
-            match last_resp {
-                None => Err(TinkleError::Grpc("empty recovery: no pages".into())),
-                Some(resp) => {
-                    if after < resp.head {
-                        Err(TinkleError::Sync(format!(
-                            "incomplete recovery on {stream}: after {after} < head {} after {pages} pages",
-                            resp.head
-                        )))
-                    } else {
-                        Ok(resp)
-                    }
-                }
-            }
+            let resp = self.get_messages_single(req).await?;
+            messages.extend(resp.messages);
+            users.extend(resp.users);
+            chats.extend(resp.chats);
         }
-        .await;
-        match &result {
-            Ok(_) => mgr.end_recovery(stream, true).await,
-            Err(_) => mgr.end_recovery(stream, false).await,
-        }
-        result
-    }
-
-    /// Subscribe with durable cursor recovery.
-    ///
-    /// Flow: resolve principal (probe-as-follow: exactly one own-stream
-    /// follow per connection) → hydrate → gRPC catch-up for own + rooms →
-    /// start Syntra follows (skipping already-established) + connectivity
-    /// observations. Returns the own-stream confirmation; replay itself
-    /// arrives as `UpdateReady` events requiring explicit `acknowledge`.
-    ///
-    /// Partial room failures do not abort established follows. Rooms that
-    /// fail (after the scoped-continuation fallback) are reported in the
-    /// returned error while interests are still persisted, so a retry or
-    /// reconnect reconciles without issuing duplicate follows.
-    pub async fn subscribe(
-        &self,
-        rooms: Vec<(i64, u64)>,
-        watch_user_ids: Vec<i64>,
-    ) -> Result<SubscribeResult, TinkleError> {
-        let _sub = self.sub_lock.lock().await;
-        let mgr = self.live_mgr().await?;
-        // Exactly-once own-stream follow per connection: when the principal
-        // is unknown the probe doubles as the follow (see
-        // `resolve_own_stream`); otherwise the explicit follow below is the
-        // only one.
-        self.resolve_own_stream().await?;
-        let principal = self.principal().await;
-        let own_stream = if principal.starts_with("user:") {
-            principal.clone()
-        } else {
-            format!("user:{}", principal_user_suffix(&principal))
-        };
-        let mut streams = vec![own_stream.clone()];
-        for (room_id, _) in &rooms {
-            streams.push(format!("room:{room_id}"));
-        }
-        let _ = mgr.hydrate_from_store(&streams).await;
-
-        let own_cursor = self.store.load(&principal, &own_stream).await?.unwrap_or(0);
-        let mut effective_rooms = Vec::with_capacity(rooms.len());
-        for (room_id, after) in &rooms {
-            let stream = format!("room:{room_id}");
-            let stored = self.store.load(&principal, &stream).await?.unwrap_or(0);
-            effective_rooms.push((*room_id, (*after).max(stored)));
-        }
-
-        // Best-effort gRPC catch-up for own stream when configured.
-        // Failures do not block follow establishment; gaps surface as events.
-        let mut head: Option<u64> = None;
-        if self.config.grpc_endpoint.is_some() {
-            match self.catch_up(&own_stream, own_cursor, 100).await {
-                Ok(resp) => {
-                    head = Some(resp.head);
-                }
-                Err(e) => {
-                    tracing::debug!(error = %e, "own-stream catch-up failed, continuing with follow");
-                }
-            }
-            for (room_id, after) in &effective_rooms {
-                let stream = format!("room:{room_id}");
-                let _ = self.catch_up(&stream, *after, 100).await;
-            }
-        }
-
-        // Start follows for own + rooms. Each follow resumes from the
-        // post-catch-up cursor, covering commits between the gRPC page and
-        // subscription establishment without replaying already-delivered
-        // updates as duplicates.
-        let own_follow_cursor = own_cursor.max(mgr.effective_cursor(&own_stream).await);
-        match self.follow_once(&own_stream, own_follow_cursor).await? {
-            Some(own_resp) => {
-                if !own_resp.stream.is_empty() && own_resp.stream != own_stream {
-                    // Principal rotation: gateway resolved a different own stream.
-                    self.follows.lock().await.remove(&own_stream);
-                    self.follows.lock().await.insert(own_resp.stream.clone());
-                    *self.principal.write().await = own_resp.stream.clone();
-                    mgr.set_principal(own_resp.stream.clone()).await;
-                }
-                head = head.or(own_resp.head);
-            }
-            None => {
-                // Probe-as-follow already established the own stream on this
-                // connection; re-requesting would be rejected as a duplicate.
-            }
-        }
-        let mut failed_rooms: Vec<(i64, String)> = Vec::new();
-        for (room_id, after) in &effective_rooms {
-            let stream = format!("room:{room_id}");
-            let follow_cursor = (*after).max(mgr.effective_cursor(&stream).await);
-            match self.follow_once(&stream, follow_cursor).await {
-                Ok(_) => {}
-                Err(e) if e.code() == ErrorCode::FailedPrecondition && follow_cursor != 0 => {
-                    // Scoped-continuation rejection: retry once from the
-                    // origin. The stored checkpoint is untouched; the dedup
-                    // pipeline makes the replay idempotent. If the retry is
-                    // rejected too, the room stays degraded.
-                    tracing::debug!(%stream, error = %e, "room resume rejected, retrying from origin");
-                    if let Err(e2) = self.follow_once(&stream, 0).await {
-                        failed_rooms.push((*room_id, e2.to_string()));
-                    }
-                }
-                Err(e) => failed_rooms.push((*room_id, e.to_string())),
-            }
-        }
-        if !watch_user_ids.is_empty() {
-            let req = tinkle_schema::proto::ObserveConnectivityRequest {
-                user_ids: watch_user_ids.clone(),
-            };
-            self.updates().observe_connectivity(req).await?;
-        }
-
-        mgr.on_subscribed(effective_rooms.clone(), watch_user_ids.clone())
-            .await;
-        *self.interests.lock().await = Interests {
-            rooms: effective_rooms,
-            watch_user_ids,
-            subscribed: true,
-        };
-        if !failed_rooms.is_empty() {
-            return Err(TinkleError::Subscription(format!(
-                "room follows failed (degraded; established follows kept, retry reconciles): {failed_rooms:?}"
-            )));
-        }
-        Ok(SubscribeResult {
-            stream: self.principal().await,
-            after_cursor: own_follow_cursor,
-            head,
+        Ok(tinkle_schema::proto::GetMessagesResponse {
+            messages,
+            users,
+            chats,
         })
     }
 
-    /// Issue a follow RPC at most once per connection. Returns `Ok(None)`
-    /// when the stream was already established earlier on this connection
-    /// (skip, do not re-request). A failed RPC removes the marker so a
-    /// retry re-issues.
-    async fn follow_once(
+    async fn get_messages_single(
         &self,
-        stream: &str,
-        after_cursor: u64,
-    ) -> Result<Option<tinkle_schema::proto::FollowUpdatesResponse>, TinkleError> {
-        if !self.follows.lock().await.insert(stream.to_string()) {
-            return Ok(None);
-        }
-        let req = tinkle_schema::proto::FollowUpdatesRequest {
-            stream: stream.to_string(),
-            after_cursor,
-        };
-        match self.updates().follow(req).await {
-            Ok(resp) => Ok(Some(resp)),
+        req: tinkle_schema::proto::GetMessagesRequest,
+    ) -> Result<tinkle_schema::proto::GetMessagesResponse, TinkleError> {
+        match self.messages().get_messages(req.clone()).await {
+            Ok(r) => Ok(r),
             Err(e) => {
-                self.follows.lock().await.remove(stream);
+                #[cfg(not(target_arch = "wasm32"))]
+                let retryable = matches!(e.recovery_decision(), RecoveryDecision::Retry);
+                #[cfg(not(target_arch = "wasm32"))]
+                if retryable {
+                    if let Ok(endpoint) = self.validated_grpc_endpoint() {
+                        let token: Zeroizing<Vec<u8>> =
+                            Zeroizing::new(self.credential.read().await.expose_secret().to_vec());
+                        match crate::grpc::get_messages_grpc(
+                            &endpoint,
+                            token.as_slice(),
+                            req,
+                            30_000,
+                        )
+                        .await
+                        {
+                            Ok(r) => return Ok(r),
+                            Err(_ge) => {}
+                        }
+                    }
+                }
                 Err(e)
             }
         }
     }
 
-    /// Next sync event. `UpdateReady` must be followed by `acknowledge`
-    /// after successful application.
-    pub async fn next_event(&self) -> Option<SyncEvent> {
-        let mgr = self.live_mgr().await.ok()?;
-        mgr.next_event().await
+    /// List retained mutations strictly after one accept position.
+    /// Syntra primary with the same gRPC fallback as `get_messages`.
+    pub async fn get_target_changes(
+        &self,
+        target: tinkle_schema::proto::Target,
+        after_accept_seq: i64,
+        limit: i32,
+    ) -> Result<tinkle_schema::proto::GetTargetChangesResponse, TinkleError> {
+        if target.kind.is_none() {
+            return Err(TinkleError::Codec("target kind missing".into()));
+        }
+        if after_accept_seq < 0 {
+            return Err(TinkleError::Codec(
+                "after_accept_seq must be non-negative".into(),
+            ));
+        }
+        let limit = if limit == 0 {
+            tinkle_schema::sync::MAX_TARGET_CHANGES_LIMIT
+        } else {
+            limit.clamp(1, tinkle_schema::sync::MAX_TARGET_CHANGES_LIMIT)
+        };
+        let req = tinkle_schema::proto::GetTargetChangesRequest {
+            target: Some(target),
+            after_accept_seq,
+            limit,
+        };
+        match self.messages().get_target_changes(req).await {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if matches!(e.recovery_decision(), RecoveryDecision::Retry) {
+                    if let Ok(endpoint) = self.validated_grpc_endpoint() {
+                        let token: Zeroizing<Vec<u8>> =
+                            Zeroizing::new(self.credential.read().await.expose_secret().to_vec());
+                        if let Ok(r) = crate::grpc::get_target_changes_grpc(
+                            &endpoint,
+                            token.as_slice(),
+                            req,
+                            30_000,
+                        )
+                        .await
+                        {
+                            return Ok(r);
+                        }
+                    }
+                }
+                Err(e)
+            }
+        }
     }
 
-    /// Persist the checkpoint after applying the update.
-    pub async fn acknowledge(&self, stream: &str, cursor: u64) -> Result<(), TinkleError> {
+    /// Files: Syntra primary with the same gRPC fallback as
+    /// `get_messages`/`get_target_changes` (native only). Input validation
+    /// lives in the `Files` facade; this wrapper only adds the fallback.
+    pub async fn begin_upload(
+        &self,
+        req: tinkle_schema::proto::BeginUploadRequest,
+    ) -> Result<tinkle_schema::proto::BeginUploadResponse, TinkleError> {
+        match self.files().begin_upload(req.clone()).await {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if matches!(e.recovery_decision(), RecoveryDecision::Retry) {
+                    if let Ok(endpoint) = self.validated_grpc_endpoint() {
+                        let token: Zeroizing<Vec<u8>> =
+                            Zeroizing::new(self.credential.read().await.expose_secret().to_vec());
+                        if let Ok(r) =
+                            crate::grpc::begin_upload_grpc(&endpoint, token.as_slice(), req, 30_000)
+                                .await
+                        {
+                            return Ok(r);
+                        }
+                    }
+                }
+                Err(e)
+            }
+        }
+    }
+
+    pub async fn upload_part(
+        &self,
+        req: tinkle_schema::proto::UploadPartRequest,
+    ) -> Result<tinkle_schema::proto::UploadPartResponse, TinkleError> {
+        // Clone-free fast path: without a validated gRPC endpoint no
+        // fallback is possible, so move the request (part bytes can be
+        // large) instead of cloning it for a retry that cannot happen.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.validated_grpc_endpoint().is_err() {
+            return self.files().upload_part(req).await;
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            return self.files().upload_part(req).await;
+        }
+        match self.files().upload_part(req.clone()).await {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if matches!(e.recovery_decision(), RecoveryDecision::Retry) {
+                    if let Ok(endpoint) = self.validated_grpc_endpoint() {
+                        let token: Zeroizing<Vec<u8>> =
+                            Zeroizing::new(self.credential.read().await.expose_secret().to_vec());
+                        if let Ok(r) =
+                            crate::grpc::upload_part_grpc(&endpoint, token.as_slice(), req, 30_000)
+                                .await
+                        {
+                            return Ok(r);
+                        }
+                    }
+                }
+                Err(e)
+            }
+        }
+    }
+
+    pub async fn get_upload_status(
+        &self,
+        req: tinkle_schema::proto::GetUploadStatusRequest,
+    ) -> Result<tinkle_schema::proto::GetUploadStatusResponse, TinkleError> {
+        match self.files().get_upload_status(req.clone()).await {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if matches!(e.recovery_decision(), RecoveryDecision::Retry) {
+                    if let Ok(endpoint) = self.validated_grpc_endpoint() {
+                        let token: Zeroizing<Vec<u8>> =
+                            Zeroizing::new(self.credential.read().await.expose_secret().to_vec());
+                        if let Ok(r) = crate::grpc::get_upload_status_grpc(
+                            &endpoint,
+                            token.as_slice(),
+                            req,
+                            30_000,
+                        )
+                        .await
+                        {
+                            return Ok(r);
+                        }
+                    }
+                }
+                Err(e)
+            }
+        }
+    }
+
+    pub async fn complete_upload(
+        &self,
+        req: tinkle_schema::proto::CompleteUploadRequest,
+    ) -> Result<tinkle_schema::proto::CompleteUploadResponse, TinkleError> {
+        match self.files().complete_upload(req.clone()).await {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if matches!(e.recovery_decision(), RecoveryDecision::Retry) {
+                    if let Ok(endpoint) = self.validated_grpc_endpoint() {
+                        let token: Zeroizing<Vec<u8>> =
+                            Zeroizing::new(self.credential.read().await.expose_secret().to_vec());
+                        if let Ok(r) = crate::grpc::complete_upload_grpc(
+                            &endpoint,
+                            token.as_slice(),
+                            req,
+                            30_000,
+                        )
+                        .await
+                        {
+                            return Ok(r);
+                        }
+                    }
+                }
+                Err(e)
+            }
+        }
+    }
+
+    pub async fn abort_upload(
+        &self,
+        req: tinkle_schema::proto::AbortUploadRequest,
+    ) -> Result<tinkle_schema::proto::AbortUploadResponse, TinkleError> {
+        match self.files().abort_upload(req.clone()).await {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if matches!(e.recovery_decision(), RecoveryDecision::Retry) {
+                    if let Ok(endpoint) = self.validated_grpc_endpoint() {
+                        let token: Zeroizing<Vec<u8>> =
+                            Zeroizing::new(self.credential.read().await.expose_secret().to_vec());
+                        if let Ok(r) =
+                            crate::grpc::abort_upload_grpc(&endpoint, token.as_slice(), req, 30_000)
+                                .await
+                        {
+                            return Ok(r);
+                        }
+                    }
+                }
+                Err(e)
+            }
+        }
+    }
+
+    pub async fn get_file_info(
+        &self,
+        req: tinkle_schema::proto::GetFileInfoRequest,
+    ) -> Result<tinkle_schema::proto::GetFileInfoResponse, TinkleError> {
+        match self.files().get_file_info(req).await {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if matches!(e.recovery_decision(), RecoveryDecision::Retry) {
+                    if let Ok(endpoint) = self.validated_grpc_endpoint() {
+                        let token: Zeroizing<Vec<u8>> =
+                            Zeroizing::new(self.credential.read().await.expose_secret().to_vec());
+                        if let Ok(r) = crate::grpc::get_file_info_grpc(
+                            &endpoint,
+                            token.as_slice(),
+                            req,
+                            30_000,
+                        )
+                        .await
+                        {
+                            return Ok(r);
+                        }
+                    }
+                }
+                Err(e)
+            }
+        }
+    }
+
+    pub async fn download_part(
+        &self,
+        req: tinkle_schema::proto::DownloadPartRequest,
+    ) -> Result<tinkle_schema::proto::DownloadPartResponse, TinkleError> {
+        match self.files().download_part(req).await {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if matches!(e.recovery_decision(), RecoveryDecision::Retry) {
+                    if let Ok(endpoint) = self.validated_grpc_endpoint() {
+                        let token: Zeroizing<Vec<u8>> =
+                            Zeroizing::new(self.credential.read().await.expose_secret().to_vec());
+                        if let Ok(r) = crate::grpc::download_part_grpc(
+                            &endpoint,
+                            token.as_slice(),
+                            req,
+                            30_000,
+                        )
+                        .await
+                        {
+                            return Ok(r);
+                        }
+                    }
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Reconcile one conversation: page `GetTargetChanges` from its journal
+    /// cursor, validate each page, hydrate edited bodies via chunked
+    /// `GetMessages`, project via `cache_projector`, and atomically commit
+    /// via `apply_journal_page_fenced`. Returns the applied-change count.
+    ///
+    /// Room history-scope rule: dropping a target's journal cursor (via
+    /// `remove_target`) makes its next reconcile start at 0. When the
+    /// retained journal then skips past the dropped position (first change
+    /// `accept_seq > after + 1`), this heals with a best-effort `GetHistory`
+    /// fallback that repopulates the offline cache without moving the
+    /// journal cursor; the current page still jumps the cursor forward over
+    /// the gap.
+    pub async fn reconcile_target(&self, target_key: &str) -> Result<u64, TinkleError> {
+        let target = parse_target_key(target_key)?;
         let mgr = self.live_mgr().await?;
-        mgr.acknowledge(stream, cursor).await
+        let principal = self.principal().await;
+        if principal == UNKNOWN_PRINCIPAL {
+            return Err(TinkleError::Subscription(
+                "authenticated principal unknown; call set_principal_user_id after sign_in".into(),
+            ));
+        }
+        if !mgr.begin_reconcile(target_key).await {
+            return Ok(0);
+        }
+        let fence_principal = principal.clone();
+        let fence_generation = mgr.generation().await;
+        let result = self
+            .reconcile_target_inner(&mgr, &fence_principal, fence_generation, target_key, target)
+            .await;
+        match &result {
+            Ok(_) => mgr.end_reconcile(target_key, false).await,
+            Err(_) => {
+                mgr.end_reconcile(target_key, true).await;
+                if let Err(e) = &result {
+                    let _ = mgr
+                        .emit_event(SyncEvent::ReconcileFailed {
+                            target_key: target_key.to_string(),
+                            error: e.to_string(),
+                        })
+                        .await;
+                    mgr.emit_signal(RecoverySignal::ReconcileFailed {
+                        target_key: target_key.to_string(),
+                    })
+                    .await;
+                }
+            }
+        }
+        result
     }
 
-    /// Connection teardown without touching the supervisor. Follow
-    /// markers die with the socket: the next connection must re-establish
-    /// every follow from persisted cursors.
+    async fn reconcile_target_inner(
+        &self,
+        mgr: &Arc<SyncManager>,
+        fence_principal: &str,
+        fence_generation: u64,
+        target_key: &str,
+        target: tinkle_schema::proto::Target,
+    ) -> Result<u64, TinkleError> {
+        let mut after: i64 = self
+            .store
+            .load_journal(fence_principal, target_key)
+            .await?
+            .unwrap_or(0);
+        let mut applied: u64 = 0;
+        let mut unknown_repage_done = false;
+        // Deletions/revocations seen in this run. Delayed body fetches
+        // (edited hydration now, history catch-up later) must never
+        // resurrect these ids.
+        let mut run_removals: HashSet<i64> = HashSet::new();
+        loop {
+            if !mgr.check_fence(fence_principal, fence_generation).await {
+                return Err(TinkleError::Sync(format!(
+                    "reconcile scope changed for {target_key}; dropping stale pages"
+                )));
+            }
+            let mut attempt = 0u32;
+            let resp = loop {
+                match self
+                    .get_target_changes(
+                        target,
+                        after,
+                        tinkle_schema::sync::MAX_TARGET_CHANGES_LIMIT,
+                    )
+                    .await
+                {
+                    Ok(r) => break r,
+                    Err(e) => match e.recovery_decision() {
+                        RecoveryDecision::Retry if attempt < 2 => {
+                            attempt += 1;
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                100 * (1 << attempt),
+                            ))
+                            .await;
+                            continue;
+                        }
+                        _ => return Err(e),
+                    },
+                }
+            };
+            let page = tinkle_schema::sync::validate_changes_page(after, &resp)
+                .map_err(TinkleError::SyncError)?;
+            if page.changes.is_empty() {
+                match page.more {
+                    tinkle_schema::sync::PageMore::No => break,
+                    tinkle_schema::sync::PageMore::Unknown if !unknown_repage_done => {
+                        unknown_repage_done = true;
+                        after = page.last_accept_seq;
+                        continue;
+                    }
+                    _ => break,
+                }
+            }
+            // Journal skip → best-effort history heal (does not move cursor).
+            if let Some(first) = page.changes.first() {
+                if first.accept_seq > after.saturating_add(1) {
+                    self.heal_via_history(&target, target_key).await;
+                }
+            }
+            // Hydrate + project (native SQLite cache). Wasm reconciles
+            // cursors + events only; message bodies arrive via snapshots.
+            // Removals from this page mask delayed fetches in the same run.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                for c in &page.changes {
+                    if matches!(
+                        tinkle_schema::proto::TargetChangeKind::try_from(c.kind),
+                        Ok(tinkle_schema::proto::TargetChangeKind::Deleted
+                            | tinkle_schema::proto::TargetChangeKind::Revoked)
+                    ) {
+                        run_removals.insert(c.message_id);
+                    }
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            let (ops, affected) = self
+                .build_page_ops(target_key, target, &page, &run_removals)
+                .await?;
+            #[cfg(target_arch = "wasm32")]
+            let affected: Vec<i64> = page.changes.iter().map(|c| c.message_id).collect();
+            let new_cursor = page.last_accept_seq;
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(sqlite) = mgr.sqlite_clone().await {
+                let _guard = mgr.checkpoint_save_lock().await;
+                if !mgr.check_fence(fence_principal, fence_generation).await {
+                    return Err(TinkleError::Sync(format!(
+                        "reconcile scope changed for {target_key}; dropping stale pages"
+                    )));
+                }
+                let gen = {
+                    let sqlite_task = sqlite.clone();
+                    let p = fence_principal.to_string();
+                    let t = target_key.to_string();
+                    tokio::task::spawn_blocking(move || sqlite_task.stream_state(&p, &t))
+                        .await
+                        .map_err(|e| {
+                            TinkleError::CursorStore(format!("stream_state task failed: {e}"))
+                        })?
+                        .map_err(|e| TinkleError::CursorStore(e.to_string()))?
+                        .generation
+                };
+                let apply = {
+                    let sqlite_task = sqlite.clone();
+                    let p = fence_principal.to_string();
+                    let t = target_key.to_string();
+                    let ops_task = ops;
+                    tokio::task::spawn_blocking(move || {
+                        sqlite_task.apply_journal_page_fenced(&p, &t, &ops_task, new_cursor, gen)
+                    })
+                    .await
+                    .map_err(|e| {
+                        TinkleError::CursorStore(format!("journal apply task failed: {e}"))
+                    })?
+                };
+                if let Err(e) = apply {
+                    use tinkle_storage::StorageError as SE;
+                    match &e {
+                        SE::GenerationMismatch { .. } | SE::ScopeMismatch { .. } => {
+                            return Err(TinkleError::Sync(e.to_string()));
+                        }
+                        _ => {
+                            let _ = mgr
+                                .emit_event(SyncEvent::CheckpointFailed {
+                                    target_key: target_key.to_string(),
+                                    accept_seq: new_cursor,
+                                    error: e.to_string(),
+                                })
+                                .await;
+                            mgr.emit_signal(RecoverySignal::CheckpointFailed {
+                                target_key: target_key.to_string(),
+                                accept_seq: new_cursor,
+                            })
+                            .await;
+                            return Err(TinkleError::CheckpointFailed {
+                                target_key: target_key.to_string(),
+                                accept_seq: new_cursor,
+                                error: e.to_string(),
+                            });
+                        }
+                    }
+                }
+            } else {
+                let _guard = mgr.checkpoint_save_lock().await;
+                if let Err(e) = self
+                    .store
+                    .save_journal(fence_principal, target_key, new_cursor)
+                    .await
+                {
+                    let _ = mgr
+                        .emit_event(SyncEvent::CheckpointFailed {
+                            target_key: target_key.to_string(),
+                            accept_seq: new_cursor,
+                            error: e.to_string(),
+                        })
+                        .await;
+                    return Err(e);
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _guard = mgr.checkpoint_save_lock().await;
+                if let Err(e) = self
+                    .store
+                    .save_journal(fence_principal, target_key, new_cursor)
+                    .await
+                {
+                    let _ = mgr
+                        .emit_event(SyncEvent::CheckpointFailed {
+                            target_key: target_key.to_string(),
+                            accept_seq: new_cursor,
+                            error: e.to_string(),
+                        })
+                        .await;
+                    return Err(e);
+                }
+            }
+            applied += page.changes.len() as u64;
+            after = new_cursor;
+            {
+                let _ = mgr
+                    .emit_event(SyncEvent::ConversationChanged {
+                        target_key: target_key.to_string(),
+                        applied_accept_seq: new_cursor,
+                    })
+                    .await;
+                if !affected.is_empty() {
+                    let _ = mgr
+                        .emit_event(SyncEvent::MessagesChanged {
+                            target_key: target_key.to_string(),
+                            message_ids: affected,
+                        })
+                        .await;
+                }
+            }
+            match page.more {
+                tinkle_schema::sync::PageMore::Yes => continue,
+                tinkle_schema::sync::PageMore::No => break,
+                tinkle_schema::sync::PageMore::Unknown if !unknown_repage_done => {
+                    unknown_repage_done = true;
+                    continue;
+                }
+                _ => break,
+            }
+        }
+        // Journal pages cover edits/removals only, never new messages.
+        // Catch up on bodies the journal cannot disclose: fetch a history
+        // window, diff against the cache, and ingest the missing ids.
+        // Best-effort: failures persist a retry job, never fail the run.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.sqlite.is_some() {
+                let caught = self
+                    .reconcile_new_messages(&target, target_key, &run_removals)
+                    .await;
+                applied += caught;
+            }
+        }
+        Ok(applied)
+    }
+
+    /// Shared message ingest: project bodies via `cache_projector` and
+    /// commit without moving the journal cursor (same-cursor commit).
+    ///
+    /// Used by the history HydrateCache path (`load_history`), the
+    /// new-message catch-up (`reconcile_new_messages`), and the future push
+    /// path. Freshness (`accept_seq` / `edit_date`) travels on the row and
+    /// is enforced by storage dedup; users/chats commit with scoped
+    /// provenance in the same fenced transaction. Message ids in `exclude`
+    /// (deletions from the same run) are never ingested, and existence is
+    /// re-checked against the cache immediately before commit so a delayed
+    /// fetch cannot resurrect a deleted row.
+    ///
+    /// Native commits via `apply_journal_page_fenced` at the current cursor;
+    /// wasm has no SQLite cache and only ensures the journal row exists.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) async fn ingest_messages(
+        &self,
+        principal: &str,
+        target_key: &str,
+        messages: &[tinkle_schema::proto::Message],
+        users: &[tinkle_schema::proto::User],
+        chats: &[tinkle_schema::proto::Chat],
+        exclude: &HashSet<i64>,
+    ) -> Result<Vec<i64>, TinkleError> {
+        let storage = match self.sqlite.clone() {
+            Some(s) => s,
+            None => return Ok(Vec::new()),
+        };
+        if messages.is_empty() && users.is_empty() && chats.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Project bodies, skipping same-run removals. File refs ride
+        // alongside messages/entities in the same fenced transaction.
+        let mut ops =
+            crate::cache_projector::project_messages_to_ops(target_key, messages, exclude)
+                .map_err(TinkleError::Sync)?;
+        // Entity hydration with scoped provenance.
+        crate::cache_projector::merge_ops(
+            &mut ops,
+            crate::cache_projector::project_entities_to_ops(users, chats),
+        );
+        // Journal pages require file origins == target_key; entity file
+        // refs arrive with a global-pin placeholder ("") and are rebased
+        // here so the same shared (scope,file_id) record commits atomically.
+        crate::cache_projector::rebase_file_origins(&mut ops, target_key);
+        if ops.messages.is_empty()
+            && ops.users.is_empty()
+            && ops.chats.is_empty()
+            && ops.files.is_empty()
+            && ops.message_files.is_empty()
+            && ops.entity_files.is_empty()
+        {
+            return Ok(Vec::new());
+        }
+        // Re-check before commit: drop any message id that is now excluded
+        // or that a concurrent removal already deleted. The cache has no
+        // tombstones, so the run-removal set is authoritative; the
+        // pre-commit id diff below is the second gate.
+        let want_ids: Vec<i64> = ops.messages.iter().map(|m| m.message_id).collect();
+        if want_ids.is_empty() && ops.users.is_empty() && ops.chats.is_empty() {
+            return Ok(Vec::new());
+        }
+        let current: i64 = self
+            .store
+            .load_journal(principal, target_key)
+            .await
+            .map_err(|e| TinkleError::CursorStore(e.to_string()))?
+            .unwrap_or(0);
+        let gen: u64 = {
+            let sqlite_task = storage.clone();
+            let p = principal.to_string();
+            let t = target_key.to_string();
+            match tokio::task::spawn_blocking(move || sqlite_task.stream_state(&p, &t)).await {
+                Ok(Ok(st)) => st.generation,
+                Ok(Err(e)) => return Err(TinkleError::CursorStore(e.to_string())),
+                Err(e) => {
+                    return Err(TinkleError::CursorStore(format!(
+                        "stream_state task failed: {e}"
+                    )));
+                }
+            }
+        };
+        // Second gate before commit: re-apply the exclusion set in case
+        // it grew after projection (concurrent removal in the same run).
+        // Existence itself is re-checked by callers via GetMessages omission
+        // (omitted ids are never passed here); the cache keeps no
+        // tombstones, so the run-removal set is authoritative.
+        ops.messages.retain(|m| !exclude.contains(&m.message_id));
+        if ops.messages.is_empty() && ops.users.is_empty() && ops.chats.is_empty() {
+            return Ok(Vec::new());
+        }
+        let tk = target_key.to_string();
+        let pr = principal.to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            storage.apply_journal_page_fenced(&pr, &tk, &ops, current, gen)
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => Ok(want_ids
+                .into_iter()
+                .filter(|id| !exclude.contains(id))
+                .collect()),
+            Ok(Err(e)) => {
+                tracing::debug!(error = %e, "ingest_messages commit failed");
+                Err(TinkleError::CursorStore(e.to_string()))
+            }
+            Err(e) => Err(TinkleError::CursorStore(format!(
+                "ingest commit task failed: {e}"
+            ))),
+        }
+    }
+
+    /// Wasm ingest: no SQLite cache; validate ids and ensure the journal
+    /// row exists without moving the cursor.
+    #[cfg(target_arch = "wasm32")]
+    async fn ingest_messages(
+        &self,
+        principal: &str,
+        target_key: &str,
+        messages: &[tinkle_schema::proto::Message],
+        _users: &[tinkle_schema::proto::User],
+        _chats: &[tinkle_schema::proto::Chat],
+        exclude: &HashSet<i64>,
+    ) -> Result<Vec<i64>, TinkleError> {
+        let mut out = Vec::new();
+        for m in messages {
+            if m.message_id <= 0 || exclude.contains(&m.message_id) {
+                continue;
+            }
+            out.push(m.message_id);
+        }
+        // Same-cursor journal touch: never advances the cursor.
+        let current: i64 = self
+            .store
+            .load_journal(principal, target_key)
+            .await
+            .map_err(|e| TinkleError::CursorStore(e.to_string()))?
+            .unwrap_or(0);
+        self.store
+            .save_journal(principal, target_key, current)
+            .await
+            .map_err(|e| TinkleError::CursorStore(e.to_string()))?;
+        Ok(out)
+    }
+
+    /// Native-only page hydration + projection: fetch edited bodies via
+    /// chunked `GetMessages`, project the validated page into `CacheOps`,
+    /// and collect affected message ids for the `MessagesChanged` event.
+    ///
+    /// Bodies whose ids are in `run_removals` (deletions/revocations from
+    /// the same reconcile run) are skipped so a delayed fetch never
+    /// resurrects a deleted row. Entity hydration shares
+    /// `cache_projector::project_entities_to_ops` with `ingest_messages`.
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn build_page_ops(
+        &self,
+        target_key: &str,
+        target: tinkle_schema::proto::Target,
+        page: &tinkle_schema::sync::ValidatedChangesPage,
+        run_removals: &HashSet<i64>,
+    ) -> Result<(tinkle_storage::CacheOps, Vec<i64>), TinkleError> {
+        // Hydrate edited bodies via chunked GetMessages, skipping ids
+        // already known-deleted in this run.
+        let edited_ids: Vec<i64> = page
+            .changes
+            .iter()
+            .filter(|c| {
+                tinkle_schema::proto::TargetChangeKind::try_from(c.kind)
+                    .map(|k| k == tinkle_schema::proto::TargetChangeKind::Edited)
+                    .unwrap_or(false)
+            })
+            .map(|c| c.message_id)
+            .filter(|id| !run_removals.contains(id))
+            .collect();
+        let mut fetched: HashMap<i64, tinkle_schema::proto::Message> = HashMap::new();
+        let mut fetched_users = Vec::new();
+        let mut fetched_chats = Vec::new();
+        if !edited_ids.is_empty() {
+            match self.get_messages(target, edited_ids).await {
+                Ok(r) => {
+                    for m in r.messages {
+                        // Second gate: a body that arrived for a deleted id
+                        // (server race) is dropped before projection.
+                        if run_removals.contains(&m.message_id) {
+                            continue;
+                        }
+                        fetched.insert(m.message_id, m);
+                    }
+                    fetched_users = r.users;
+                    fetched_chats = r.chats;
+                }
+                Err(e) => {
+                    // Hydration is best-effort: fall back to journal bodies.
+                    tracing::debug!(error = %e, "edited hydration failed, using journal bodies");
+                }
+            }
+        }
+        let mut ops = tinkle_storage::CacheOps::default();
+        let mut affected: Vec<i64> = Vec::with_capacity(page.changes.len());
+        for change in &page.changes {
+            affected.push(change.message_id);
+            let kind =
+                tinkle_schema::proto::TargetChangeKind::try_from(change.kind).map_err(|_| {
+                    TinkleError::Sync(format!("unknown target change kind {}", change.kind))
+                })?;
+            match kind {
+                tinkle_schema::proto::TargetChangeKind::Edited => {
+                    if run_removals.contains(&change.message_id) {
+                        continue;
+                    }
+                    let body = fetched
+                        .get(&change.message_id)
+                        .or(change.message.as_ref())
+                        .ok_or_else(|| {
+                            TinkleError::Sync(format!(
+                                "edited change for message {} must carry a body",
+                                change.message_id
+                            ))
+                        })?;
+                    let extra = crate::cache_projector::project_message_to_ops(target_key, body)
+                        .map_err(TinkleError::Sync)?;
+                    crate::cache_projector::merge_ops(&mut ops, extra);
+                }
+                tinkle_schema::proto::TargetChangeKind::Deleted
+                | tinkle_schema::proto::TargetChangeKind::Revoked => {
+                    let extra = crate::cache_projector::project_change_to_ops(target_key, change)
+                        .map_err(TinkleError::Sync)?;
+                    crate::cache_projector::merge_ops(&mut ops, extra);
+                }
+                tinkle_schema::proto::TargetChangeKind::Unspecified => {
+                    return Err(TinkleError::Sync(format!(
+                        "change for message {} has unspecified kind",
+                        change.message_id
+                    )));
+                }
+            }
+        }
+        // Entity hydration from GetMessages (scoped provenance, shared with
+        // ingest_messages). File refs ride alongside; rebase placeholder
+        // origins to the page target.
+        crate::cache_projector::merge_ops(
+            &mut ops,
+            crate::cache_projector::project_entities_to_ops(&fetched_users, &fetched_chats),
+        );
+        crate::cache_projector::rebase_file_origins(&mut ops, target_key);
+        Ok((ops, affected))
+    }
+
+    /// New-message catch-up for one target.
+    ///
+    /// `GetTargetChanges` discloses edits/removals only, never new
+    /// messages. After journal paging, fetch one history window, diff its
+    /// ids against the offline cache, re-check the missing ids via
+    /// `GetMessages` (omitted ids carry no information and are treated as
+    /// deleted), and ingest the survivors through the shared
+    /// `ingest_messages` helper (same-cursor commit, never moving the
+    /// journal cursor). Ids in `run_removals` are skipped up front and
+    /// re-checked before commit.
+    ///
+    /// Best-effort: returns the ingested count (0 when caught up or when
+    /// the fetch fails). An unfinished catch-up persists a
+    /// `background_sync_jobs` row when the table exists, else an in-memory
+    /// demand entry; neither path fails the reconcile run.
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn reconcile_new_messages(
+        &self,
+        target: &tinkle_schema::proto::Target,
+        target_key: &str,
+        run_removals: &HashSet<i64>,
+    ) -> u64 {
+        let principal = self.principal().await;
+        if principal == UNKNOWN_PRINCIPAL {
+            return 0;
+        }
+        let storage = match self.sqlite.clone() {
+            Some(s) => s,
+            None => return 0,
+        };
+        // One history window to discover candidate new messages.
+        let history_req = tinkle_schema::proto::GetHistoryRequest {
+            target: Some(*target),
+            offset_id: None,
+            offset_date: None,
+            add_offset: 0,
+            limit: 100,
+            max_id: None,
+            min_id: None,
+        };
+        let history = match self.messages().get_history(history_req).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(target_key, error = %e, "new-message catch-up history failed");
+                self.persist_catchup_demand(target_key).await;
+                return 0;
+            }
+        };
+        if history.messages.is_empty() {
+            self.clear_catchup_demand(target_key).await;
+            // Still upsert any entities the window carried.
+            if !history.users.is_empty() || !history.chats.is_empty() {
+                let empty: HashSet<i64> = HashSet::new();
+                let _ = self
+                    .ingest_messages(
+                        principal.as_str(),
+                        target_key,
+                        &[],
+                        &history.users,
+                        &history.chats,
+                        &empty,
+                    )
+                    .await;
+            }
+            return 0;
+        }
+        // Computed before `history.messages` is moved below: a full window
+        // with no confirmed end means more history may remain, so a
+        // successful ingest persists catch-up demand instead of clearing it.
+        let window_full = history.messages.len() >= 100 && history.more_available != Some(false);
+        // Diff against the cache.
+        let cached: HashSet<i64> = {
+            let st = storage.clone();
+            let p = principal.clone();
+            let t = target_key.to_string();
+            match tokio::task::spawn_blocking(move || st.cached_message_ids(&p, &t)).await {
+                Ok(Ok(ids)) => ids.into_iter().collect(),
+                _ => HashSet::new(),
+            }
+        };
+        let mut missing: Vec<i64> = history
+            .messages
+            .iter()
+            .map(|m| m.message_id)
+            .filter(|id| *id > 0 && !cached.contains(id) && !run_removals.contains(id))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        missing.sort_unstable();
+        if missing.is_empty() {
+            self.clear_catchup_demand(target_key).await;
+            return 0;
+        }
+        // Re-check existence via GetMessages: omitted ids are deleted /
+        // invisible and must not be ingested.
+        let rechecked = match self.get_messages(*target, missing.clone()).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(target_key, error = %e, "new-message catch-up fetch failed");
+                self.persist_catchup_demand(target_key).await;
+                return 0;
+            }
+        };
+        let live_ids: HashSet<i64> = rechecked.messages.iter().map(|m| m.message_id).collect();
+        // Keep history bodies for ids the server confirmed, so edit_date /
+        // accept_seq from either source survive; prefer the GetMessages
+        // copy when both exist (it is the fresher read).
+        let mut by_id: HashMap<i64, tinkle_schema::proto::Message> = HashMap::new();
+        for m in history.messages {
+            if live_ids.contains(&m.message_id) && !run_removals.contains(&m.message_id) {
+                by_id.insert(m.message_id, m);
+            }
+        }
+        for m in rechecked.messages {
+            if !run_removals.contains(&m.message_id) {
+                by_id.insert(m.message_id, m);
+            }
+        }
+        if by_id.is_empty() {
+            self.clear_catchup_demand(target_key).await;
+            return 0;
+        }
+        let bodies: Vec<tinkle_schema::proto::Message> = by_id.into_values().collect();
+        // Merge entity hydration from both reads.
+        let mut users = history.users;
+        users.extend(rechecked.users);
+        let mut chats = history.chats;
+        chats.extend(rechecked.chats);
+        match self
+            .ingest_messages(
+                &principal,
+                target_key,
+                &bodies,
+                &users,
+                &chats,
+                run_removals,
+            )
+            .await
+        {
+            Ok(ids) => {
+                let n = ids.len() as u64;
+                if n > 0 {
+                    if window_full {
+                        self.persist_catchup_demand(target_key).await;
+                    } else {
+                        self.clear_catchup_demand(target_key).await;
+                    }
+                }
+                n
+            }
+            Err(e) => {
+                tracing::debug!(target_key, error = %e, "new-message catch-up ingest failed");
+                self.persist_catchup_demand(target_key).await;
+                0
+            }
+        }
+    }
+
+    /// Persist an unfinished catch-up: durable `background_sync_jobs` row
+    /// when the table exists, plus the in-memory demand entry. Never fails.
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn persist_catchup_demand(&self, target_key: &str) {
+        {
+            let mut pending = self.catchup_pending.lock().await;
+            pending.insert(target_key.to_string());
+        }
+        let (principal, storage) = match (self.principal().await, self.sqlite.clone()) {
+            (p, Some(s)) if p != UNKNOWN_PRINCIPAL => (p, s),
+            _ => return,
+        };
+        let job_id = format!("catchup:{target_key}");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let job = tinkle_storage::BackgroundSyncJob {
+            job_id: job_id.clone(),
+            kind: "new_messages".to_string(),
+            target_key: target_key.to_string(),
+            state: "pending".to_string(),
+            payload: Vec::new(),
+            attempts: 0,
+            next_due: now,
+            claimed_by: None,
+            updated_at: now,
+        };
+        let p = principal.clone();
+        let result =
+            tokio::task::spawn_blocking(move || storage.enqueue_background_sync_job(&p, &job))
+                .await;
+        match result {
+            // Ok(true) = durable row written; Ok(false) = table missing,
+            // in-memory demand above is the retry path.
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                tracing::debug!(target_key, error = %e, "catch-up job persist failed");
+            }
+            Err(e) => {
+                tracing::debug!(target_key, error = %e, "catch-up job task failed");
+            }
+        }
+    }
+
+    /// Clear a finished catch-up from both the durable table (when present)
+    /// and the in-memory set. Missing-table is not an error.
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn clear_catchup_demand(&self, target_key: &str) {
+        {
+            let mut pending = self.catchup_pending.lock().await;
+            pending.remove(target_key);
+        }
+        let (principal, storage) = match (self.principal().await, self.sqlite.clone()) {
+            (p, Some(s)) if p != UNKNOWN_PRINCIPAL => (p, s),
+            _ => return,
+        };
+        let job_id = format!("catchup:{target_key}");
+        let p = principal.clone();
+        let _ =
+            tokio::task::spawn_blocking(move || storage.delete_background_sync_job(&p, &job_id))
+                .await;
+    }
+
+    /// Best-effort history heal for a journal skip: fetch the latest history
+    /// window and repopulate the offline cache without moving the journal
+    /// cursor. Failures are logged, never fatal to the reconcile run.
+    /// Uses the shared `ingest_messages` helper (same-cursor commit).
+    async fn heal_via_history(&self, target: &tinkle_schema::proto::Target, target_key: &str) {
+        let req = tinkle_schema::proto::GetHistoryRequest {
+            target: Some(*target),
+            offset_id: None,
+            offset_date: None,
+            add_offset: 0,
+            limit: 100,
+            max_id: None,
+            min_id: None,
+        };
+        match self.messages().get_history(req).await {
+            Ok(resp) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.sqlite.is_some() {
+                    let principal = self.principal().await;
+                    if principal != UNKNOWN_PRINCIPAL {
+                        let empty = HashSet::new();
+                        let _ = self
+                            .ingest_messages(
+                                &principal,
+                                target_key,
+                                &resp.messages,
+                                &resp.users,
+                                &resp.chats,
+                                &empty,
+                            )
+                            .await;
+                    }
+                }
+                tracing::debug!(
+                    target_key,
+                    messages = resp.messages.len(),
+                    "history heal fetched"
+                );
+            }
+            Err(e) => {
+                tracing::debug!(target_key, error = %e, "history heal failed");
+            }
+        }
+    }
+
+    /// Reconcile every tracked target once. Returns after all runs settle;
+    /// per-target failures surface as `ReconcileFailed` events, not as an
+    /// early return.
+    pub async fn reconcile_now(&self) -> Result<(), TinkleError> {
+        let keys = self.tracked_targets().await;
+        for key in keys {
+            let _ = self.reconcile_target(&key).await;
+        }
+        Ok(())
+    }
+
+    /// Durable journal cursor for one target (`None` when never reconciled).
+    /// Local read: works offline.
+    pub async fn target_cursor(&self, target_key: &str) -> Option<i64> {
+        let principal = self.principal().await;
+        if principal == UNKNOWN_PRINCIPAL {
+            return None;
+        }
+        self.store
+            .load_journal(&principal, target_key)
+            .await
+            .ok()
+            .flatten()
+    }
+
+    /// Per-target reconcile status. `None` when offline or untracked.
+    pub async fn target_status(&self, target_key: &str) -> Option<ReconcileStatus> {
+        match self.live_mgr().await {
+            Ok(mgr) => mgr.target_status(target_key).await,
+            Err(_) => None,
+        }
+    }
+
+    /// Tracked conversation keys.
+    pub async fn tracked_targets(&self) -> Vec<String> {
+        self.interests
+            .lock()
+            .await
+            .targets
+            .iter()
+            .filter_map(|t| target_key_of(t).ok())
+            .collect()
+    }
+
+    /// Register tracked conversations and kick reconciliation.
+    ///
+    /// Flow: validate principal → track → demand each target. On the manual
+    /// path this awaits one reconcile pass over all tracked targets so
+    /// callers observe `ConversationChanged`/`MessagesChanged` without a
+    /// supervisor; under `start` the supervisor also reschedules demand.
+    pub async fn subscribe(
+        &self,
+        targets: Vec<tinkle_schema::proto::Target>,
+    ) -> Result<(), TinkleError> {
+        let _sub = self.sub_lock.lock().await;
+        let mgr = self.live_mgr().await?;
+        let principal = self.principal().await;
+        if principal == UNKNOWN_PRINCIPAL {
+            return Err(TinkleError::Subscription(
+                "authenticated principal unknown; call set_principal_user_id after sign_in".into(),
+            ));
+        }
+        for t in &targets {
+            target_key_of(t)?;
+        }
+        mgr.track_targets(targets.clone()).await;
+        {
+            let mut g = self.interests.lock().await;
+            // Merge: keep existing plus new (dedupe by key).
+            let mut keys: HashSet<String> = g
+                .targets
+                .iter()
+                .filter_map(|t| target_key_of(t).ok())
+                .collect();
+            for t in targets {
+                if let Ok(k) = target_key_of(&t) {
+                    if keys.insert(k) {
+                        g.targets.push(t);
+                    }
+                }
+            }
+            g.subscribed = true;
+        }
+        // Kick: one pass now (manual path); supervisor reschedules demand.
+        let keys = self.tracked_targets().await;
+        for key in keys {
+            if let Err(e) = self.reconcile_target(&key).await {
+                tracing::debug!(target_key = %key, error = %e, "initial reconcile failed");
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn next_event(&self) -> Option<SyncEvent> {
+        loop {
+            {
+                let mut retained = self.drain_mgrs.lock().await;
+                let i = 0;
+                while i < retained.len() {
+                    if let Some(evt) = retained[i].try_next_event().await {
+                        return Some(evt);
+                    }
+                    retained.remove(i);
+                }
+            }
+            let mgr = match self.live_mgr().await {
+                Ok(m) => m,
+                Err(_) => return None,
+            };
+            if let Some(evt) = mgr.try_next_event().await {
+                return Some(evt);
+            }
+            match tokio::time::timeout(std::time::Duration::from_millis(200), mgr.next_event())
+                .await
+            {
+                Ok(evt) => return evt,
+                Err(_) => {
+                    let current = self.live_mgr().await.ok();
+                    let rotated = match current {
+                        Some(cur) => !Arc::ptr_eq(&cur, &mgr),
+                        None => true,
+                    };
+                    if rotated {
+                        self.retain_manager(mgr).await;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn retain_manager(&self, mgr: Arc<SyncManager>) {
+        let mut retained = self.drain_mgrs.lock().await;
+        if retained.iter().any(|m| Arc::ptr_eq(m, &mgr)) {
+            return;
+        }
+        retained.push(mgr);
+        while retained.len() > 2 {
+            retained.remove(0);
+        }
+    }
+
     async fn teardown_connection(&self) {
         if let Some(live) = self.live.write().await.take() {
             live.handle.close().await;
             live.pump.abort();
             live.sync_mgr.on_disconnect().await;
+            self.retain_manager(live.sync_mgr).await;
         }
-        self.follows.lock().await.clear();
         self.transport_ok.store(false, Ordering::SeqCst);
     }
 
-    /// Graceful close. Also stops the sync supervisor when running; use
-    /// `reconnect` (or `start` again) to resume. Equivalent to `stop`.
     pub async fn close(&self) {
         self.stop().await;
     }
 
-    /// Stop the sync supervisor (if running) and tear down the connection.
-    /// Idempotent. Supervised apps call this instead of `close`.
     pub async fn stop(&self) {
         self.stop_supervisor().await;
         self.teardown_connection().await;
     }
 
-    /// Abort the monitor task and detach recovery reporting. Bumps the
-    /// epoch so a `start()` that is concurrently establishing cannot
-    /// install a supervisor for the stopped generation.
     async fn stop_supervisor(&self) {
         let (handle, shutdown) = {
             let mut sup = self.sup_state.lock().await;
@@ -778,55 +1789,60 @@ impl Client {
         *self.signal_tx.lock().await = None;
     }
 
-    /// Background suspension (mobile).
     pub async fn suspend(&self) {
+        self.suspended.store(true, Ordering::SeqCst);
         self.teardown_connection().await;
     }
 
-    /// Reconnect + re-handshake + explicit resubscribe from persisted cursors.
+    pub async fn resume(&self) {
+        self.suspended.store(false, Ordering::SeqCst);
+    }
+
+    pub async fn is_suspended(&self) -> bool {
+        self.suspended.load(Ordering::SeqCst)
+    }
+
     pub async fn reconnect(&self) -> Result<(), TinkleError> {
+        if self.suspended.load(Ordering::SeqCst) {
+            return Err(TinkleError::NotConnected(
+                "suspended; reconnect suppressed".into(),
+            ));
+        }
         self.teardown_connection().await;
         let policy = self.config.reconnect.clone();
         let mut attempt: u32 = 0;
         loop {
+            if self.suspended.load(Ordering::SeqCst) {
+                self.teardown_connection().await;
+                return Err(TinkleError::NotConnected(
+                    "suspended during reconnect".into(),
+                ));
+            }
             match self.connect().await {
                 Ok(()) => {
-                    let (subscribed, rooms, watch) = {
+                    if self.suspended.load(Ordering::SeqCst) {
+                        self.teardown_connection().await;
+                        return Err(TinkleError::NotConnected("suspended after connect".into()));
+                    }
+                    let (subscribed, targets) = {
                         let g = self.interests.lock().await;
-                        (g.subscribed, g.rooms.clone(), g.watch_user_ids.clone())
+                        (g.subscribed, g.targets.clone())
                     };
                     if subscribed {
-                        let previous = self.principal().await;
-                        if previous == UNKNOWN_PRINCIPAL {
-                            if let Err(e) = self.subscribe(rooms, watch).await {
-                                self.teardown_connection().await;
-                                return Err(e);
-                            }
-                        } else {
-                            let original_rooms = rooms.clone();
-                            let watch_clone = watch.clone();
-                            let resp = match self.subscribe(rooms, watch).await {
-                                Ok(r) => r,
-                                Err(e) => {
-                                    self.teardown_connection().await;
-                                    return Err(e);
-                                }
-                            };
-                            if resp.stream != previous {
-                                let zeroed = original_rooms
-                                    .into_iter()
-                                    .map(|(id, _)| (id, 0))
-                                    .collect::<Vec<_>>();
-                                if let Err(e) = self.subscribe(zeroed, watch_clone).await {
-                                    self.teardown_connection().await;
-                                    return Err(e);
-                                }
-                            }
+                        if let Err(e) = self.subscribe(targets).await {
+                            self.teardown_connection().await;
+                            return Err(e);
                         }
                     }
                     return Ok(());
                 }
                 Err(e) => {
+                    if self.suspended.load(Ordering::SeqCst) {
+                        self.teardown_connection().await;
+                        return Err(TinkleError::NotConnected(
+                            "suspended during reconnect".into(),
+                        ));
+                    }
                     if !should_retry(&policy, attempt) {
                         return Err(TinkleError::ReconnectExhausted { attempts: attempt });
                     }
@@ -838,45 +1854,28 @@ impl Client {
         }
     }
 
-    /// Supervised lifecycle: establish the session, restore interests, and
-    /// start the sync supervisor, which owns automatic recovery and
-    /// reconnection from here on. The host only consumes `next_event()` and
-    /// acknowledges/applies updates; gaps, dead transports, and rebuilds
-    /// are handled inside the SDK.
-    ///
-    /// Idempotent: concurrent callers share the single supervisor and get
-    /// the initial establishment result. Call `stop()` (or `close()`) to
-    /// shut down; `connect`/`subscribe`/`reconnect` remain as documented
-    /// low-level primitives for manual control.
-    ///
-    /// Unavailable on wasm32: the monitor task cannot spawn on the browser
-    /// executor yet (see libtinkle-web). Use manual connect/subscribe there.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn start(
         &self,
-        rooms: Vec<(i64, u64)>,
-        watch_user_ids: Vec<i64>,
-    ) -> Result<SubscribeResult, TinkleError> {
+        targets: Vec<tinkle_schema::proto::Target>,
+    ) -> Result<(), TinkleError> {
         let _guard = self.start_lock.lock().await;
         {
             let sup = self.sup_state.lock().await;
             if sup.handle.is_some() {
-                return sup.last_result.clone().ok_or_else(|| {
-                    TinkleError::NotConnected("supervisor running without result".into())
-                });
+                return Ok(());
             }
         }
         let epoch = self.sup_state.lock().await.epoch;
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let (sig_tx, sig_rx) = mpsc::channel(64);
+        self.suspended.store(false, Ordering::SeqCst);
         *self.signal_tx.lock().await = Some(sig_tx);
-        let result = self.establish(rooms, watch_user_ids).await;
+        let result = self.establish(targets).await;
         match result {
-            Ok(res) => {
+            Ok(()) => {
                 let mut sup = self.sup_state.lock().await;
                 if sup.epoch != epoch || sup.handle.is_some() {
-                    // A concurrent stop() won the race: do not install a
-                    // supervisor for the stopped generation.
                     return Err(TinkleError::NotConnected("stopped during start".into()));
                 }
                 let task_client = self.clone();
@@ -884,11 +1883,10 @@ impl Client {
                     tokio::spawn(async move { task_client.supervise(sig_rx, shutdown_rx).await });
                 sup.handle = Some(handle);
                 sup.shutdown = Some(shutdown_tx);
-                sup.last_result = Some(res.clone());
-                Ok(res)
+                sup.last_result = Some(());
+                Ok(())
             }
             Err(e) => {
-                // Leave no unsupervised half-established connection behind.
                 *self.signal_tx.lock().await = None;
                 self.teardown_connection().await;
                 Err(e)
@@ -896,46 +1894,41 @@ impl Client {
         }
     }
 
-    /// wasm32 stub: the supervisor monitor cannot spawn on the browser
-    /// executor yet (its future captures the `!Send` connection handle).
-    /// Manual `connect`/`subscribe`/`recover_stream` work on wasm; the
-    /// autonomous supervisor arrives with the spawn_local adaptation.
     #[cfg(target_arch = "wasm32")]
     pub async fn start(
         &self,
-        _rooms: Vec<(i64, u64)>,
-        _watch_user_ids: Vec<i64>,
-    ) -> Result<SubscribeResult, TinkleError> {
-        // Hold the single-flight lock so a future native implementation
-        // keeps the same mutual-exclusion shape.
+        _targets: Vec<tinkle_schema::proto::Target>,
+    ) -> Result<(), TinkleError> {
         let _guard = self.start_lock.lock().await;
         Err(TinkleError::NotConnected(
             "supervised lifecycle unavailable on wasm; use connect/subscribe".into(),
         ))
     }
 
-    /// Connect (if needed) and subscribe. Signals are wired by `connect()`
-    /// from `signal_tx`, plus here for managers created by an earlier
-    /// manual `connect()`, so supervised and manual paths share this.
-    /// Supervisor-only (see `start`).
     #[cfg(not(target_arch = "wasm32"))]
     async fn establish(
         &self,
-        rooms: Vec<(i64, u64)>,
-        watch_user_ids: Vec<i64>,
-    ) -> Result<SubscribeResult, TinkleError> {
+        targets: Vec<tinkle_schema::proto::Target>,
+    ) -> Result<(), TinkleError> {
+        let epoch = self.sup_state.lock().await.epoch;
         if !self.is_connected().await {
             self.connect().await?;
+            if self.sup_state.lock().await.epoch != epoch {
+                self.teardown_connection().await;
+                return Err(TinkleError::NotConnected("stopped during start".into()));
+            }
         }
         if let Some(tx) = self.signal_tx.lock().await.clone() {
             self.live_mgr().await?.set_signal_tx(tx).await;
         }
-        self.subscribe(rooms, watch_user_ids).await
+        let result = self.subscribe(targets).await;
+        if self.sup_state.lock().await.epoch != epoch {
+            self.teardown_connection().await;
+            return Err(TinkleError::NotConnected("stopped during start".into()));
+        }
+        result
     }
 
-    /// Supervisor monitor: exactly one per client. Reacts to pump death
-    /// and recovery hints; the interval tick is a backstop for missed
-    /// hints. Returns only on shutdown.
     #[cfg(not(target_arch = "wasm32"))]
     async fn supervise(
         self,
@@ -944,34 +1937,46 @@ impl Client {
     ) {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        // Per-stream (consecutive failures, last attempt): bounds hammering
-        // a persistently failing stream while allowing eventual recovery.
-        let mut degraded: HashMap<String, (u32, std::time::Instant)> = HashMap::new();
+        let mut demand: HashMap<String, TargetDemand> = HashMap::new();
         loop {
             tokio::select! {
                 _ = &mut shutdown => break,
                 _ = tick.tick() => {
+                    if self.suspended.load(Ordering::SeqCst) {
+                        continue;
+                    }
                     if !self.is_connected().await {
                         self.reestablish().await;
-                        degraded.clear();
+                    }
+                    if self.is_connected().await {
+                        self.recover_due(&mut demand).await;
                     }
                 }
                 Some(signal) = sig_rx.recv() => {
                     match signal {
                         RecoverySignal::PumpDead => {
                             self.reestablish().await;
-                            degraded.clear();
                         }
-                        RecoverySignal::Gap { stream }
-                        | RecoverySignal::CheckpointFailed { stream } => {
-                            self.recover_one(&stream, &mut degraded).await;
+                        RecoverySignal::Demand { target_key }
+                        | RecoverySignal::ReconcileFailed { target_key } => {
+                            demand
+                                .entry(target_key.clone())
+                                .or_insert_with(TargetDemand::fresh);
+                            self.recover_one(&target_key, &mut demand).await;
                         }
-                        RecoverySignal::Rebuild { stream } => {
-                            // Expiry already reset local state and fenced the
-                            // cache; reconstruct from the origin through the
-                            // standard recovery path. Persistent failure
-                            // leaves RebuildRequired in place.
-                            self.recover_one(&stream, &mut degraded).await;
+                        RecoverySignal::CheckpointFailed {
+                            target_key,
+                            accept_seq,
+                        } => {
+                            tracing::debug!(
+                                target_key = %target_key,
+                                accept_seq,
+                                "checkpoint failed; rescheduling reconcile"
+                            );
+                            demand
+                                .entry(target_key.clone())
+                                .or_insert_with(TargetDemand::fresh);
+                            self.recover_one(&target_key, &mut demand).await;
                         }
                     }
                 }
@@ -979,11 +1984,24 @@ impl Client {
         }
     }
 
-    /// Reconnect + resubscribe from persisted interests, with a cooldown so
-    /// overlapping triggers do not pile up (reconnect backs off internally).
-    /// Supervisor-only (see `start`).
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn recover_due(&self, demand: &mut HashMap<String, TargetDemand>) {
+        let now = std::time::Instant::now();
+        let due: Vec<String> = demand
+            .iter()
+            .filter(|(_, d)| now >= d.next_due)
+            .map(|(s, _)| s.clone())
+            .collect();
+        for target_key in due {
+            self.recover_one(&target_key, demand).await;
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     async fn reestablish(&self) {
+        if self.suspended.load(Ordering::SeqCst) {
+            return;
+        }
         {
             let mut sup = self.sup_state.lock().await;
             let now = std::time::Instant::now();
@@ -1003,32 +2021,27 @@ impl Client {
         }
     }
 
-    /// Bounded recovery for one stream from its durable applied cursor.
-    /// Success clears the degraded record; anything else leaves stream
-    /// state (Gap/RebuildRequired events already emitted) for the host.
-    /// Supervisor-only (see `start`).
     #[cfg(not(target_arch = "wasm32"))]
-    async fn recover_one(
-        &self,
-        stream: &str,
-        degraded: &mut HashMap<String, (u32, std::time::Instant)>,
-    ) {
+    async fn recover_one(&self, target_key: &str, demand: &mut HashMap<String, TargetDemand>) {
         let now = std::time::Instant::now();
-        if let Some((count, last)) = degraded.get(stream) {
-            if *count >= 3 && now.duration_since(*last) < std::time::Duration::from_secs(30) {
+        if let Some(d) = demand.get(target_key) {
+            if now < d.next_due {
                 return;
             }
         }
         let mgr = match self.live_mgr().await {
             Ok(m) => m,
-            // No connection: the watchdog owns re-establishment; the next
-            // signal after reconnect retries recovery.
             Err(_) => return,
         };
-        let after = mgr.applied_cursor(stream).await;
+        if mgr.is_reconciling(target_key).await {
+            if let Some(d) = demand.get_mut(target_key) {
+                d.next_due = now + std::time::Duration::from_secs(5);
+            }
+            return;
+        }
         let mut ok = false;
         for _ in 0..3 {
-            match self.recover_stream(stream, after, 200).await {
+            match self.reconcile_target(target_key).await {
                 Ok(_) => {
                     ok = true;
                     break;
@@ -1038,35 +2051,354 @@ impl Client {
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                         continue;
                     }
-                    // Rebuild/Auth/Fail: state already reflects the outcome
-                    // (RebuildRequired event or surfaced error); do not loop.
                     _ => break,
                 },
             }
         }
         if ok {
-            degraded.remove(stream);
+            demand.remove(target_key);
         } else {
-            let count = degraded.get(stream).map(|(c, _)| *c).unwrap_or(0) + 1;
-            degraded.insert(stream.to_string(), (count, now));
+            let failures = demand.get(target_key).map(|d| d.failures).unwrap_or(0) + 1;
+            demand.insert(
+                target_key.to_string(),
+                TargetDemand {
+                    failures,
+                    next_due: now + TargetDemand::backoff_for(failures),
+                },
+            );
         }
     }
 
-    /// Best-effort effective cursor for `stream` (`applied` plus volatile
-    /// delivered progress). `None` when offline. Authoritative for UI
-    /// progress: informational events may drop under pressure, cursors do
-    /// not.
-    pub async fn current_cursor(&self, stream: &str) -> Option<u64> {
-        match self.live_mgr().await {
-            Ok(mgr) => Some(mgr.effective_cursor(stream).await),
-            Err(_) => None,
+    /// Fetch message history AND hydrate the offline cache (native only).
+    ///
+    /// History paging follows `more_available`: `Some(true)` means more,
+    /// `Some(false)` means done, `None` falls back to the legacy
+    /// window-edge heuristic (continue while the window came back full,
+    /// advancing `offset_id` to the window edge; `count` stays
+    /// informational). Ingestion upserts authoritative users/chats plus
+    /// history message bodies (same-cursor journal commit, never advancing
+    /// the journal cursor). Best-effort: storage failures are logged and the
+    /// fetched pages are still returned as one combined response.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn load_history(
+        &self,
+        req: tinkle_schema::proto::GetHistoryRequest,
+    ) -> Result<tinkle_schema::proto::GetHistoryResponse, TinkleError> {
+        if req.target.is_none() {
+            return Err(TinkleError::Codec(
+                "GetHistoryRequest.target missing".into(),
+            ));
+        }
+        let limit = if req.limit <= 0 {
+            20
+        } else {
+            req.limit.min(100)
+        };
+        let mut cur = req;
+        cur.limit = limit;
+        let mut all_messages = Vec::new();
+        let mut all_users = Vec::new();
+        let mut all_chats = Vec::new();
+        for _ in 0..10 {
+            let resp = self.messages().get_history(cur).await?;
+            let more = resp.more_available;
+            let offset = resp.offset_id_offset;
+            all_users.extend(resp.users);
+            all_chats.extend(resp.chats);
+            let empty = resp.messages.is_empty();
+            let full = resp.messages.len() as i32 >= limit;
+            // Edge for the legacy fallback: smallest id in this window.
+            let min_id = resp.messages.iter().map(|m| m.message_id).min();
+            all_messages.extend(resp.messages);
+            match more {
+                Some(true) => {
+                    if let Some(off) = offset {
+                        cur.offset_id = Some(off);
+                    } else if let Some(min) = min_id {
+                        cur.offset_id = Some(min);
+                    } else {
+                        break;
+                    }
+                    continue;
+                }
+                Some(false) => break,
+                None => {
+                    if empty || !full {
+                        break;
+                    }
+                    if let Some(min) = min_id {
+                        cur.offset_id = Some(min);
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+        // Dedupe users/chats by id for the combined response.
+        {
+            use std::collections::HashMap;
+            let mut seen_u = HashMap::new();
+            for u in all_users {
+                let id = match u.user_type.as_ref() {
+                    Some(tinkle_schema::proto::user::UserType::Data(d)) => d.id,
+                    Some(tinkle_schema::proto::user::UserType::Empty(e)) => e.id,
+                    None => 0,
+                };
+                if id > 0 {
+                    seen_u.insert(id, u);
+                }
+            }
+            all_users = seen_u.into_values().collect();
+            let mut seen_c = HashMap::new();
+            for c in all_chats {
+                if c.chat_id > 0 {
+                    seen_c.insert(c.chat_id, c);
+                }
+            }
+            all_chats = seen_c.into_values().collect();
+        }
+        // HydrateCache via the shared ingest helper (same-cursor commit,
+        // never moves the journal cursor). Single call covers messages +
+        // entities, replacing the old split ingest paths.
+        if let Some(t) = req.target.as_ref() {
+            if let Ok(key) = target_key_of(t) {
+                let principal = self.principal().await;
+                if principal != UNKNOWN_PRINCIPAL {
+                    let empty = HashSet::new();
+                    let _ = self
+                        .ingest_messages(
+                            &principal,
+                            &key,
+                            &all_messages,
+                            &all_users,
+                            &all_chats,
+                            &empty,
+                        )
+                        .await;
+                }
+            }
+        }
+        Ok(tinkle_schema::proto::GetHistoryResponse {
+            messages: all_messages,
+            users: all_users,
+            chats: all_chats,
+            count: 0,
+            offset_id_offset: None,
+            more_available: Some(false),
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub async fn load_history(
+        &self,
+        req: tinkle_schema::proto::GetHistoryRequest,
+    ) -> Result<tinkle_schema::proto::GetHistoryResponse, TinkleError> {
+        if req.target.is_none() {
+            return Err(TinkleError::Codec(
+                "GetHistoryRequest.target missing".into(),
+            ));
+        }
+        let limit = if req.limit <= 0 {
+            20
+        } else {
+            req.limit.min(100)
+        };
+        let mut cur = req;
+        cur.limit = limit;
+        let mut all_messages = Vec::new();
+        let mut all_users = Vec::new();
+        let mut all_chats = Vec::new();
+        for _ in 0..10 {
+            let resp = self.messages().get_history(cur).await?;
+            let more = resp.more_available;
+            let offset = resp.offset_id_offset;
+            all_users.extend(resp.users);
+            all_chats.extend(resp.chats);
+            let empty = resp.messages.is_empty();
+            let full = resp.messages.len() as i32 >= limit;
+            let min_id = resp.messages.iter().map(|m| m.message_id).min();
+            all_messages.extend(resp.messages);
+            match more {
+                Some(true) => {
+                    if let Some(off) = offset {
+                        cur.offset_id = Some(off);
+                    } else if let Some(min) = min_id {
+                        cur.offset_id = Some(min);
+                    } else {
+                        break;
+                    }
+                    continue;
+                }
+                Some(false) => break,
+                None => {
+                    if empty || !full {
+                        break;
+                    }
+                    if let Some(min) = min_id {
+                        cur.offset_id = Some(min);
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+        Ok(tinkle_schema::proto::GetHistoryResponse {
+            messages: all_messages,
+            users: all_users,
+            chats: all_chats,
+            count: 0,
+            offset_id_offset: None,
+            more_available: Some(false),
+        })
+    }
+
+    /// Fetch dialogs AND hydrate the offline cache (native only).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn load_dialogs(
+        &self,
+        req: tinkle_schema::proto::GetDialogsRequest,
+    ) -> Result<tinkle_schema::proto::GetDialogsResponse, TinkleError> {
+        let resp = self.messages().get_dialogs(req).await?;
+        self.ingest_snapshot_entities(&resp.users, &resp.chats)
+            .await;
+        self.ingest_snapshot_dialogs(&resp.dialogs).await;
+        Ok(resp)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub async fn load_dialogs(
+        &self,
+        req: tinkle_schema::proto::GetDialogsRequest,
+    ) -> Result<tinkle_schema::proto::GetDialogsResponse, TinkleError> {
+        self.messages().get_dialogs(req).await
+    }
+
+    /// Dialog-list entity hydration (global pins). Shares entity encoding
+    /// with the message ingest path via `cache_projector`; dialogs
+    /// themselves stay global (no single target_key to scope to).
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn ingest_snapshot_entities(
+        &self,
+        users: &[tinkle_schema::proto::User],
+        chats: &[tinkle_schema::proto::Chat],
+    ) {
+        let (principal, storage) = match (self.principal().await, self.sqlite.clone()) {
+            (p, Some(s)) if p != UNKNOWN_PRINCIPAL => (p, s),
+            _ => return,
+        };
+        if users.is_empty() && chats.is_empty() {
+            return;
+        }
+        // Shared encoding with ingest_messages (scoped path uses the same
+        // helpers, then commits with scoped provenance; here the commit is
+        // the global-pin upsert used by dialog snapshots). File refs share
+        // records (scope "") and persist as global pins alongside entities.
+        let ops = crate::cache_projector::project_entities_to_ops(users, chats);
+        if ops.users.is_empty()
+            && ops.chats.is_empty()
+            && ops.files.is_empty()
+            && ops.entity_files.is_empty()
+        {
+            return;
+        }
+        let result = tokio::task::spawn_blocking(move || {
+            for row in &ops.users {
+                if let Err(e) = storage.upsert_user(&principal, row) {
+                    tracing::debug!(error = %e, "history user ingest failed");
+                }
+            }
+            for row in &ops.chats {
+                if let Err(e) = storage.upsert_chat(&principal, row) {
+                    tracing::debug!(error = %e, "history chat ingest failed");
+                }
+            }
+            // Global-pin file metadata + entity refs (avatars). First-wins
+            // metadata, idempotent refs — same shared-record path as journal.
+            for row in &ops.files {
+                if let Err(e) = storage.upsert_file(&principal, row) {
+                    tracing::debug!(error = %e, "history file ingest failed");
+                }
+            }
+            for r in &ops.entity_files {
+                if let Err(e) = storage.upsert_entity_file_ref(&principal, r) {
+                    tracing::debug!(error = %e, "history entity-file ingest failed");
+                }
+            }
+        })
+        .await;
+        if result.is_err() {
+            tracing::debug!("history entity ingest task failed");
         }
     }
 
-    pub async fn rotate_credential(&mut self, next: Credential) -> Result<(), TinkleError> {
-        self.close().await;
-        self.credential = next;
-        self.connect().await
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn ingest_snapshot_dialogs(&self, dialogs: &[tinkle_schema::proto::Dialog]) {
+        use prost::Message as _;
+        let (principal, storage) = match (self.principal().await, self.sqlite.clone()) {
+            (p, Some(s)) if p != UNKNOWN_PRINCIPAL => (p, s),
+            _ => return,
+        };
+        if dialogs.is_empty() {
+            return;
+        }
+        let mut rows = Vec::with_capacity(dialogs.len());
+        for d in dialogs {
+            let (peer_kind, peer_id) = match d.target.as_ref().and_then(|t| t.kind.as_ref()) {
+                Some(tinkle_schema::proto::target::Kind::ChatId(id)) => ("room".to_string(), *id),
+                Some(tinkle_schema::proto::target::Kind::UserId(id)) => ("user".to_string(), *id),
+                None => continue,
+            };
+            if peer_id <= 0 {
+                continue;
+            }
+            let mut proto = Vec::new();
+            if d.encode(&mut proto).is_err() {
+                continue;
+            }
+            // Authoritative snapshot: global pin.
+            // Derive origin from target for scoping; dialogs list itself is
+            // global, so pin globally (clears pending on write).
+            let origin = String::new();
+            let _ = peer_kind.clone();
+            rows.push(tinkle_storage::DialogRow {
+                peer_kind,
+                peer_id,
+                top_message: d.top_message,
+                unread_count: d.unread_count,
+                read_inbox_max_id: d.read_inbox_max_id,
+                read_outbox_max_id: d.read_outbox_max_id,
+                pinned: d.pinned,
+                proto,
+                origin_stream: origin,
+                read_state_pending: false,
+            });
+        }
+        if rows.is_empty() {
+            return;
+        }
+        let result = tokio::task::spawn_blocking(move || {
+            for row in &rows {
+                if let Err(e) = storage.upsert_dialog_authoritative(&principal, row, true) {
+                    tracing::debug!(error = %e, "dialog snapshot ingest failed");
+                }
+            }
+        })
+        .await;
+        if result.is_err() {
+            tracing::debug!("dialog snapshot ingest task failed");
+        }
+    }
+
+    pub async fn rotate_credential(&self, next: Credential) -> Result<(), TinkleError> {
+        let was_supervised = self.sup_state.lock().await.handle.is_some();
+        let had_interests = self.interests.lock().await.subscribed;
+        self.teardown_connection().await;
+        *self.credential.write().await = next;
+        if was_supervised || had_interests {
+            self.reconnect().await
+        } else {
+            Ok(())
+        }
     }
 
     pub async fn pending_len(&self) -> usize {
@@ -1089,48 +2421,24 @@ impl Client {
     }
 }
 
-/// Resolves the authenticated principal without creating a duplicate
-/// subscription: the empty-stream follow request doubles as the own-stream
-/// follow. The gateway resolves the caller's stream from authentication
-/// and echoes the concrete `user:<id>`; that follow stays active, so no
-/// second own-stream follow is ever issued on the connection.
-/// `SyncManager::resolve_principal` preserves the retained suffix that may
-/// already be replaying through the pump.
-///
-/// Swap point for a future dedicated identity RPC: replace this probe with
-/// the unary call, keep the exactly-once-follow contract.
-impl Client {
-    async fn resolve_own_stream(&self) -> Result<String, TinkleError> {
-        if self.principal().await != UNKNOWN_PRINCIPAL {
-            return Ok(self.principal().await);
-        }
-        let mgr = self.live_mgr().await?;
-        let probe = tinkle_schema::proto::FollowUpdatesRequest {
-            stream: String::new(),
-            after_cursor: 0,
-        };
-        match self.updates().follow(probe).await {
-            Ok(resp) if !resp.stream.is_empty() => {
-                let resolved = resp.stream.clone();
-                *self.principal.write().await = resolved.clone();
-                mgr.resolve_principal(resolved.clone()).await;
-                self.follows.lock().await.insert(resolved.clone());
-                Ok(resolved)
-            }
-            Ok(_) => {
-                // Gateway without empty-stream resolution: principal must
-                // have been set via `sign_in` or `set_principal_user_id`.
-                // Fail closed rather than checkpointing under `unknown`.
-                Err(TinkleError::Subscription(
-                    "authenticated principal unknown; call set_principal_user_id after sign_in"
-                        .into(),
-                ))
-            }
-            Err(e) => Err(e),
-        }
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::TargetDemand;
 
-fn principal_user_suffix(principal: &str) -> String {
-    principal.strip_prefix("user:").unwrap_or("0").to_string()
+    #[test]
+    fn demand_backoff_grows_and_caps() {
+        assert_eq!(
+            TargetDemand::backoff_for(0),
+            std::time::Duration::from_secs(2)
+        );
+        assert_eq!(
+            TargetDemand::backoff_for(1),
+            std::time::Duration::from_secs(4)
+        );
+        assert_eq!(
+            TargetDemand::backoff_for(100),
+            std::time::Duration::from_secs(60)
+        );
+        assert!(TargetDemand::fresh().next_due <= std::time::Instant::now());
+    }
 }

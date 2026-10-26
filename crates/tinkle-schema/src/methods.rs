@@ -4,9 +4,8 @@
 //! Generated from the BSR `tinkle-org/schema` service definitions;
 //! do not hand-edit method strings. Payload types are the prost request/
 //! response messages in `proto.rs`. Failures use Syntra `RpcResult.error`.
-//! Streaming methods (`FollowUpdates`, `ObserveConnectivity`) are
-//! delivered over Syntra notifications via the follow binding; see
-//! `sync.rs` and the gateway binding.
+//! `UpdatesService/ObserveConnectivity` is server-streaming: observations
+//! are delivered over Syntra notifications; see `sync.rs`.
 
 /// All known Tinkle methods with request/response type names.
 /// `(method, request, response)`; descriptors for codegen.
@@ -537,6 +536,41 @@ pub const ALL_METHODS: &[(&str, &str, &str)] = &[
         "UnblockResponse",
     ),
     (
+        "/tinkle.v1.FilesService/AbortUpload",
+        "AbortUploadRequest",
+        "AbortUploadResponse",
+    ),
+    (
+        "/tinkle.v1.FilesService/BeginUpload",
+        "BeginUploadRequest",
+        "BeginUploadResponse",
+    ),
+    (
+        "/tinkle.v1.FilesService/CompleteUpload",
+        "CompleteUploadRequest",
+        "CompleteUploadResponse",
+    ),
+    (
+        "/tinkle.v1.FilesService/DownloadPart",
+        "DownloadPartRequest",
+        "DownloadPartResponse",
+    ),
+    (
+        "/tinkle.v1.FilesService/GetFileInfo",
+        "GetFileInfoRequest",
+        "GetFileInfoResponse",
+    ),
+    (
+        "/tinkle.v1.FilesService/GetUploadStatus",
+        "GetUploadStatusRequest",
+        "GetUploadStatusResponse",
+    ),
+    (
+        "/tinkle.v1.FilesService/UploadPart",
+        "UploadPartRequest",
+        "UploadPartResponse",
+    ),
+    (
         "/tinkle.v1.HelpService/AcceptTermsOfService",
         "AcceptTermsOfServiceRequest",
         "AcceptTermsOfServiceResponse",
@@ -672,6 +706,11 @@ pub const ALL_METHODS: &[(&str, &str, &str)] = &[
         "GetMessageReactionsListResponse",
     ),
     (
+        "/tinkle.v1.MessagesService/GetMessages",
+        "GetMessagesRequest",
+        "GetMessagesResponse",
+    ),
+    (
         "/tinkle.v1.MessagesService/GetMessagesReactions",
         "GetMessagesReactionsRequest",
         "GetMessagesReactionsResponse",
@@ -685,6 +724,11 @@ pub const ALL_METHODS: &[(&str, &str, &str)] = &[
         "/tinkle.v1.MessagesService/GetPollVotes",
         "GetPollVotesRequest",
         "GetPollVotesResponse",
+    ),
+    (
+        "/tinkle.v1.MessagesService/GetTargetChanges",
+        "GetTargetChangesRequest",
+        "GetTargetChangesResponse",
     ),
     (
         "/tinkle.v1.MessagesService/GetThreadMessage",
@@ -763,8 +807,8 @@ pub const ALL_METHODS: &[(&str, &str, &str)] = &[
     ),
     (
         "/tinkle.v1.MessagesService/SetHistoryTTL",
-        "SetHistoryTTLRequest",
-        "SetHistoryTTLResponse",
+        "SetHistoryTtlRequest",
+        "SetHistoryTtlResponse",
     ),
     (
         "/tinkle.v1.MessagesService/SetTyping",
@@ -847,19 +891,9 @@ pub const ALL_METHODS: &[(&str, &str, &str)] = &[
         "UninstallPackResponse",
     ),
     (
-        "/tinkle.v1.UpdatesService/FollowUpdates",
-        "FollowUpdatesRequest",
-        "FollowUpdatesResponse",
-    ),
-    (
         "/tinkle.v1.UpdatesService/ObserveConnectivity",
         "ObserveConnectivityRequest",
         "ObserveConnectivityResponse",
-    ),
-    (
-        "/tinkle.v1.UpdatesService/ReadUpdates",
-        "ReadUpdatesRequest",
-        "ReadUpdatesResponse",
     ),
     (
         "/tinkle.v1.UsersService/GetUserComplete",
@@ -1113,6 +1147,24 @@ pub mod contactsservice {
     pub const UNBLOCK: &str = "/tinkle.v1.ContactsService/Unblock";
 }
 
+/// `FilesService` methods.
+pub mod filesservice {
+    /// `/tinkle.v1.FilesService/AbortUpload`: `AbortUploadRequest` → `AbortUploadResponse`.
+    pub const ABORT_UPLOAD: &str = "/tinkle.v1.FilesService/AbortUpload";
+    /// `/tinkle.v1.FilesService/BeginUpload`: `BeginUploadRequest` → `BeginUploadResponse`.
+    pub const BEGIN_UPLOAD: &str = "/tinkle.v1.FilesService/BeginUpload";
+    /// `/tinkle.v1.FilesService/CompleteUpload`: `CompleteUploadRequest` → `CompleteUploadResponse`.
+    pub const COMPLETE_UPLOAD: &str = "/tinkle.v1.FilesService/CompleteUpload";
+    /// `/tinkle.v1.FilesService/DownloadPart`: `DownloadPartRequest` → `DownloadPartResponse`.
+    pub const DOWNLOAD_PART: &str = "/tinkle.v1.FilesService/DownloadPart";
+    /// `/tinkle.v1.FilesService/GetFileInfo`: `GetFileInfoRequest` → `GetFileInfoResponse`.
+    pub const GET_FILE_INFO: &str = "/tinkle.v1.FilesService/GetFileInfo";
+    /// `/tinkle.v1.FilesService/GetUploadStatus`: `GetUploadStatusRequest` → `GetUploadStatusResponse`.
+    pub const GET_UPLOAD_STATUS: &str = "/tinkle.v1.FilesService/GetUploadStatus";
+    /// `/tinkle.v1.FilesService/UploadPart`: `UploadPartRequest` → `UploadPartResponse`.
+    pub const UPLOAD_PART: &str = "/tinkle.v1.FilesService/UploadPart";
+}
+
 /// `HelpService` methods.
 pub mod helpservice {
     /// `/tinkle.v1.HelpService/AcceptTermsOfService`: `AcceptTermsOfServiceRequest` → `AcceptTermsOfServiceResponse`.
@@ -1175,12 +1227,16 @@ pub mod messagesservice {
     /// `/tinkle.v1.MessagesService/GetMessageReactionsList`: `GetMessageReactionsListRequest` → `GetMessageReactionsListResponse`.
     pub const GET_MESSAGE_REACTIONS_LIST: &str =
         "/tinkle.v1.MessagesService/GetMessageReactionsList";
+    /// `/tinkle.v1.MessagesService/GetMessages`: `GetMessagesRequest` → `GetMessagesResponse`.
+    pub const GET_MESSAGES: &str = "/tinkle.v1.MessagesService/GetMessages";
     /// `/tinkle.v1.MessagesService/GetMessagesReactions`: `GetMessagesReactionsRequest` → `GetMessagesReactionsResponse`.
     pub const GET_MESSAGES_REACTIONS: &str = "/tinkle.v1.MessagesService/GetMessagesReactions";
     /// `/tinkle.v1.MessagesService/GetPollResults`: `GetPollResultsRequest` → `GetPollResultsResponse`.
     pub const GET_POLL_RESULTS: &str = "/tinkle.v1.MessagesService/GetPollResults";
     /// `/tinkle.v1.MessagesService/GetPollVotes`: `GetPollVotesRequest` → `GetPollVotesResponse`.
     pub const GET_POLL_VOTES: &str = "/tinkle.v1.MessagesService/GetPollVotes";
+    /// `/tinkle.v1.MessagesService/GetTargetChanges`: `GetTargetChangesRequest` → `GetTargetChangesResponse`.
+    pub const GET_TARGET_CHANGES: &str = "/tinkle.v1.MessagesService/GetTargetChanges";
     /// `/tinkle.v1.MessagesService/GetThreadMessage`: `GetThreadMessageRequest` → `GetThreadMessageResponse`.
     pub const GET_THREAD_MESSAGE: &str = "/tinkle.v1.MessagesService/GetThreadMessage";
     /// `/tinkle.v1.MessagesService/GetUnreadMentions`: `GetUnreadMentionsRequest` → `GetUnreadMentionsResponse`.
@@ -1211,7 +1267,7 @@ pub mod messagesservice {
     pub const SEND_START_BOT: &str = "/tinkle.v1.MessagesService/SendStartBot";
     /// `/tinkle.v1.MessagesService/SendVote`: `SendVoteRequest` → `SendVoteResponse`.
     pub const SEND_VOTE: &str = "/tinkle.v1.MessagesService/SendVote";
-    /// `/tinkle.v1.MessagesService/SetHistoryTTL`: `SetHistoryTTLRequest` → `SetHistoryTTLResponse`.
+    /// `/tinkle.v1.MessagesService/SetHistoryTTL`: `SetHistoryTtlRequest` → `SetHistoryTtlResponse`.
     pub const SET_HISTORY_TTL: &str = "/tinkle.v1.MessagesService/SetHistoryTTL";
     /// `/tinkle.v1.MessagesService/SetTyping`: `SetTypingRequest` → `SetTypingResponse`.
     pub const SET_TYPING: &str = "/tinkle.v1.MessagesService/SetTyping";
@@ -1253,12 +1309,8 @@ pub mod stickersservice {
 
 /// `UpdatesService` methods.
 pub mod updatesservice {
-    /// `/tinkle.v1.UpdatesService/FollowUpdates`: `FollowUpdatesRequest` → `FollowUpdatesResponse`. // server-streaming: delivered via Syntra notifications
-    pub const FOLLOW_UPDATES: &str = "/tinkle.v1.UpdatesService/FollowUpdates";
     /// `/tinkle.v1.UpdatesService/ObserveConnectivity`: `ObserveConnectivityRequest` → `ObserveConnectivityResponse`. // server-streaming: delivered via Syntra notifications
     pub const OBSERVE_CONNECTIVITY: &str = "/tinkle.v1.UpdatesService/ObserveConnectivity";
-    /// `/tinkle.v1.UpdatesService/ReadUpdates`: `ReadUpdatesRequest` → `ReadUpdatesResponse`.
-    pub const READ_UPDATES: &str = "/tinkle.v1.UpdatesService/ReadUpdates";
 }
 
 /// `UsersService` methods.

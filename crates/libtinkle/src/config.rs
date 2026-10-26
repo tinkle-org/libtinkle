@@ -47,21 +47,6 @@ impl std::fmt::Debug for Credential {
     }
 }
 
-/// Recovery transport for bounded `ReadUpdates` replay pages.
-/// Recovery RPC results and live notifications enter the same validation,
-/// deduplication, and application pipeline; transport receipt never
-/// advances the applied checkpoint either way.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RecoveryTransport {
-    /// `ReadUpdates` as a Syntra RPC over the existing WebSocket (default).
-    /// No second transport to configure; works on native and web.
-    #[default]
-    Syntra,
-    /// `ReadUpdates` over a dedicated gRPC channel. Opt-in for very large
-    /// recoveries; requires `grpc_endpoint`.
-    Grpc,
-}
-
 /// Reconnect policy: bounded exponential backoff with jitter.
 #[derive(Debug, Clone)]
 pub struct ReconnectPolicy {
@@ -102,12 +87,10 @@ impl ReconnectPolicy {
 /// High-level client configuration.
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
-    /// Recovery transport for `ReadUpdates` replay pages. Defaults to
-    /// [`RecoveryTransport::Syntra`] (same WebSocket as live delivery);
-    /// set to `Grpc` to use a dedicated channel for very large recoveries.
-    pub recovery: RecoveryTransport,
-    /// gRPC base endpoint for `ReadUpdates` catch-up, e.g. `https://gateway.example.com`.
-    /// Only used when `recovery` is [`RecoveryTransport::Grpc`].
+    /// gRPC base endpoint for direct-unary reconciliation RPCs
+    /// (`GetTargetChanges` / `GetMessages`), e.g. `https://gateway.example.com`.
+    /// Syntra is primary; when set (native only), retryable Syntra failures
+    /// fall back to this endpoint automatically.
     /// Prefer `with_grpc_endpoint` over direct assignment: the builder
     /// validates scheme/`https` up front, while a directly assigned
     /// value is only checked when catch-up runs.
@@ -128,7 +111,6 @@ pub struct ClientConfig {
 impl ClientConfig {
     pub fn new(url: impl Into<String>) -> Self {
         Self {
-            recovery: RecoveryTransport::default(),
             grpc_endpoint: None,
             url: url.into(),
             allow_insecure: false,
@@ -141,7 +123,7 @@ impl ClientConfig {
     /// Validate a gRPC catch-up endpoint without storing it. Shared by
     /// the builder and fallible constructors so misconfig fails fast
     /// with `GrpcConfig` (FailedPrecondition) instead of surfacing as a
-    /// retried `Grpc` (Unavailable) at catch-up time.
+    /// retried `Grpc` (Unavailable) at reconcile time.
     pub fn validate_grpc_endpoint(endpoint: &str, allow_insecure: bool) -> Result<(), TinkleError> {
         if endpoint.trim().is_empty() {
             return Err(TinkleError::GrpcConfig(
@@ -163,17 +145,13 @@ impl ClientConfig {
         Ok(())
     }
 
-    /// gRPC endpoint for catch-up (`ReadUpdates` over actual gRPC).
-    /// Only used when `recovery` is [`RecoveryTransport::Grpc`].
+    /// gRPC endpoint for direct-unary reconciliation RPCs.
     ///
     /// Fails fast: blank endpoints, missing schemes, and non-`https`
     /// endpoints without `allow_insecure` return `GrpcConfig`
-    /// (FailedPrecondition) here instead of failing at catch-up time.
+    /// (FailedPrecondition) here instead of failing at reconcile time.
     /// Call after `insecure_dev` when a dev `http://` endpoint is intended.
-    pub fn with_grpc_endpoint(
-        mut self,
-        endpoint: impl Into<String>,
-    ) -> Result<Self, TinkleError> {
+    pub fn with_grpc_endpoint(mut self, endpoint: impl Into<String>) -> Result<Self, TinkleError> {
         let endpoint = endpoint.into();
         Self::validate_grpc_endpoint(&endpoint, self.allow_insecure)?;
         self.grpc_endpoint = Some(endpoint);

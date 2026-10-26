@@ -18,6 +18,9 @@ pub struct FfiMessage {
     pub from_id: i64,
     pub body: String,
     pub message_proto: Vec<u8>,
+    /// The message's own `accept_seq` token (`None` for legacy rows accepted
+    /// before the token was introduced; absent tokens never vote on dedup).
+    pub accept_seq: Option<i64>,
 }
 
 /// FFI-safe cached dialog.
@@ -46,6 +49,7 @@ impl From<tinkle_storage::MessageRow> for FfiMessage {
             from_id: r.from_id,
             body: r.body,
             message_proto: r.proto,
+            accept_seq: r.accept_seq,
         }
     }
 }
@@ -123,14 +127,17 @@ impl SqliteStorage {
         Ok(Arc::new(Self { inner }))
     }
 
-    pub async fn load_checkpoint(
+    /// Durable journal cursor for one conversation: the last applied
+    /// `GetTargetChanges.last_accept_seq` (`None` when nothing applied yet).
+    /// `target_key` is `target:user:<id>` / `target:room:<id>`.
+    pub async fn load_journal(
         &self,
         principal: String,
-        stream: String,
-    ) -> Result<Option<u64>, FfiError> {
+        target_key: String,
+    ) -> Result<Option<i64>, FfiError> {
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
-            inner.load_checkpoint(&principal, &stream).map_err(map_err)
+            inner.load_journal(&principal, &target_key).map_err(map_err)
         })
         .await
         .map_err(|e| FfiError::Storage(format!("storage task failed: {e}")))?
@@ -174,6 +181,10 @@ impl SqliteStorage {
     /// emits user rows, so without an explicit save (e.g. from a
     /// UsersService refresh) the getter stays `None`. Hosts should call this
     /// after fetching user objects via RPC.
+    ///
+    /// Validates by decoding the protobuf and checking the embedded id
+    /// matches `user_id`: a mismatched or missing id is a codec error,
+    /// never a silent cache poison.
     pub async fn save_user_proto(
         &self,
         principal: String,
@@ -185,6 +196,28 @@ impl SqliteStorage {
         }
         if user_proto.is_empty() || user_proto.len() > 1_000_000 {
             return Err(FfiError::Codec("user_proto bad size".into()));
+        }
+        {
+            use prost::Message as _;
+            let decoded = tinkle_schema::proto::User::decode(&*user_proto)
+                .map_err(|e| FfiError::Codec(format!("user_proto decode failed: {e}")))?;
+            let embedded = match decoded.user_type.as_ref() {
+                Some(tinkle_schema::proto::user::UserType::Data(d)) => d.id,
+                Some(tinkle_schema::proto::user::UserType::Empty(e)) => e.id,
+                None => {
+                    return Err(FfiError::Codec("user_proto missing user id".into()));
+                }
+            };
+            if embedded <= 0 {
+                return Err(FfiError::Codec(
+                    "user_proto embedded id must be positive".into(),
+                ));
+            }
+            if embedded != user_id {
+                return Err(FfiError::Codec(format!(
+                    "user_proto id mismatch: param {user_id} != embedded {embedded}"
+                )));
+            }
         }
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
@@ -203,6 +236,10 @@ impl SqliteStorage {
     }
 
     /// Write plumbing for [`Self::get_chat_proto`]: see [`Self::save_user_proto`].
+    ///
+    /// Validates by decoding the protobuf and checking the embedded
+    /// `chat_id` matches: mismatches are codec errors, never silent
+    /// cache poison.
     pub async fn save_chat_proto(
         &self,
         principal: String,
@@ -214,6 +251,22 @@ impl SqliteStorage {
         }
         if chat_proto.is_empty() || chat_proto.len() > 1_000_000 {
             return Err(FfiError::Codec("chat_proto bad size".into()));
+        }
+        {
+            use prost::Message as _;
+            let decoded = tinkle_schema::proto::Chat::decode(&*chat_proto)
+                .map_err(|e| FfiError::Codec(format!("chat_proto decode failed: {e}")))?;
+            if decoded.chat_id <= 0 {
+                return Err(FfiError::Codec(
+                    "chat_proto embedded id must be positive".into(),
+                ));
+            }
+            if decoded.chat_id != chat_id {
+                return Err(FfiError::Codec(format!(
+                    "chat_proto id mismatch: param {chat_id} != embedded {}",
+                    decoded.chat_id
+                )));
+            }
         }
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
@@ -263,17 +316,17 @@ impl SqliteStorage {
         .map_err(|e| FfiError::Storage(format!("storage task failed: {e}")))?
     }
 
-    /// Delete all rows for `principal`, including checkpoints.
+    /// Delete all rows for `principal`, including journal cursors.
     ///
-    /// Coordination required: [`TinkleClient`] holds in-memory cursors. If
-    /// the client is still running, the next auto-commit fails the SQLite
-    /// scope fence (`ScopeMismatch`) because memory expects the deleted
-    /// checkpoint, breaking sync until recovery. Callers must
+    /// Coordination required: [`TinkleClient`] holds in-memory accept
+    /// positions. If the client is still running, the next journal commit
+    /// fails the SQLite scope fence because memory expects the deleted
+    /// cursor, breaking sync until reconciliation. Callers must
     /// `shutdown()`/`suspend()` the client first and only reconnect (fresh
-    /// `subscribe`/catch-up from cursor 0) after clearing. A full fix would
-    /// reset the live `SyncManager` cursors atomically with this delete;
-    /// that cross-object coordination is out of scope, so this doc is the
-    /// guard.
+    /// `subscribe`, reconciling from position 0) after clearing. A full fix
+    /// would reset the live reconcile positions atomically with this
+    /// delete; that cross-object coordination is out of scope, so this doc
+    /// is the guard.
     pub async fn clear_principal(&self, principal: String) -> Result<(), FfiError> {
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || inner.clear_principal(&principal).map_err(map_err))
@@ -284,38 +337,40 @@ impl SqliteStorage {
 
 #[async_trait::async_trait]
 impl FfiCursorStore for SqliteStorage {
-    async fn load(
+    async fn load_journal(
         &self,
         principal: String,
-        stream: String,
-    ) -> Result<Option<u64>, crate::FfiError> {
-        self.load_checkpoint(principal, stream).await
+        target_key: String,
+    ) -> Result<Option<i64>, crate::FfiError> {
+        self.load_journal(principal, target_key).await
     }
 
-    async fn save(
+    async fn save_journal(
         &self,
         principal: String,
-        stream: String,
-        cursor: u64,
+        target_key: String,
+        accept_seq: i64,
     ) -> Result<(), crate::FfiError> {
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
             inner
-                .save_checkpoint(&principal, &stream, cursor)
+                .save_journal(&principal, &target_key, accept_seq)
                 .map_err(map_err)
         })
         .await
         .map_err(|e| FfiError::Storage(format!("storage task failed: {e}")))?
     }
 
-    async fn remove_stream(
+    async fn remove_target(
         &self,
         principal: String,
-        stream: String,
+        target_key: String,
     ) -> Result<(), crate::FfiError> {
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
-            inner.remove_stream(&principal, &stream).map_err(map_err)
+            inner
+                .remove_target(&principal, &target_key)
+                .map_err(map_err)
         })
         .await
         .map_err(|e| FfiError::Storage(format!("storage task failed: {e}")))?

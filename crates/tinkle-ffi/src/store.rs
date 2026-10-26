@@ -1,37 +1,47 @@
-//! Cursor-store bridge.
+//! Journal cursor-store bridge.
 //!
 //! The durable store is implemented on the foreign side (Swift/Kotlin) via
 //! the [`FfiCursorStore`] callback interface, or with the in-memory
 //! [`InMemoryFfiStore`] in tests. [`FfiStoreAdapter`] adapts either into
 //! the [`libtinkle::CursorStore`] expected by [`libtinkle::Client`].
+//!
+//! Vocabulary is per-target journals: `target_key` is
+//! `target:user:<id>` / `target:room:<id>` and `accept_seq` is the last
+//! applied `GetTargetChanges.last_accept_seq` (0 is the initial position).
 
 use std::sync::Arc;
 
 use libtinkle::CursorStore as _;
 
-/// Foreign-implemented durable cursor store.
+/// Foreign-implemented durable journal store.
 ///
-/// All params are owned (`String`/`u64`); references are unsupported in
+/// All params are owned (`String`/`i64`); references are unsupported in
 /// foreign trait methods. Every method returns `Result` so foreign
 /// failures convert into [`crate::FfiError`] instead of panicking.
 // TODO(runtime-acceptance-storage): GRDB/Room acceptance — principal
 // isolation between users, no credential persistence in the cursor store,
-// crash recovery replays from last persisted cursor without gaps.
+// crash recovery resumes reconciliation from the last persisted accept_seq.
 #[uniffi::export(rust, foreign)]
 #[async_trait::async_trait]
 pub trait FfiCursorStore: Send + Sync {
-    async fn load(&self, principal: String, stream: String)
-        -> Result<Option<u64>, crate::FfiError>;
-
-    async fn save(
+    async fn load_journal(
         &self,
         principal: String,
-        stream: String,
-        cursor: u64,
+        target_key: String,
+    ) -> Result<Option<i64>, crate::FfiError>;
+
+    async fn save_journal(
+        &self,
+        principal: String,
+        target_key: String,
+        accept_seq: i64,
     ) -> Result<(), crate::FfiError>;
 
-    async fn remove_stream(&self, principal: String, stream: String)
-        -> Result<(), crate::FfiError>;
+    async fn remove_target(
+        &self,
+        principal: String,
+        target_key: String,
+    ) -> Result<(), crate::FfiError>;
 
     async fn clear_principal(&self, principal: String) -> Result<(), crate::FfiError>;
 }
@@ -41,36 +51,36 @@ pub(crate) struct FfiStoreAdapter(pub Arc<dyn FfiCursorStore>);
 
 #[async_trait::async_trait]
 impl libtinkle::CursorStore for FfiStoreAdapter {
-    async fn load(
+    async fn load_journal(
         &self,
         principal: &str,
-        stream: &str,
-    ) -> Result<Option<u64>, libtinkle::TinkleError> {
+        target_key: &str,
+    ) -> Result<Option<i64>, libtinkle::TinkleError> {
         self.0
-            .load(principal.to_owned(), stream.to_owned())
+            .load_journal(principal.to_owned(), target_key.to_owned())
             .await
             .map_err(libtinkle::TinkleError::from)
     }
 
-    async fn save(
+    async fn save_journal(
         &self,
         principal: &str,
-        stream: &str,
-        cursor: u64,
+        target_key: &str,
+        accept_seq: i64,
     ) -> Result<(), libtinkle::TinkleError> {
         self.0
-            .save(principal.to_owned(), stream.to_owned(), cursor)
+            .save_journal(principal.to_owned(), target_key.to_owned(), accept_seq)
             .await
             .map_err(libtinkle::TinkleError::from)
     }
 
-    async fn remove_stream(
+    async fn remove_target(
         &self,
         principal: &str,
-        stream: &str,
+        target_key: &str,
     ) -> Result<(), libtinkle::TinkleError> {
         self.0
-            .remove_stream(principal.to_owned(), stream.to_owned())
+            .remove_target(principal.to_owned(), target_key.to_owned())
             .await
             .map_err(libtinkle::TinkleError::from)
     }
@@ -103,36 +113,36 @@ impl InMemoryFfiStore {
 
 #[async_trait::async_trait]
 impl FfiCursorStore for InMemoryFfiStore {
-    async fn load(
+    async fn load_journal(
         &self,
         principal: String,
-        stream: String,
-    ) -> Result<Option<u64>, crate::FfiError> {
+        target_key: String,
+    ) -> Result<Option<i64>, crate::FfiError> {
         self.inner
-            .load(&principal, &stream)
+            .load_journal(&principal, &target_key)
             .await
             .map_err(crate::FfiError::from)
     }
 
-    async fn save(
+    async fn save_journal(
         &self,
         principal: String,
-        stream: String,
-        cursor: u64,
+        target_key: String,
+        accept_seq: i64,
     ) -> Result<(), crate::FfiError> {
         self.inner
-            .save(&principal, &stream, cursor)
+            .save_journal(&principal, &target_key, accept_seq)
             .await
             .map_err(crate::FfiError::from)
     }
 
-    async fn remove_stream(
+    async fn remove_target(
         &self,
         principal: String,
-        stream: String,
+        target_key: String,
     ) -> Result<(), crate::FfiError> {
         self.inner
-            .remove_stream(&principal, &stream)
+            .remove_target(&principal, &target_key)
             .await
             .map_err(crate::FfiError::from)
     }

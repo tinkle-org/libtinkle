@@ -96,8 +96,9 @@ the specifications in `../syntra/specifications/`:
     bounded queue, pre-ACTIVE ignored with diagnostic.
 11. Reconnection — fresh handshake + fresh ids, `UNAVAILABLE` with unknown
     outcome, bounded backoff, explicit resubscribe.
-12. Tinkle event decoding — `tinkle-schema::realtime` (single-decoder
-    `RealtimeNotification`, complete-batch validation, cursor tracking).
+12. Tinkle event decoding — `tinkle-schema::sync` single-decoder `Update`
+    validation (envelope span shape, stream/cursor agreement), span-aware
+    dedup, gap/stale/rebuild rules, floor/head checks.
 
 The generic Syntra implementation is independent of Tinkle types wherever
 practical; `syntra-core` never imports `tinkle-schema`. Syntra internals
@@ -107,15 +108,39 @@ versions never mix at the type level.
 
 ## Public client API (Phase 3)
 
-`libtinkle::Client` provides `connect`, `call_raw`, typed facades
-(`messages()`, `auth()`, `realtime()`), and `subscribe`/`next_event`.
-Method bindings (`tinkle-schema::methods::ALL_METHODS`, 169 entries) are
-verified against the BSR service definitions backing the prost crates
-— no manual duplication of all signatures. Representative
-typed helpers (`SendMessage`, `GetHistory`, `GetDialogs`, `SubscribeBatched`)
-demonstrate the encode → `RpcRequest` → `request_id` → send → await
-`RpcResult` → decode → typed-error path; all other methods use the same
-generic `call_typed` path.
+`libtinkle::Client` provides supervised `start` (connect + subscribe +
+supervisor owning recovery/reconnect) plus manual `connect` / `subscribe` /
+`reconnect` primitives, `call_raw`, typed facades (`messages()`, `auth()`,
+`updates()`), demand-driven `next_event`, snapshot
+`load_history` / `load_dialogs`, reconciliation RPCs
+(`get_messages` / `get_target_changes`), and `target_cursor` /
+`target_status` / `tracked_targets` queries. Method bindings
+(`tinkle-schema::methods::ALL_METHODS`) are verified against the BSR
+service definitions backing the prost crates — no manual duplication of
+all signatures. Representative typed helpers (`SendMessage`, `GetHistory`,
+`GetDialogs`, `GetMessages`, `GetTargetChanges`) demonstrate the encode →
+`RpcRequest` → `request_id` → send → await `RpcResult` → decode →
+typed-error path; all other methods use the same generic `call_typed` path.
+
+Demand-driven contract: consume `next_event()`; refresh on
+`ConversationChanged` / `MessagesChanged` (journal pages are applied and
+checkpointed atomically by the coordinator — receipt alone needs no host
+action). Poll `target_cursor` for authoritative UI progress and
+`target_status` (`Idle`/`Reconciling`/`Failed`) for demand state instead of
+inferring it from events. History/dialog snapshots live outside the journal
+and never move accept positions. Recovery reconciles per-target
+`GetTargetChanges` journals over Syntra by default (gRPC opt-in), with
+authoritative `more_available`, per-target `ReconcileFailed` parking, and
+`reconcile_now()` retry. Opaque notification hints and reconnects drive
+reconciliation; there is no replay cursor and no rebuild path.
+
+UniFFI (`tinkle-ffi::TinkleClient`) and browser (`libtinkle-web::
+TinkleWebClient`) expose the same flow: `start`/`subscribe`, `next_event`,
+`get_messages`/`get_target_changes`, `load_history`/`load_dialogs` (with
+cache/network policy), `target_cursor`/`target_status`/`tracked_targets`,
+`reconcile_now`, `suspend`/`resume`, `stop`/`shutdown`.
+Structured errors preserve codes across the boundary (`Auth`, `Retryable`
+— never collapsed to a network string).
 
 ## Concurrency (Phase 4)
 
@@ -129,14 +154,18 @@ sends) with fresh transport correlation and bounded backoff.
 
 ## Realtime (Phase 5)
 
-`SubscribeBatched`/`UnsubscribeBatched` dispatcher identifiers (not gRPC),
-`RealtimeNotification` single-decoder validation, complete-batch grammar
-(1–4 ordered events), `(stream, cursor)` whole-batch dedup, gap/stale
-handling (stop, retain checkpoint, never skip), reset signals (head
-diagnostic only), reconnect re-authentication + explicit resubscribe, and
-durable cursor persistence through the injected `CursorStore` trait
-(`InMemoryCursorStore` default; SQLite/Keychain/DataStore in production).
-Persistent user state lives outside the generic Syntra core.
+`ObserveConnectivity` over Syntra (not gRPC),
+`ConnectivityChanged` single-decoder validation, per-conversation
+`accept_seq` dedup (absent ⇒ order by date only), journal paging with
+`more_available` completion, `GetMessages` hydration (chunked ≤100,
+`edit_date` freshness), opaque-hint-driven reconciliation (sweep tracked
+targets, single-flight per target — never skip), per-target failure
+parking with retry, reconnect re-authentication + explicit resubscribe,
+supervisor-owned recovery with per-target demand + backoff, and durable
+accept-position persistence through the injected `CursorStore` trait
+(`InMemoryCursorStore` default; SQLite/Keychain/DataStore in production,
+IndexedDB stub on web). Persistent user state lives outside the generic
+Syntra core.
 
 ## Platforms (Phase 6)
 
@@ -165,12 +194,16 @@ application layer before entering Syntra.
 
 ## Mobile lifecycle (Phase 8)
 
-See `docs/mobile-lifecycle.md`. Foreground `connect`, background
-`suspend` (graceful close, keep cursors), `reconnect`/`resume` with
-backoff + resubscribe, `rotate_credential` on token expiry, durable store
-survives process termination/app restart. No permanent background
-WebSocket is assumed; push notifications trigger `sync_after_wake`
-(reconnect + resubscribe from persisted cursors).
+See `docs/mobile-lifecycle.md`. Supervised `start(rooms, watch)` (or
+foreground `connect` + `subscribe` on the manual path), background
+`suspend` (graceful close, keep cursors; supervisor blocked until
+`resume`), `reconnect`/`resume` with backoff + resubscribe,
+`rotate_credential` on token expiry, durable store survives process
+termination/app restart. No permanent background WebSocket is assumed;
+push notifications trigger `sync_after_wake` (reconnect + resubscribe
+from persisted accept positions). Hosts drive `next_event` and
+poll `target_cursor`/`target_status`; `read_state_pending` on dialogs
+means refresh via `load_dialogs(HydrateCache)`.
 
 ## Testing (Phase 9)
 
@@ -179,12 +212,14 @@ cargo test --workspace
 cargo test -p libtinkle --test client_integration -- --nocapture
 ```
 
-- `tinkle-schema/tests/realtime_conformance.rs` — batch grammar, UUID,
-  position order, cursor/floor/reset vectors.
+- `tinkle-schema/tests/sync_conformance.rs` — journal page grammar,
+  accept_seq decisions, fetch chunking, body freshness, target keys,
+  connectivity-only method inventory.
 - `libtinkle/tests/client_integration.rs` — live in-process mock gateway:
-  handshake/auth, concurrent out-of-order RPCs, cancellation, notification
-  interleaving, reconnect + cursor recovery, errors, malformed-frame
-  tolerance. Syntra protocol conformance lives upstream in the published
+  handshake/auth, concurrent out-of-order RPCs, cancellation, opaque-hint
+  reconciliation, journal paging + `more_available` tri-state, history
+  healing of journal skips, reconnect + journal recovery, errors,
+  malformed-frame tolerance. Syntra protocol conformance lives upstream in the published
   crates; these integration tests cover only the Syntra paths exercised by
   libtinkle, not the complete upstream suite.
 - Platform compilation: native `cargo check --workspace`; wasm via

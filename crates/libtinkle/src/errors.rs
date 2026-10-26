@@ -36,6 +36,14 @@ pub enum TinkleError {
     Subscription(String),
     #[error("cursor store: {0}")]
     CursorStore(String),
+    #[error("checkpoint failed for {target_key} at {accept_seq}: {error}")]
+    CheckpointFailed {
+        target_key: String,
+        accept_seq: i64,
+        error: String,
+    },
+    #[error("reconcile failed for {target_key}: {error}")]
+    Reconcile { target_key: String, error: String },
     #[error("reconnect exhausted after {attempts} attempts")]
     ReconnectExhausted { attempts: u32 },
 }
@@ -53,6 +61,8 @@ impl TinkleError {
             Self::NotConnected(_) => ErrorCode::Unavailable,
             Self::Subscription(_) => ErrorCode::FailedPrecondition,
             Self::CursorStore(_) => ErrorCode::Internal,
+            Self::CheckpointFailed { .. } => ErrorCode::Internal,
+            Self::Reconcile { .. } => ErrorCode::Internal,
             Self::ReconnectExhausted { .. } => ErrorCode::Unavailable,
         }
     }
@@ -66,24 +76,9 @@ impl TinkleError {
 }
 
 impl TinkleError {
-    /// True when this error is a [`SyncError::Gap`], regardless of whether
-    /// it is carried as typed [`SyncError`] or legacy `Sync(String)`.
-    /// Prefer matching `TinkleError::SyncError(SyncError::Gap { .. })`
-    /// directly; this helper exists for backward-compatible call sites.
-    pub fn is_gap(&self) -> bool {
-        match self {
-            Self::SyncError(SyncError::Gap { .. }) => true,
-            Self::Sync(msg) => {
-                let lower = msg.to_ascii_lowercase();
-                lower.contains("gap detected") || lower.contains("gap:")
-            }
-            _ => false,
-        }
-    }
-
-    /// Classify a recovery-page failure. Transport-level `Grpc` failures
+    /// Classify a reconcile-page failure. Transport-level `Grpc` failures
     /// (connect/read framing, no status) are transient by construction.
-    /// Syntra RPC failures key on their code the same way: replay reads
+    /// Syntra RPC failures key on their code the same way: journal reads
     /// are idempotent, so unknown-outcome and transient codes retry.
     /// Everything else keys on the typed status code.
     pub fn recovery_decision(&self) -> RecoveryDecision {
@@ -100,8 +95,6 @@ impl TinkleError {
                 ErrorCode::Unauthenticated | ErrorCode::PermissionDenied => RecoveryDecision::Auth,
                 _ => RecoveryDecision::Fail,
             },
-            // Replay reads are idempotent: unknown-outcome and transient
-            // transport failures retry; auth failures do not.
             Self::Syntra(e) => match e.code() {
                 ErrorCode::Unavailable
                 | ErrorCode::DeadlineExceeded
@@ -120,13 +113,14 @@ impl TinkleError {
     }
 }
 
-/// Recovery decision for a failed recovery page. Keys on typed codes;
+/// Recovery decision for a failed reconcile page. Keys on typed codes;
 /// message text never drives recovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecoveryDecision {
     /// Transient failure: back off and retry the page.
     Retry,
-    /// History expired or unbridgeable: enter rebuild, do not retry pages.
+    /// History expired or unbridgeable: drop the journal cursor and heal
+    /// via `GetHistory` instead of retrying a window that can never succeed.
     Rebuild,
     /// Authentication/authorization failure: re-authenticate, do not retry.
     Auth,
@@ -147,7 +141,6 @@ mod tests {
 
     #[test]
     fn classifier_keys_on_code_not_message() {
-        // Transient codes retry however the message reads.
         for code in [
             ErrorCode::Unavailable,
             ErrorCode::DeadlineExceeded,
@@ -163,7 +156,6 @@ mod tests {
                 "{code:?} must retry"
             );
         }
-        // An OutOfRange message mentioning timeouts still rebuilds.
         assert_eq!(
             TinkleError::GrpcStatus {
                 code: ErrorCode::OutOfRange,
@@ -172,12 +164,10 @@ mod tests {
             .recovery_decision(),
             RecoveryDecision::Rebuild
         );
-        // Transport failures without a status are transient.
         assert_eq!(
             TinkleError::Grpc("connect: refused".into()).recovery_decision(),
             RecoveryDecision::Retry
         );
-        // Auth failures never retry pages.
         for code in [ErrorCode::Unauthenticated, ErrorCode::PermissionDenied] {
             assert_eq!(
                 status(code).recovery_decision(),
@@ -185,7 +175,6 @@ mod tests {
                 "{code:?} must not retry"
             );
         }
-        // Permanent codes and local config errors fail fast.
         for code in [
             ErrorCode::InvalidArgument,
             ErrorCode::NotFound,

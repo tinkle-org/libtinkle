@@ -2,8 +2,19 @@
 //!
 //! Foreign sees named variants with message payloads (e.g. `Storage(String)`);
 //! no Syntra, prost, or schema types cross the boundary. [`FfiError`] is built
-//! from [`libtinkle::TinkleError`] via strings, preserving variant structure so
+//! from [`libtinkle::TinkleError`] via codes, preserving variant structure so
 //! foreign cursor-store failures round-trip instead of panicking.
+//!
+//! Code mapping (never branch on text foreign-side):
+//! - `Unauthenticated` / `PermissionDenied` → [`FfiError::Auth`]
+//!   (re-authenticate, never blindly retry).
+//! - Transient recovery codes (`Unavailable`, `DeadlineExceeded`,
+//!   `Aborted`, `ResourceExhausted`, `Internal`, `Unknown`, `DataLoss`)
+//!   → [`FfiError::Retryable`] (bounded retry with backoff).
+//! - Everything else keeps its legacy variant (`Network`, `Sync`, …).
+//!   There is no rebuild variant: per-target reconciliation reports
+//!   failures as `ReconcileFailed` events and `Failed` target status,
+//!   never as a terminal stream error.
 
 /// Errors surfaced to Swift/Kotlin.
 ///
@@ -31,6 +42,14 @@ pub enum FfiError {
     ReconnectExhausted,
     #[error("internal error: {0}")]
     Internal(String),
+    /// Authentication/authorization failure. Re-authenticate (or rotate the
+    /// credential); never retry the same bytes in a tight loop.
+    #[error("authentication error: {0}")]
+    Auth(String),
+    /// Transient failure: bounded retry with backoff is safe. Reconciliation
+    /// reads are idempotent; sends still require their `random_id` policy.
+    #[error("transient error, retry with backoff: {0}")]
+    Retryable(String),
 }
 
 impl From<libtinkle::TinkleError> for FfiError {
@@ -38,46 +57,60 @@ impl From<libtinkle::TinkleError> for FfiError {
         match e {
             libtinkle::TinkleError::Syntra(s) => {
                 let msg = s.to_string();
-                // TODO(runtime-acceptance-errors): Unauthenticated currently maps to
-                // Network; add FfiError::AuthExpired variant once mobile auth UX is
-                // defined, plus a 17-code matrix test covering every ErrorCode.
                 match s.code() {
                     syntra_core::ErrorCode::Cancelled => Self::Cancelled,
                     syntra_core::ErrorCode::DeadlineExceeded => Self::Timeout,
-                    syntra_core::ErrorCode::Unspecified
+                    syntra_core::ErrorCode::Unauthenticated
+                    | syntra_core::ErrorCode::PermissionDenied => Self::Auth(msg),
+                    syntra_core::ErrorCode::Unavailable
+                    | syntra_core::ErrorCode::Aborted
+                    | syntra_core::ErrorCode::ResourceExhausted
+                    | syntra_core::ErrorCode::Internal
                     | syntra_core::ErrorCode::Unknown
+                    | syntra_core::ErrorCode::DataLoss => Self::Retryable(msg),
+                    syntra_core::ErrorCode::Unspecified
                     | syntra_core::ErrorCode::InvalidArgument
                     | syntra_core::ErrorCode::NotFound
                     | syntra_core::ErrorCode::AlreadyExists
-                    | syntra_core::ErrorCode::PermissionDenied
-                    | syntra_core::ErrorCode::ResourceExhausted
                     | syntra_core::ErrorCode::FailedPrecondition
-                    | syntra_core::ErrorCode::Aborted
                     | syntra_core::ErrorCode::OutOfRange
-                    | syntra_core::ErrorCode::Unimplemented
-                    | syntra_core::ErrorCode::Internal
-                    | syntra_core::ErrorCode::Unavailable
-                    | syntra_core::ErrorCode::DataLoss
-                    | syntra_core::ErrorCode::Unauthenticated => Self::Network(msg),
+                    | syntra_core::ErrorCode::Unimplemented => Self::Network(msg),
                 }
             }
             libtinkle::TinkleError::NotConnected(_) => Self::NotConnected,
             libtinkle::TinkleError::ReconnectExhausted { .. } => Self::ReconnectExhausted,
             libtinkle::TinkleError::Sync(msg) => Self::Sync(msg),
             libtinkle::TinkleError::SyncError(e) => Self::Sync(e.to_string()),
-            libtinkle::TinkleError::Grpc(msg) => Self::Network(msg),
-            // Typed gRPC statuses keep their code in the core error; over
-            // FFI they surface as network failures with the status message.
-            libtinkle::TinkleError::GrpcStatus { message, .. } => Self::Network(message),
-            // Local setup errors (bad endpoint, malformed credential) are
-            // permanent and never retryable: surface as internal config
-            // errors, not network failures.
-            libtinkle::TinkleError::GrpcConfig(msg)
-            | libtinkle::TinkleError::GrpcAuth(msg) => Self::Internal(msg),
+            // Transport-level gRPC failures without a status are transient
+            // by construction (connect/read framing, no status code).
+            libtinkle::TinkleError::Grpc(msg) => Self::Retryable(msg),
+            libtinkle::TinkleError::GrpcStatus { code, message } => match code {
+                syntra_core::ErrorCode::Unauthenticated
+                | syntra_core::ErrorCode::PermissionDenied => Self::Auth(message),
+                syntra_core::ErrorCode::Unavailable
+                | syntra_core::ErrorCode::DeadlineExceeded
+                | syntra_core::ErrorCode::Aborted
+                | syntra_core::ErrorCode::ResourceExhausted
+                | syntra_core::ErrorCode::Internal
+                | syntra_core::ErrorCode::Unknown
+                | syntra_core::ErrorCode::DataLoss => Self::Retryable(message),
+                _ => Self::Network(message),
+            },
+            // Malformed locally-supplied credentials are auth-domain, never
+            // retryable: re-authenticate, don't back off.
+            libtinkle::TinkleError::GrpcAuth(msg) => Self::Auth(msg),
+            // Local setup errors (bad endpoint) are permanent and never
+            // retryable: surface as internal config errors, not network.
+            libtinkle::TinkleError::GrpcConfig(msg) => Self::Internal(msg),
             libtinkle::TinkleError::Codec(msg) => Self::Codec(msg),
             libtinkle::TinkleError::CursorStore(msg) => Self::Storage(msg),
             // Subscription setup failures are sync-domain failures.
             libtinkle::TinkleError::Subscription(msg) => Self::Sync(msg),
+            // Per-target journal failures surface structurally as
+            // `ReconcileFailed` events + `Failed` target status; as returned
+            // errors they stay sync-domain with full context preserved.
+            libtinkle::TinkleError::CheckpointFailed { .. } => Self::Sync(e.to_string()),
+            libtinkle::TinkleError::Reconcile { .. } => Self::Sync(e.to_string()),
         }
     }
 }

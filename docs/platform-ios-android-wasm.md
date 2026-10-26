@@ -27,9 +27,16 @@ logic. Syntra comes from crates.io (`syntra-core`/`syntra-runtime`/
 
 ## iOS (Swift)
 
-- Expose `Client` via UniFFI (`uniffi-rs`): `connect`, `sendMessage`,
-  `getHistory`, `subscribe`, `nextEvent` (callback/stream), `suspend`,
-  `resume`, `close`. Async via `uniffi` async + Swift `async/await`.
+- Expose `Client` via UniFFI (`tinkle-ffi::TinkleClient`): `start`,
+  `connect`, `subscribe`, `sendMessage` (with `targetKind`/`targetId`),
+  `loadHistory`/`loadDialogs` (with `FfiLoadPolicy`), `nextEvent`,
+  `getMessages`/`getTargetChanges`, `reconcileNow`, `targetCursor`/
+  `targetStatus`/`trackedTargets`, `suspend`/`resume`/`isSuspended`,
+  `isConnected`/`pendingLen`, `stop`/`shutdown`, `setPrincipalUserId`
+  (throwing). Structured errors preserve codes (`Auth`, `Retryable`).
+  Async via `uniffi` async + Swift `async/await`. Targets use `Target`
+  naming (`targetKind` `"user"`/`"room"`/`"chat"` + `targetId`); the
+  numeric `offsetPeerId` dialog vocabulary is unchanged.
 - Runtime: embed `tokio` current-thread inside the UniFFI scaffolding
   (one runtime per `Client`, driven by Swift's executor; never block the
   main thread). Cancellation: direct Rust `libtinkle` callers use
@@ -43,15 +50,18 @@ logic. Syntra comes from crates.io (`syntra-core`/`syntra-runtime`/
 - Storage: implement `CursorStore` over Core Data/SQLite (GRDB) or
   Keychain-backed SQLite; persist atomically with message indexes.
 - Push: APNs (including VoIP for calls) wakes the app; call
-  `sync_after_wake` (reconnect + resubscribe from persisted cursors).
-  Do not hold a background WebSocket; iOS suspends it.
+  `sync_after_wake` (reconnect + resubscribe from tracked targets, then
+  `reconcile_now`). Do not hold a background WebSocket; iOS suspends it.
 - TLS: rustls native roots + system roots; ATS requires `wss://` (no
   `ws://` exceptions in production).
 
 ## Android (Kotlin)
 
-- Expose via UniFFI or `jni-rs`: same surface as iOS, Kotlin coroutines
-  bridge `async` calls. One `tokio` runtime per process (shared).
+- Expose via UniFFI (`tinkle-ffi::TinkleClient`): same surface as iOS
+  (`start`, `loadHistory`/`loadDialogs`, `getMessages`/`getTargetChanges`,
+  `targetStatus`, structured errors, throwing setters — see above),
+  Kotlin coroutines bridge `async` calls. One `tokio` runtime per process
+  (shared).
   Cancellation: direct Rust `libtinkle` callers use `CancelToken::cancel()`
   for best-effort `Cancel{}`. At the shipped `tinkle-ffi` UniFFI boundary
   no tokens cross FFI — dropping the coroutine's `Job`/foreign future
@@ -60,7 +70,8 @@ logic. Syntra comes from crates.io (`syntra-core`/`syntra-runtime`/
   not yet in the facade.
 - Storage: `CursorStore` over Room/SQLite + EncryptedSharedPreferences
   for the session token (never in cleartext prefs).
-- Push: FCM data messages trigger `sync_after_wake`. Respect Doze;
+- Push: FCM data messages trigger `sync_after_wake` (reconnect +
+  resubscribe from tracked targets, then `reconcile_now`). Respect Doze;
   use `WorkManager` for deferred sync, not a foreground socket.
 - TLS: rustls native roots; Network Security Config pins `wss://` only.
 
@@ -73,33 +84,50 @@ logic. Syntra comes from crates.io (`syntra-core`/`syntra-runtime`/
   authentication uses the approved Syntra handshake
   (`ClientHello.credential` → `ServerReady`), never headers or query.
 - `Origin` is defense-in-depth (server allowlist), never authentication.
-- Storage: `CursorStore` over IndexedDB (`indexed-db-futures`) or
-  `localStorage` (cursors only, never secrets). Secrets live in memory
+- Storage: `IndexedDbCursorStore` stub today (in-memory map with
+  principal/stream isolation; TODO real `indexed-db-futures` persistence),
+  or `localStorage` (cursors only, never secrets). Secrets live in memory
   (and `CryptoKey` unwrapped per session where needed).
-- Example (pseudo):
+- Surface: `TinkleWebClient` (`new`, `connect`/`start`/`subscribe`,
+  `next_event` as JSON (`conversation_changed`/`messages_changed`/
+  `conversation_removed`/`reconcile_failed`/`connectivity`/
+  `checkpoint_failed`), `get_messages`/`get_target_changes` returning
+  `Uint8Array` protobuf bytes, `reconcile_now`, `target_cursor`/
+  `target_status`/`tracked_targets`, `load_history`/`load_dialogs`
+  returning `Uint8Array` protobuf bytes, `suspend`/`resume`/`reconnect`/
+  `shutdown`) via `wasm-bindgen-futures`. Same demand-driven contract as
+  native: refresh on `conversation_changed`/`messages_changed`, retry via
+  `reconcile_now` on `reconcile_failed`; poll `target_cursor`/
+  `target_status` for authoritative progress. History/dialog targets use
+  `targetKind`/`targetId` naming.
+- Example:
 
-```rust
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen]
-pub async fn tinkle_connect(url: String, token: String) -> Result<JsValue, JsValue> {
-    let client = Client::new(ClientConfig::new(url), Credential::from_session_token(&token), Arc::new(IdbCursorStore::new()));
-    client.connect().await.map_err(|e| e.to_string().into())?;
-    Ok(JsValue::NULL)
-}
+```js
+const client = new TinkleWebClient(url, token);
+const confirmation = JSON.parse(await client.start('[{"target_kind":"room","target_id":7}]', '[]'));
+const evtJson = await client.next_event(); // JSON string or undefined
+await client.reconcile_now();
+const historyBytes = await client.load_history("room", 7n, 50, true); // Uint8Array
+const changesBytes = await client.get_target_changes("room", 7n, 0n, 100); // Uint8Array
 ```
 
-## Compilation checks (verified 2026-10-23)
+## Compilation checks
 
 ```sh
 cargo check -p tinkle-schema -p libtinkle -p tinkle-ffi   # native, passes (syntra-* build transitively)
 cargo check -p tinkle-schema --target wasm32-unknown-unknown           # pure app, passes
-cargo check -p libtinkle-web --target wasm32-unknown-unknown            # wasm-bindgen wrapper, compile-verified only (no browser runtime)
+cargo check --target wasm32-unknown-unknown -p libtinkle-web -p libtinkle  # wrapper + core, passes
 ```
 
-WASM is compile-only: `syntra-ws` compiles against the published browser
-transport (`ws_stream_wasm` via `ws_stream_wasm::WsMeta::connect`,
+WASM is compile-verified only (no browser runtime smoke claimed):
+`syntra-ws` compiles against the published browser transport
+(`ws_stream_wasm` via `ws_stream_wasm::WsMeta::connect`,
 `wasm-bindgen-futures`, `getrandom` with `js` support, tokio sync-only
 shims); the `#[cfg(target_arch = "wasm32")]` boundary already guarantees
-native builds never touch browser APIs and vice versa. The `libtinkle-web`
-wasm compilation check does not establish browser runtime acceptance;
-browser smoke tests remain separate.
+native builds never touch browser APIs and vice versa. `Client::connect`
+still drives its notification pump with `tokio::spawn`, which panics
+without an active Tokio runtime on the browser executor — the
+`spawn_local` adaptation is required before a browser connection can be
+established, so `TinkleWebClient::connect`/`start` return an
+unsupported-runtime error on `wasm32` instead of claiming success.
+Browser smoke tests remain separate.

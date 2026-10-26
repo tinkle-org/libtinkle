@@ -658,41 +658,41 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
     fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultVoid.UniffiByValue,)
 }
 internal interface UniffiCallbackInterfaceFfiCursorStoreMethod0 : com.sun.jna.Callback {
-    fun callback(`uniffiHandle`: Long,`principal`: RustBuffer.ByValue,`stream`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
+    fun callback(`uniffiHandle`: Long,`principal`: RustBuffer.ByValue,`targetKey`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
 internal interface UniffiCallbackInterfaceFfiCursorStoreMethod1 : com.sun.jna.Callback {
-    fun callback(`uniffiHandle`: Long,`principal`: RustBuffer.ByValue,`stream`: RustBuffer.ByValue,`cursor`: Long,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
+    fun callback(`uniffiHandle`: Long,`principal`: RustBuffer.ByValue,`targetKey`: RustBuffer.ByValue,`acceptSeq`: Long,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
 internal interface UniffiCallbackInterfaceFfiCursorStoreMethod2 : com.sun.jna.Callback {
-    fun callback(`uniffiHandle`: Long,`principal`: RustBuffer.ByValue,`stream`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
+    fun callback(`uniffiHandle`: Long,`principal`: RustBuffer.ByValue,`targetKey`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
 internal interface UniffiCallbackInterfaceFfiCursorStoreMethod3 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`principal`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
-@Structure.FieldOrder("uniffiFree", "uniffiClone", "load", "save", "removeStream", "clearPrincipal")
+@Structure.FieldOrder("uniffiFree", "uniffiClone", "loadJournal", "saveJournal", "removeTarget", "clearPrincipal")
 internal open class UniffiVTableCallbackInterfaceFfiCursorStore(
     @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
     @JvmField internal var `uniffiClone`: UniffiCallbackInterfaceClone? = null,
-    @JvmField internal var `load`: UniffiCallbackInterfaceFfiCursorStoreMethod0? = null,
-    @JvmField internal var `save`: UniffiCallbackInterfaceFfiCursorStoreMethod1? = null,
-    @JvmField internal var `removeStream`: UniffiCallbackInterfaceFfiCursorStoreMethod2? = null,
+    @JvmField internal var `loadJournal`: UniffiCallbackInterfaceFfiCursorStoreMethod0? = null,
+    @JvmField internal var `saveJournal`: UniffiCallbackInterfaceFfiCursorStoreMethod1? = null,
+    @JvmField internal var `removeTarget`: UniffiCallbackInterfaceFfiCursorStoreMethod2? = null,
     @JvmField internal var `clearPrincipal`: UniffiCallbackInterfaceFfiCursorStoreMethod3? = null,
 ) : Structure() {
     class UniffiByValue(
         `uniffiFree`: UniffiCallbackInterfaceFree? = null,
         `uniffiClone`: UniffiCallbackInterfaceClone? = null,
-        `load`: UniffiCallbackInterfaceFfiCursorStoreMethod0? = null,
-        `save`: UniffiCallbackInterfaceFfiCursorStoreMethod1? = null,
-        `removeStream`: UniffiCallbackInterfaceFfiCursorStoreMethod2? = null,
+        `loadJournal`: UniffiCallbackInterfaceFfiCursorStoreMethod0? = null,
+        `saveJournal`: UniffiCallbackInterfaceFfiCursorStoreMethod1? = null,
+        `removeTarget`: UniffiCallbackInterfaceFfiCursorStoreMethod2? = null,
         `clearPrincipal`: UniffiCallbackInterfaceFfiCursorStoreMethod3? = null,
-    ): UniffiVTableCallbackInterfaceFfiCursorStore(`uniffiFree`,`uniffiClone`,`load`,`save`,`removeStream`,`clearPrincipal`,), Structure.ByValue
+    ): UniffiVTableCallbackInterfaceFfiCursorStore(`uniffiFree`,`uniffiClone`,`loadJournal`,`saveJournal`,`removeTarget`,`clearPrincipal`,), Structure.ByValue
 
    internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceFfiCursorStore) {
         `uniffiFree` = other.`uniffiFree`
         `uniffiClone` = other.`uniffiClone`
-        `load` = other.`load`
-        `save` = other.`save`
-        `removeStream` = other.`removeStream`
+        `loadJournal` = other.`loadJournal`
+        `saveJournal` = other.`saveJournal`
+        `removeTarget` = other.`removeTarget`
         `clearPrincipal` = other.`clearPrincipal`
     }
 
@@ -722,15 +722,55 @@ internal object IntegrityCheckingUniffiLib {
     }
 
     internal fun ensureInitialized() = Unit
-    external fun uniffi_tinkle_ffi_checksum_func_tinkle_ffi_init(
+    external fun uniffi_tinkle_ffi_checksum_func_parse_push_payload(
     ): Int
-    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_acknowledge(
+    external fun uniffi_tinkle_ffi_checksum_func_push_recover_stale_jobs(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_func_push_target_key(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_func_tinkle_ffi_init(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_connect(
     ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_files_abort_upload(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_files_begin_upload(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_files_complete_upload(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_files_download_bytes(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_files_download_part(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_files_get_file_info(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_files_get_upload_status(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_files_upload_bytes(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_files_upload_part(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_get_messages(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_get_target_changes(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_is_connected(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_is_suspended(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_load_dialogs(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_load_history(
+    ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_next_event(
     ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_pending_len(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_reconcile_now(
+    ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_resume(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_send_message(
     ): Int
@@ -738,9 +778,29 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_shutdown(
     ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_start(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stop(
+    ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_subscribe(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_suspend(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_target_cursor(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_target_status(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_tracked_targets(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_handle_push_wake(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_logout(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_open_push_notification(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_register_push(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_unregister_push(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_sqlitestorage_clear_principal(
     ): Int
@@ -752,13 +812,17 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_sqlitestorage_list_dialogs(
     ): Int
-    external fun uniffi_tinkle_ffi_checksum_method_sqlitestorage_load_checkpoint(
+    external fun uniffi_tinkle_ffi_checksum_method_sqlitestorage_load_journal(
     ): Int
-    external fun uniffi_tinkle_ffi_checksum_method_fficursorstore_load(
+    external fun uniffi_tinkle_ffi_checksum_method_sqlitestorage_save_chat_proto(
     ): Int
-    external fun uniffi_tinkle_ffi_checksum_method_fficursorstore_save(
+    external fun uniffi_tinkle_ffi_checksum_method_sqlitestorage_save_user_proto(
     ): Int
-    external fun uniffi_tinkle_ffi_checksum_method_fficursorstore_remove_stream(
+    external fun uniffi_tinkle_ffi_checksum_method_fficursorstore_load_journal(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_fficursorstore_save_journal(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_fficursorstore_remove_target(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_fficursorstore_clear_principal(
     ): Int
@@ -767,6 +831,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open_async(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open_in_memory(
     ): Int
@@ -801,29 +867,85 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_tinkle_ffi_fn_constructor_tinkleclient_new_sqlite(`config`: RustBuffer.ByValue,`credential`: RustBuffer.ByValue,`storage`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Long
-    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_acknowledge(`ptr`: Long,`stream`: RustBuffer.ByValue,`cursor`: Long,
-    ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_connect(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_abort_upload(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_begin_upload(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_complete_upload(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_download_bytes(`ptr`: Long,`fileId`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_download_part(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_get_file_info(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_get_upload_status(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_upload_bytes(`ptr`: Long,`idempotencyKey`: RustBuffer.ByValue,`data`: RustBuffer.ByValue,`fileName`: RustBuffer.ByValue,`mimeType`: RustBuffer.ByValue,`sha256`: RustBuffer.ByValue,`encrypted`: Byte,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_upload_part(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_get_messages(`ptr`: Long,`targetKind`: RustBuffer.ByValue,`targetId`: Long,`messageIds`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_get_target_changes(`ptr`: Long,`targetKind`: RustBuffer.ByValue,`targetId`: Long,`afterAcceptSeq`: Long,`limit`: Int,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_is_connected(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_is_suspended(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_load_dialogs(`ptr`: Long,`request`: RustBuffer.ByValue,`policy`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_load_history(`ptr`: Long,`request`: RustBuffer.ByValue,`policy`: RustBuffer.ByValue,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_next_event(`ptr`: Long,
     ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_pending_len(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_reconcile_now(`ptr`: Long,
+    ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_reconnect(`ptr`: Long,
     ): Long
-    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_send_message(`ptr`: Long,`roomId`: Long,`text`: RustBuffer.ByValue,`randomId`: Long,
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_resume(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_send_message(`ptr`: Long,`targetKind`: RustBuffer.ByValue,`targetId`: Long,`text`: RustBuffer.ByValue,`randomId`: Long,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_set_principal_user_id(`ptr`: Long,`userId`: Long,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_shutdown(`ptr`: Long,
     ): Long
-    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_subscribe(`ptr`: Long,`rooms`: RustBuffer.ByValue,`watch`: RustBuffer.ByValue,
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_start(`ptr`: Long,`targets`: RustBuffer.ByValue,`watch`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stop(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_subscribe(`ptr`: Long,`targets`: RustBuffer.ByValue,`watch`: RustBuffer.ByValue,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_suspend(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_target_cursor(`ptr`: Long,`targetKey`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_target_status(`ptr`: Long,`targetKey`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_tracked_targets(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_handle_push_wake(`ptr`: Long,`envelope`: RustBuffer.ByValue,`timeoutSecs`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_logout(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_open_push_notification(`ptr`: Long,`envelope`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_register_push(`ptr`: Long,`token`: RustBuffer.ByValue,`tokenType`: RustBuffer.ByValue,`langCode`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_unregister_push(`ptr`: Long,`token`: RustBuffer.ByValue,
     ): Long
     external fun uniffi_tinkle_ffi_fn_clone_sqlitestorage(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Long
     external fun uniffi_tinkle_ffi_fn_free_sqlitestorage(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
     external fun uniffi_tinkle_ffi_fn_constructor_sqlitestorage_open(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_constructor_sqlitestorage_open_async(`path`: RustBuffer.ByValue,
     ): Long
     external fun uniffi_tinkle_ffi_fn_constructor_sqlitestorage_open_in_memory(uniffi_out_err: UniffiRustCallStatus,
     ): Long
@@ -837,7 +959,11 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_sqlitestorage_list_dialogs(`ptr`: Long,`principal`: RustBuffer.ByValue,`limit`: Int,
     ): Long
-    external fun uniffi_tinkle_ffi_fn_method_sqlitestorage_load_checkpoint(`ptr`: Long,`principal`: RustBuffer.ByValue,`stream`: RustBuffer.ByValue,
+    external fun uniffi_tinkle_ffi_fn_method_sqlitestorage_load_journal(`ptr`: Long,`principal`: RustBuffer.ByValue,`targetKey`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_sqlitestorage_save_chat_proto(`ptr`: Long,`principal`: RustBuffer.ByValue,`chatId`: Long,`chatProto`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_sqlitestorage_save_user_proto(`ptr`: Long,`principal`: RustBuffer.ByValue,`userId`: Long,`userProto`: RustBuffer.ByValue,
     ): Long
     external fun uniffi_tinkle_ffi_fn_clone_fficursorstore(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Long
@@ -845,11 +971,11 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_tinkle_ffi_fn_init_callback_vtable_fficursorstore(`vtable`: UniffiVTableCallbackInterfaceFfiCursorStore,
     ): Unit
-    external fun uniffi_tinkle_ffi_fn_method_fficursorstore_load(`ptr`: Long,`principal`: RustBuffer.ByValue,`stream`: RustBuffer.ByValue,
+    external fun uniffi_tinkle_ffi_fn_method_fficursorstore_load_journal(`ptr`: Long,`principal`: RustBuffer.ByValue,`targetKey`: RustBuffer.ByValue,
     ): Long
-    external fun uniffi_tinkle_ffi_fn_method_fficursorstore_save(`ptr`: Long,`principal`: RustBuffer.ByValue,`stream`: RustBuffer.ByValue,`cursor`: Long,
+    external fun uniffi_tinkle_ffi_fn_method_fficursorstore_save_journal(`ptr`: Long,`principal`: RustBuffer.ByValue,`targetKey`: RustBuffer.ByValue,`acceptSeq`: Long,
     ): Long
-    external fun uniffi_tinkle_ffi_fn_method_fficursorstore_remove_stream(`ptr`: Long,`principal`: RustBuffer.ByValue,`stream`: RustBuffer.ByValue,
+    external fun uniffi_tinkle_ffi_fn_method_fficursorstore_remove_target(`ptr`: Long,`principal`: RustBuffer.ByValue,`targetKey`: RustBuffer.ByValue,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_fficursorstore_clear_principal(`ptr`: Long,`principal`: RustBuffer.ByValue,
     ): Long
@@ -859,6 +985,12 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_tinkle_ffi_fn_constructor_inmemoryffistore_new(uniffi_out_err: UniffiRustCallStatus,
     ): Long
+    external fun uniffi_tinkle_ffi_fn_func_parse_push_payload(`payload`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_tinkle_ffi_fn_func_push_recover_stale_jobs(`storage`: Long,`principal`: RustBuffer.ByValue,`leaseSecs`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_func_push_target_key(`envelope`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
     external fun uniffi_tinkle_ffi_fn_func_tinkle_ffi_init(uniffi_out_err: UniffiRustCallStatus,
     ): Unit
     external fun ffi_tinkle_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus,
@@ -980,37 +1112,127 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if ((lib.uniffi_tinkle_ffi_checksum_func_tinkle_ffi_init() and 0xFFFF) != 34048) {
+    if ((lib.uniffi_tinkle_ffi_checksum_func_parse_push_payload() and 0xFFFF) != 32116) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_acknowledge() and 0xFFFF) != 704) {
+    if ((lib.uniffi_tinkle_ffi_checksum_func_push_recover_stale_jobs() and 0xFFFF) != 65220) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_func_push_target_key() and 0xFFFF) != 11122) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_func_tinkle_ffi_init() and 0xFFFF) != 34048) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_connect() and 0xFFFF) != 48303) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_next_event() and 0xFFFF) != 57455) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_abort_upload() and 0xFFFF) != 34739) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect() and 0xFFFF) != 30012) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_begin_upload() and 0xFFFF) != 17825) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_send_message() and 0xFFFF) != 3916) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_complete_upload() and 0xFFFF) != 56794) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_set_principal_user_id() and 0xFFFF) != 20741) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_download_bytes() and 0xFFFF) != 38051) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_shutdown() and 0xFFFF) != 52153) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_download_part() and 0xFFFF) != 105) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_subscribe() and 0xFFFF) != 8425) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_get_file_info() and 0xFFFF) != 47087) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_suspend() and 0xFFFF) != 33260) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_get_upload_status() and 0xFFFF) != 6124) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_clear_principal() and 0xFFFF) != 24979) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_upload_bytes() and 0xFFFF) != 21989) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_upload_part() and 0xFFFF) != 12340) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_get_messages() and 0xFFFF) != 21759) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_get_target_changes() and 0xFFFF) != 2168) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_is_connected() and 0xFFFF) != 22480) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_is_suspended() and 0xFFFF) != 47511) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_load_dialogs() and 0xFFFF) != 19225) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_load_history() and 0xFFFF) != 27532) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_next_event() and 0xFFFF) != 1749) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_pending_len() and 0xFFFF) != 35948) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_reconcile_now() and 0xFFFF) != 51897) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect() and 0xFFFF) != 46216) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_resume() and 0xFFFF) != 27994) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_send_message() and 0xFFFF) != 49929) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_set_principal_user_id() and 0xFFFF) != 61488) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_shutdown() and 0xFFFF) != 59360) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_start() and 0xFFFF) != 7430) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stop() and 0xFFFF) != 14181) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_subscribe() and 0xFFFF) != 7253) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_suspend() and 0xFFFF) != 29619) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_target_cursor() and 0xFFFF) != 64420) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_target_status() and 0xFFFF) != 19735) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_tracked_targets() and 0xFFFF) != 47873) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_handle_push_wake() and 0xFFFF) != 20979) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_logout() and 0xFFFF) != 58830) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_open_push_notification() and 0xFFFF) != 61692) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_register_push() and 0xFFFF) != 39244) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_unregister_push() and 0xFFFF) != 33025) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_clear_principal() and 0xFFFF) != 7934) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_get_chat_proto() and 0xFFFF) != 15884) {
@@ -1025,28 +1247,37 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_list_dialogs() and 0xFFFF) != 28584) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_load_checkpoint() and 0xFFFF) != 33864) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_load_journal() and 0xFFFF) != 29543) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_fficursorstore_load() and 0xFFFF) != 11126) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_save_chat_proto() and 0xFFFF) != 43737) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_fficursorstore_save() and 0xFFFF) != 7488) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_save_user_proto() and 0xFFFF) != 18563) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_fficursorstore_remove_stream() and 0xFFFF) != 59705) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_fficursorstore_load_journal() and 0xFFFF) != 41507) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_fficursorstore_save_journal() and 0xFFFF) != 57182) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_fficursorstore_remove_target() and 0xFFFF) != 30104) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_fficursorstore_clear_principal() and 0xFFFF) != 37263) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new() and 0xFFFF) != 22029) {
+    if ((lib.uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new() and 0xFFFF) != 37854) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite() and 0xFFFF) != 22154) {
+    if ((lib.uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite() and 0xFFFF) != 8694) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open() and 0xFFFF) != 49106) {
+    if ((lib.uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open() and 0xFFFF) != 43150) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open_async() and 0xFFFF) != 47630) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open_in_memory() and 0xFFFF) != 8980) {
@@ -1660,19 +1891,19 @@ public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
 
 
 /**
- * Foreign-implemented durable cursor store.
+ * Foreign-implemented durable journal store.
  *
- * All params are owned (`String`/`u64`); references are unsupported in
+ * All params are owned (`String`/`i64`); references are unsupported in
  * foreign trait methods. Every method returns `Result` so foreign
  * failures convert into [`crate::FfiError`] instead of panicking.
  */
 public interface FfiCursorStore {
 
-    suspend fun `load`(`principal`: kotlin.String, `stream`: kotlin.String): kotlin.ULong?
+    suspend fun `loadJournal`(`principal`: kotlin.String, `targetKey`: kotlin.String): kotlin.Long?
 
-    suspend fun `save`(`principal`: kotlin.String, `stream`: kotlin.String, `cursor`: kotlin.ULong)
+    suspend fun `saveJournal`(`principal`: kotlin.String, `targetKey`: kotlin.String, `acceptSeq`: kotlin.Long)
 
-    suspend fun `removeStream`(`principal`: kotlin.String, `stream`: kotlin.String)
+    suspend fun `removeTarget`(`principal`: kotlin.String, `targetKey`: kotlin.String)
 
     suspend fun `clearPrincipal`(`principal`: kotlin.String)
 
@@ -1680,9 +1911,9 @@ public interface FfiCursorStore {
 }
 
 /**
- * Foreign-implemented durable cursor store.
+ * Foreign-implemented durable journal store.
  *
- * All params are owned (`String`/`u64`); references are unsupported in
+ * All params are owned (`String`/`i64`); references are unsupported in
  * foreign trait methods. Every method returns `Result` so foreign
  * failures convert into [`crate::FfiError`] instead of panicking.
  */
@@ -1790,21 +2021,21 @@ open class FfiCursorStoreImpl: Disposable, AutoCloseable, FfiCursorStore
 
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `load`(`principal`: kotlin.String, `stream`: kotlin.String) : kotlin.ULong? {
+    override suspend fun `loadJournal`(`principal`: kotlin.String, `targetKey`: kotlin.String) : kotlin.Long? {
         return uniffiRustCallAsync(
         callWithHandle { uniffiHandle ->
-            UniffiLib.uniffi_tinkle_ffi_fn_method_fficursorstore_load(
+            UniffiLib.uniffi_tinkle_ffi_fn_method_fficursorstore_load_journal(
                 uniffiHandle,
 
         FfiConverterString.lower(`principal`),
-        FfiConverterString.lower(`stream`),
+        FfiConverterString.lower(`targetKey`),
             )
         },
         { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
         { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
         { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
         // lift function
-        { FfiConverterOptionalULong.lift(it) },
+        { FfiConverterOptionalLong.lift(it) },
         // Error FFI converter
         FfiException.ErrorHandler,
     )
@@ -1813,15 +2044,15 @@ open class FfiCursorStoreImpl: Disposable, AutoCloseable, FfiCursorStore
 
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `save`(`principal`: kotlin.String, `stream`: kotlin.String, `cursor`: kotlin.ULong) {
+    override suspend fun `saveJournal`(`principal`: kotlin.String, `targetKey`: kotlin.String, `acceptSeq`: kotlin.Long) {
         return uniffiRustCallAsync(
         callWithHandle { uniffiHandle ->
-            UniffiLib.uniffi_tinkle_ffi_fn_method_fficursorstore_save(
+            UniffiLib.uniffi_tinkle_ffi_fn_method_fficursorstore_save_journal(
                 uniffiHandle,
 
         FfiConverterString.lower(`principal`),
-        FfiConverterString.lower(`stream`),
-        FfiConverterULong.lower(`cursor`),
+        FfiConverterString.lower(`targetKey`),
+        FfiConverterLong.lower(`acceptSeq`),
             )
         },
         { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
@@ -1838,14 +2069,14 @@ open class FfiCursorStoreImpl: Disposable, AutoCloseable, FfiCursorStore
 
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `removeStream`(`principal`: kotlin.String, `stream`: kotlin.String) {
+    override suspend fun `removeTarget`(`principal`: kotlin.String, `targetKey`: kotlin.String) {
         return uniffiRustCallAsync(
         callWithHandle { uniffiHandle ->
-            UniffiLib.uniffi_tinkle_ffi_fn_method_fficursorstore_remove_stream(
+            UniffiLib.uniffi_tinkle_ffi_fn_method_fficursorstore_remove_target(
                 uniffiHandle,
 
         FfiConverterString.lower(`principal`),
-        FfiConverterString.lower(`stream`),
+        FfiConverterString.lower(`targetKey`),
             )
         },
         { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
@@ -1900,18 +2131,18 @@ open class FfiCursorStoreImpl: Disposable, AutoCloseable, FfiCursorStore
 
 // Put the implementation in an object so we don't pollute the top-level namespace
 internal object uniffiCallbackInterfaceFfiCursorStore {
-    internal object `load`: UniffiCallbackInterfaceFfiCursorStoreMethod0 {
-        override fun callback(`uniffiHandle`: Long,`principal`: RustBuffer.ByValue,`stream`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
+    internal object `loadJournal`: UniffiCallbackInterfaceFfiCursorStoreMethod0 {
+        override fun callback(`uniffiHandle`: Long,`principal`: RustBuffer.ByValue,`targetKey`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
             val uniffiObj = FfiConverterTypeFfiCursorStore.handleMap.get(uniffiHandle)
             val makeCall = suspend { ->
-                uniffiObj.`load`(
+                uniffiObj.`loadJournal`(
                     FfiConverterString.lift(`principal`),
-                    FfiConverterString.lift(`stream`),
+                    FfiConverterString.lift(`targetKey`),
                 )
             }
-            val uniffiHandleSuccess = { returnValue: kotlin.ULong? ->
+            val uniffiHandleSuccess = { returnValue: kotlin.Long? ->
                 val uniffiResult = UniffiForeignFutureResultRustBuffer.UniffiByValue(
-                    FfiConverterOptionalULong.lower(returnValue),
+                    FfiConverterOptionalLong.lower(returnValue),
                     UniffiRustCallStatus.ByValue()
                 )
                 uniffiResult.write()
@@ -1935,14 +2166,14 @@ internal object uniffiCallbackInterfaceFfiCursorStore {
             )
         }
     }
-    internal object `save`: UniffiCallbackInterfaceFfiCursorStoreMethod1 {
-        override fun callback(`uniffiHandle`: Long,`principal`: RustBuffer.ByValue,`stream`: RustBuffer.ByValue,`cursor`: Long,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
+    internal object `saveJournal`: UniffiCallbackInterfaceFfiCursorStoreMethod1 {
+        override fun callback(`uniffiHandle`: Long,`principal`: RustBuffer.ByValue,`targetKey`: RustBuffer.ByValue,`acceptSeq`: Long,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
             val uniffiObj = FfiConverterTypeFfiCursorStore.handleMap.get(uniffiHandle)
             val makeCall = suspend { ->
-                uniffiObj.`save`(
+                uniffiObj.`saveJournal`(
                     FfiConverterString.lift(`principal`),
-                    FfiConverterString.lift(`stream`),
-                    FfiConverterULong.lift(`cursor`),
+                    FfiConverterString.lift(`targetKey`),
+                    FfiConverterLong.lift(`acceptSeq`),
                 )
             }
             val uniffiHandleSuccess = { _: Unit ->
@@ -1969,13 +2200,13 @@ internal object uniffiCallbackInterfaceFfiCursorStore {
             )
         }
     }
-    internal object `removeStream`: UniffiCallbackInterfaceFfiCursorStoreMethod2 {
-        override fun callback(`uniffiHandle`: Long,`principal`: RustBuffer.ByValue,`stream`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
+    internal object `removeTarget`: UniffiCallbackInterfaceFfiCursorStoreMethod2 {
+        override fun callback(`uniffiHandle`: Long,`principal`: RustBuffer.ByValue,`targetKey`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
             val uniffiObj = FfiConverterTypeFfiCursorStore.handleMap.get(uniffiHandle)
             val makeCall = suspend { ->
-                uniffiObj.`removeStream`(
+                uniffiObj.`removeTarget`(
                     FfiConverterString.lift(`principal`),
-                    FfiConverterString.lift(`stream`),
+                    FfiConverterString.lift(`targetKey`),
                 )
             }
             val uniffiHandleSuccess = { _: Unit ->
@@ -2050,9 +2281,9 @@ internal object uniffiCallbackInterfaceFfiCursorStore {
     internal var vtable = UniffiVTableCallbackInterfaceFfiCursorStore.UniffiByValue(
         uniffiFree,
         uniffiClone,
-        `load`,
-        `save`,
-        `removeStream`,
+        `loadJournal`,
+        `saveJournal`,
+        `removeTarget`,
         `clearPrincipal`,
     )
 
@@ -2460,6 +2691,19 @@ public object FfiConverterTypeInMemoryFfiStore: FfiConverter<InMemoryFfiStore, L
  */
 public interface SqliteStorageInterface {
 
+    /**
+     * Delete all rows for `principal`, including journal cursors.
+     *
+     * Coordination required: [`TinkleClient`] holds in-memory accept
+     * positions. If the client is still running, the next journal commit
+     * fails the SQLite scope fence because memory expects the deleted
+     * cursor, breaking sync until reconciliation. Callers must
+     * `shutdown()`/`suspend()` the client first and only reconnect (fresh
+     * `subscribe`, reconciling from position 0) after clearing. A full fix
+     * would reset the live reconcile positions atomically with this
+     * delete; that cross-object coordination is out of scope, so this doc
+     * is the guard.
+     */
     suspend fun `clearPrincipal`(`principal`: kotlin.String)
 
     suspend fun `getChatProto`(`principal`: kotlin.String, `chatId`: kotlin.Long): kotlin.ByteArray?
@@ -2470,7 +2714,33 @@ public interface SqliteStorageInterface {
 
     suspend fun `listDialogs`(`principal`: kotlin.String, `limit`: kotlin.UInt): List<FfiDialog>
 
-    suspend fun `loadCheckpoint`(`principal`: kotlin.String, `stream`: kotlin.String): kotlin.ULong?
+    /**
+     * Durable journal cursor for one conversation: the last applied
+     * `GetTargetChanges.last_accept_seq` (`None` when nothing applied yet).
+     * `target_key` is `target:user:<id>` / `target:room:<id>`.
+     */
+    suspend fun `loadJournal`(`principal`: kotlin.String, `targetKey`: kotlin.String): kotlin.Long?
+
+    /**
+     * Write plumbing for [`Self::get_chat_proto`]: see [`Self::save_user_proto`].
+     *
+     * Validates by decoding the protobuf and checking the embedded
+     * `chat_id` matches: mismatches are codec errors, never silent
+     * cache poison.
+     */
+    suspend fun `saveChatProto`(`principal`: kotlin.String, `chatId`: kotlin.Long, `chatProto`: kotlin.ByteArray)
+
+    /**
+     * Write plumbing for [`Self::get_user_proto`]: the sync projector never
+     * emits user rows, so without an explicit save (e.g. from a
+     * UsersService refresh) the getter stays `None`. Hosts should call this
+     * after fetching user objects via RPC.
+     *
+     * Validates by decoding the protobuf and checking the embedded id
+     * matches `user_id`: a mismatched or missing id is a codec error,
+     * never a silent cache poison.
+     */
+    suspend fun `saveUserProto`(`principal`: kotlin.String, `userId`: kotlin.Long, `userProto`: kotlin.ByteArray)
 
     companion object
 }
@@ -2580,6 +2850,19 @@ open class SqliteStorage: Disposable, AutoCloseable, SqliteStorageInterface
     }
 
 
+    /**
+     * Delete all rows for `principal`, including journal cursors.
+     *
+     * Coordination required: [`TinkleClient`] holds in-memory accept
+     * positions. If the client is still running, the next journal commit
+     * fails the SQLite scope fence because memory expects the deleted
+     * cursor, breaking sync until reconciliation. Callers must
+     * `shutdown()`/`suspend()` the client first and only reconnect (fresh
+     * `subscribe`, reconciling from position 0) after clearing. A full fix
+     * would reset the live reconcile positions atomically with this
+     * delete; that cross-object coordination is out of scope, so this doc
+     * is the guard.
+     */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `clearPrincipal`(`principal`: kotlin.String) {
@@ -2697,23 +2980,95 @@ open class SqliteStorage: Disposable, AutoCloseable, SqliteStorageInterface
     }
 
 
+    /**
+     * Durable journal cursor for one conversation: the last applied
+     * `GetTargetChanges.last_accept_seq` (`None` when nothing applied yet).
+     * `target_key` is `target:user:<id>` / `target:room:<id>`.
+     */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `loadCheckpoint`(`principal`: kotlin.String, `stream`: kotlin.String) : kotlin.ULong? {
+    override suspend fun `loadJournal`(`principal`: kotlin.String, `targetKey`: kotlin.String) : kotlin.Long? {
         return uniffiRustCallAsync(
         callWithHandle { uniffiHandle ->
-            UniffiLib.uniffi_tinkle_ffi_fn_method_sqlitestorage_load_checkpoint(
+            UniffiLib.uniffi_tinkle_ffi_fn_method_sqlitestorage_load_journal(
                 uniffiHandle,
 
         FfiConverterString.lower(`principal`),
-        FfiConverterString.lower(`stream`),
+        FfiConverterString.lower(`targetKey`),
             )
         },
         { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
         { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
         { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
         // lift function
-        { FfiConverterOptionalULong.lift(it) },
+        { FfiConverterOptionalLong.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Write plumbing for [`Self::get_chat_proto`]: see [`Self::save_user_proto`].
+     *
+     * Validates by decoding the protobuf and checking the embedded
+     * `chat_id` matches: mismatches are codec errors, never silent
+     * cache poison.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `saveChatProto`(`principal`: kotlin.String, `chatId`: kotlin.Long, `chatProto`: kotlin.ByteArray) {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_sqlitestorage_save_chat_proto(
+                uniffiHandle,
+
+        FfiConverterString.lower(`principal`),
+        FfiConverterLong.lower(`chatId`),
+        FfiConverterByteArray.lower(`chatProto`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_void(future) },
+        // lift function
+        { },
+
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Write plumbing for [`Self::get_user_proto`]: the sync projector never
+     * emits user rows, so without an explicit save (e.g. from a
+     * UsersService refresh) the getter stays `None`. Hosts should call this
+     * after fetching user objects via RPC.
+     *
+     * Validates by decoding the protobuf and checking the embedded id
+     * matches `user_id`: a mismatched or missing id is a codec error,
+     * never a silent cache poison.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `saveUserProto`(`principal`: kotlin.String, `userId`: kotlin.Long, `userProto`: kotlin.ByteArray) {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_sqlitestorage_save_user_proto(
+                uniffiHandle,
+
+        FfiConverterString.lower(`principal`),
+        FfiConverterLong.lower(`userId`),
+        FfiConverterByteArray.lower(`userProto`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_void(future) },
+        // lift function
+        { },
+
         // Error FFI converter
         FfiException.ErrorHandler,
     )
@@ -2727,6 +3082,15 @@ open class SqliteStorage: Disposable, AutoCloseable, SqliteStorageInterface
 
     companion object {
 
+    /**
+     * Blocking open: does FS I/O + PRAGMAs + schema sync on the calling
+     * thread. Do NOT call on the UI/main thread; call from a background
+     * queue, or prefer [`Self::open_async`] which moves the work to
+     * `spawn_blocking`. A full async refactor (async constructor as the
+     * only open path) is out of scope to avoid breaking existing
+     * Swift/Kotlin call sites; this doc + the async alternative is the
+     * interim guard.
+     */
     @Throws(FfiException::class) fun `open`(`path`: kotlin.String): SqliteStorage {
             return FfiConverterTypeSqliteStorage.lift(
     uniffiRustCallWithError(FfiException) { _status ->
@@ -2738,6 +3102,27 @@ open class SqliteStorage: Disposable, AutoCloseable, SqliteStorageInterface
     )
     }
 
+
+
+    /**
+     * Non-blocking open for UI callers: runs [`tinkle_storage::Storage::open`]
+     * on Tokio's blocking pool.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+     suspend fun `openAsync`(`path`: kotlin.String) : SqliteStorage {
+        return uniffiRustCallAsync(
+        UniffiLib.uniffi_tinkle_ffi_fn_constructor_sqlitestorage_open_async(
+        FfiConverterString.lower(`path`),),
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_u64(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_u64(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_u64(future) },
+        // lift function
+        { FfiConverterTypeSqliteStorage.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
 
 
     @Throws(FfiException::class) fun `openInMemory`(): SqliteStorage {
@@ -2882,31 +3267,205 @@ public object FfiConverterTypeSqliteStorage: FfiConverter<SqliteStorage, Long> {
 public interface TinkleClientInterface {
 
     /**
-     * Persist the checkpoint after applying an `UpdateReady` event.
-     */
-    suspend fun `acknowledge`(`stream`: kotlin.String, `cursor`: kotlin.ULong)
-
-    /**
      * Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
      */
     suspend fun `connect`()
 
     /**
+     * Files upload: `AbortUpload` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `AbortUploadRequest`/`AbortUploadResponse` bytes.
+     */
+    suspend fun `filesAbortUpload`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Files upload session: `BeginUpload` (Syntra primary, gRPC fallback).
+     *
+     * `request`/`response` are the encoded `BeginUploadRequest`/
+     * `BeginUploadResponse` protobuf bytes; hosts decode with their own
+     * generated bindings. Local validation failures surface as
+     * [`FfiError::Codec`].
+     */
+    suspend fun `filesBeginUpload`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Files upload: `CompleteUpload` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `CompleteUploadRequest`/`CompleteUploadResponse` bytes.
+     */
+    suspend fun `filesCompleteUpload`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Rust-owned download (file id in, bytes out).
+     *
+     * Minimal pass-through over [`libtinkle::DownloadManager`]: verifies
+     * size + SHA-256 and joins in-flight downloads. Per-consumer cancel is
+     * cooperative via dropping the foreign future (no token crosses FFI);
+     * cancelling one consumer never cancels the shared download.
+     */
+    suspend fun `filesDownloadBytes`(`fileId`: kotlin.Long): kotlin.ByteArray
+
+    /**
+     * Files download: `DownloadPart` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `DownloadPartRequest`/`DownloadPartResponse` bytes.
+     */
+    suspend fun `filesDownloadPart`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Files download: `GetFileInfo` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `GetFileInfoRequest`/`GetFileInfoResponse` bytes.
+     */
+    suspend fun `filesGetFileInfo`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Files upload: `GetUploadStatus` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `GetUploadStatusRequest`/`GetUploadStatusResponse` bytes.
+     */
+    suspend fun `filesGetUploadStatus`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Rust-owned upload (bytes in, `FileInfo` bytes out).
+     *
+     * Minimal pass-through over [`libtinkle::UploadManager`]: preserves the
+     * EXACT `BeginUploadRequest` (incl. `Option` presence) across idempotency
+     * retries, decides SOLELY on `BeginUploadResponse.status`, and verifies
+     * the commit. `sha256` is the optional client declaration (32 bytes);
+     * `None` preserves absence for idempotency. Returns the encoded
+     * `FileInfo` protobuf bytes; hosts decode with their own bindings.
+     */
+    suspend fun `filesUploadBytes`(`idempotencyKey`: kotlin.String, `data`: kotlin.ByteArray, `fileName`: kotlin.String?, `mimeType`: kotlin.String?, `sha256`: kotlin.ByteArray?, `encrypted`: kotlin.Boolean): kotlin.ByteArray
+
+    /**
+     * Files upload: `UploadPart` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `UploadPartRequest`/`UploadPartResponse` protobuf bytes.
+     */
+    suspend fun `filesUploadPart`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Fetch specific messages in one conversation (`GetMessages`).
+     *
+     * `target_kind` is `"user"`/`"room"`/`"chat"`; `message_ids` must be
+     * non-empty positive ids in the same conversation. Large batches are
+     * chunked to the protocol bound (`MAX_MESSAGE_IDS_PER_REQUEST`) and
+     * merged; messages the server cannot disclose are omitted, never
+     * errors. Bodies share the message's stable `accept_seq` token: when
+     * two copies disagree, keep the fresher by later `edit_date`.
+     *
+     * Returns the encoded `GetMessagesResponse` protobuf bytes; hosts
+     * decode with their own generated bindings.
+     */
+    suspend fun `getMessages`(`targetKind`: kotlin.String, `targetId`: kotlin.Long, `messageIds`: List<kotlin.Long>): kotlin.ByteArray
+
+    /**
+     * List retained conversation mutations strictly after one accept
+     * position (`GetTargetChanges`).
+     *
+     * `after_accept_seq` is the exclusive lower bound (zero requests
+     * everything retained); `limit` bounds one page (`0` selects the
+     * deployment default, `1..=500` otherwise). Changes ascend strictly by
+     * `accept_seq`; edited changes carry the current body while
+     * deleted/revoked changes carry identity and kind only.
+     * `more_available` reports continuation: `Some(true)` means request the
+     * next page from `last_accept_seq`; `Some(false)` confirms caught up;
+     * absent is unknown, never caught up.
+     *
+     * Returns the encoded `GetTargetChangesResponse` protobuf bytes; hosts
+     * decode with their own generated bindings.
+     */
+    suspend fun `getTargetChanges`(`targetKind`: kotlin.String, `targetId`: kotlin.Long, `afterAcceptSeq`: kotlin.Long, `limit`: kotlin.Int): kotlin.ByteArray
+
+    /**
+     * True while the transport is live (connection exists and its
+     * notification pump has not exited).
+     */
+    suspend fun `isConnected`(): kotlin.Boolean
+
+    /**
+     * True while [`Self::suspend`] is in effect.
+     */
+    suspend fun `isSuspended`(): kotlin.Boolean
+
+    /**
+     * Fetch dialogs. Like [`Self::load_history`], the fetch never touches
+     * accept positions.
+     *
+     * Returns the encoded `GetDialogsResponse` protobuf bytes.
+     * `HydrateCache` also upserts authoritative users/chats plus
+     * authoritative dialog rows.
+     */
+    suspend fun `loadDialogs`(`request`: FfiDialogsRequest, `policy`: FfiLoadPolicy): kotlin.ByteArray
+
+    /**
+     * Fetch message history. History lives outside the reconciliation
+     * journal: the fetch never advances or resets any accept position.
+     * Message bodies ARE cached: `HydrateCache` upserts authoritative
+     * users/chats into the shared SQLite cache and projects message
+     * bodies into message rows committed at the current journal cursor
+     * (the cursor itself is unchanged — history heals the cache without
+     * moving the journal).
+     *
+     * Returns the encoded `GetHistoryResponse` protobuf bytes; hosts
+     * decode with their own generated bindings. `NetworkOnly` returns
+     * bodies without touching the cache.
+     */
+    suspend fun `loadHistory`(`request`: FfiHistoryRequest, `policy`: FfiLoadPolicy): kotlin.ByteArray
+
+    /**
      * Next sync app event. `None` when the client is closed.
+     *
+     * Reconciliation contract: `ConversationChanged`/`MessagesChanged`
+     * tell the host what to refresh (cache reads or `get_messages`
+     * hydration); `ReconcileFailed`/`CheckpointFailed` are per-target and
+     * recoverable via `reconcile_now` (target status stays `Failed` until
+     * then). There is nothing to acknowledge: positions advance inside the
+     * SDK as journals reconcile.
      */
     suspend fun `nextEvent`(): FfiSyncEvent?
 
     /**
-     * Reconnect + re-handshake + explicit resubscribe from persisted
-     * cursors (network change / wake from push).
+     * Number of outstanding RPCs on the live connection (zero offline).
+     * Send-state query: a nonzero value after reconnect means results
+     * reported `UNAVAILABLE` with unknown outcome — retry only with the
+     * same `random_id` and fresh correlation.
+     */
+    suspend fun `pendingLen`(): kotlin.ULong
+
+    /**
+     * Trigger a reconciliation pass over the tracked conversations now
+     * (journal pages + hydration for anything behind). Notification hints
+     * and reconnects trigger this automatically; call it after the app
+     * returns to the foreground or after handling `ReconcileFailed`.
+     */
+    suspend fun `reconcileNow`()
+
+    /**
+     * Reconnect + re-handshake + explicit resubscribe from tracked targets
+     * (network change / wake from push).
      */
     suspend fun `reconnect`()
 
     /**
-     * Minimal write path end-to-end: send a text message to a room.
-     * Returns the server-assigned message id.
+     * Clear suspension set by [`Self::suspend`]. The supervisor resumes
+     * reconnecting on its next tick; callers needing immediacy can
+     * `reconnect` directly.
      */
-    suspend fun `sendMessage`(`roomId`: kotlin.Long, `text`: kotlin.String, `randomId`: kotlin.ULong): kotlin.ULong
+    suspend fun `resume`()
+
+    /**
+     * Minimal write path end-to-end: send a text message to a conversation.
+     * Returns the server-assigned message id.
+     *
+     * `target_id` must be positive; `target_kind` is `"user"` for direct
+     * messages, `"room"`/`"chat"` for groups. `random_id` must be nonzero
+     * (and fit in `i64` — the application operation key for idempotent
+     * retry). The server response must carry a message with a positive id;
+     * a missing or non-positive id is a codec error, never zero.
+     */
+    suspend fun `sendMessage`(`targetKind`: kotlin.String, `targetId`: kotlin.Long, `text`: kotlin.String, `randomId`: kotlin.ULong): kotlin.ULong
 
     /**
      * Set the authenticated principal from a known user id.
@@ -2914,20 +3473,115 @@ public interface TinkleClientInterface {
     suspend fun `setPrincipalUserId`(`userId`: kotlin.Long)
 
     /**
-     * Graceful shutdown: stop RPCs, tear down transport.
+     * Graceful shutdown: stop RPCs, tear down transport. Equivalent to
+     * [`Self::stop`].
      */
     suspend fun `shutdown`()
 
     /**
-     * Subscribe with durable cursor recovery. Returns the confirmation
-     * (interests registered, not replay completion).
+     * Supervised lifecycle: connect (if needed), subscribe, and start the
+     * reconciliation supervisor, which owns automatic re-reconciliation
+     * and reconnection from here on. The host only consumes `next_event()`;
+     * hints, dead transports, and per-target failures are handled inside
+     * the SDK and reported as events + target status.
+     *
+     * Idempotent: concurrent callers share the single supervisor and get
+     * the initial establishment result. Call `stop()` (or `shutdown()`)
+     * to shut down; `connect`/`subscribe`/`reconnect` remain as
+     * low-level primitives for manual control.
      */
-    suspend fun `subscribe`(`rooms`: List<RoomSub>, `watch`: List<kotlin.Long>): FfiSubscribeResponse
+    suspend fun `start`(`targets`: List<TargetSub>, `watch`: List<kotlin.Long>): FfiSubscribeResponse
 
     /**
-     * Background suspension: graceful close, durable cursors kept.
+     * Stop the sync supervisor (if running) and tear down the connection.
+     * Idempotent. Supervised apps call this instead of `shutdown`;
+     * both tear down the transport, `stop` names the supervisor path.
+     */
+    suspend fun `stop`()
+
+    /**
+     * Subscribe with durable per-target reconciliation. Returns the
+     * confirmation (tracked conversation keys, not reconciliation
+     * completion: journals reconcile in the background and report via
+     * `next_event` + target status).
+     */
+    suspend fun `subscribe`(`targets`: List<TargetSub>, `watch`: List<kotlin.Long>): FfiSubscribeResponse
+
+    /**
+     * Background suspension: graceful close, durable positions kept.
      */
     suspend fun `suspend`()
+
+    /**
+     * Last applied accept position for a tracked conversation
+     * (`target:user:<id>` / `target:room:<id>`). `None` when untracked.
+     * Authoritative for UI progress: informational events may drop under
+     * pressure, positions do not.
+     */
+    suspend fun `targetCursor`(`targetKey`: kotlin.String): kotlin.Long?
+
+    /**
+     * Per-target reconciliation status. `None` when untracked (never
+     * subscribed or since removed). Poll this instead of inferring demand
+     * from events: `Reconciling` means a journal page run is in flight or
+     * demanded, `Failed` is parked until `reconcile_now`.
+     */
+    suspend fun `targetStatus`(`targetKey`: kotlin.String): FfiReconcileStatus?
+
+    /**
+     * Canonical keys of the tracked conversations.
+     */
+    suspend fun `trackedTargets`(): List<kotlin.String>
+
+    /**
+     * Bounded push wake: parse-then-commit without the foreground
+     * supervisor or socket.
+     *
+     * Drives `libtinkle::PushManager` on this client's shared SQLite file
+     * with a bounded executor (`timeout_secs`, `0` selects the 25s
+     * default; capped at 120s): ensures a connection independent of any
+     * foreground supervisor, fetches authoritative bodies via
+     * `get_messages`, commits through the shared ingest, reconciles
+     * mutations within the remaining budget, and completes the durable
+     * job exactly once.
+     *
+     * Cancellation-safe: dropping the foreign future leaves the durable
+     * job `claimed`; the next wake requeues stale claims and retries.
+     */
+    suspend fun `handlePushWake`(`envelope`: FfiPushEnvelope, `timeoutSecs`: kotlin.ULong): FfiPushOutcome
+
+    /**
+     * Logout + local cleanup: best-effort `AccountService/Logout`, then
+     * wipes the principal's SQLite rows, drops catch-up demand, and
+     * resets the session so in-flight push/reconcile work fences out.
+     * Returns the server's `logged_out` flag (`false` when the RPC was
+     * skipped or failed; the local wipe still happened).
+     */
+    suspend fun `logout`(): kotlin.Boolean
+
+    /**
+     * Foreground open-event hook: navigate to the envelope's target and
+     * refresh it. Returns the canonical target key when the envelope
+     * routes, after running a bounded reconcile pass for that
+     * conversation (`None` when the envelope carries no routing — show
+     * the conversation list instead).
+     */
+    suspend fun `openPushNotification`(`envelope`: FfiPushEnvelope): kotlin.String?
+
+    /**
+     * Register a push token (`AccountService/RegisterPush`).
+     *
+     * `token_type` is `"apns"`, `"apns_voip"`, or `"fcm"` (unknown
+     * strings are codec errors, never guessed). Call after sign-in and
+     * on every rotation; the server keeps the latest token per device.
+     */
+    suspend fun `registerPush`(`token`: kotlin.String, `tokenType`: kotlin.String, `langCode`: kotlin.String)
+
+    /**
+     * Unregister a push token (`AccountService/UnregisterPush`).
+     * Returns the server's `removed` flag. Call BEFORE `logout`.
+     */
+    suspend fun `unregisterPush`(`token`: kotlin.String): kotlin.Boolean
 
     companion object
 }
@@ -2962,10 +3616,15 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
     /**
      * Create a client. `credential` is the opaque session token;
      * `store` is the foreign (or in-memory) durable cursor store.
+     *
+     * Fails fast with [`FfiError::Internal`] on an invalid non-blank
+     * `grpc_endpoint` (missing scheme, non-`https` without
+     * `allow_insecure`) instead of surfacing a retried network failure
+     * at reconciliation time.
      */
     constructor(`config`: ClientConfigFfi, `credential`: kotlin.String, `store`: FfiCursorStore) :
         this(UniffiWithHandle,
-    uniffiRustCall() { _status ->
+    uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.uniffi_tinkle_ffi_fn_constructor_tinkleclient_new(
 
 
@@ -3053,33 +3712,6 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
 
     /**
-     * Persist the checkpoint after applying an `UpdateReady` event.
-     */
-    @Throws(FfiException::class)
-    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `acknowledge`(`stream`: kotlin.String, `cursor`: kotlin.ULong) {
-        return uniffiRustCallAsync(
-        callWithHandle { uniffiHandle ->
-            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_acknowledge(
-                uniffiHandle,
-
-        FfiConverterString.lower(`stream`),
-        FfiConverterULong.lower(`cursor`),
-            )
-        },
-        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
-        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_void(future, continuation) },
-        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_void(future) },
-        // lift function
-        { },
-
-        // Error FFI converter
-        FfiException.ErrorHandler,
-    )
-    }
-
-
-    /**
      * Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
      */
     @Throws(FfiException::class)
@@ -3105,7 +3737,465 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
 
     /**
+     * Files upload: `AbortUpload` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `AbortUploadRequest`/`AbortUploadResponse` bytes.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `filesAbortUpload`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_files_abort_upload(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Files upload session: `BeginUpload` (Syntra primary, gRPC fallback).
+     *
+     * `request`/`response` are the encoded `BeginUploadRequest`/
+     * `BeginUploadResponse` protobuf bytes; hosts decode with their own
+     * generated bindings. Local validation failures surface as
+     * [`FfiError::Codec`].
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `filesBeginUpload`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_files_begin_upload(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Files upload: `CompleteUpload` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `CompleteUploadRequest`/`CompleteUploadResponse` bytes.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `filesCompleteUpload`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_files_complete_upload(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Rust-owned download (file id in, bytes out).
+     *
+     * Minimal pass-through over [`libtinkle::DownloadManager`]: verifies
+     * size + SHA-256 and joins in-flight downloads. Per-consumer cancel is
+     * cooperative via dropping the foreign future (no token crosses FFI);
+     * cancelling one consumer never cancels the shared download.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `filesDownloadBytes`(`fileId`: kotlin.Long) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_files_download_bytes(
+                uniffiHandle,
+
+        FfiConverterLong.lower(`fileId`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Files download: `DownloadPart` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `DownloadPartRequest`/`DownloadPartResponse` bytes.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `filesDownloadPart`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_files_download_part(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Files download: `GetFileInfo` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `GetFileInfoRequest`/`GetFileInfoResponse` bytes.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `filesGetFileInfo`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_files_get_file_info(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Files upload: `GetUploadStatus` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `GetUploadStatusRequest`/`GetUploadStatusResponse` bytes.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `filesGetUploadStatus`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_files_get_upload_status(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Rust-owned upload (bytes in, `FileInfo` bytes out).
+     *
+     * Minimal pass-through over [`libtinkle::UploadManager`]: preserves the
+     * EXACT `BeginUploadRequest` (incl. `Option` presence) across idempotency
+     * retries, decides SOLELY on `BeginUploadResponse.status`, and verifies
+     * the commit. `sha256` is the optional client declaration (32 bytes);
+     * `None` preserves absence for idempotency. Returns the encoded
+     * `FileInfo` protobuf bytes; hosts decode with their own bindings.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `filesUploadBytes`(`idempotencyKey`: kotlin.String, `data`: kotlin.ByteArray, `fileName`: kotlin.String?, `mimeType`: kotlin.String?, `sha256`: kotlin.ByteArray?, `encrypted`: kotlin.Boolean) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_files_upload_bytes(
+                uniffiHandle,
+
+        FfiConverterString.lower(`idempotencyKey`),
+        FfiConverterByteArray.lower(`data`),
+        FfiConverterOptionalString.lower(`fileName`),
+        FfiConverterOptionalString.lower(`mimeType`),
+        FfiConverterOptionalByteArray.lower(`sha256`),
+        FfiConverterBoolean.lower(`encrypted`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Files upload: `UploadPart` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `UploadPartRequest`/`UploadPartResponse` protobuf bytes.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `filesUploadPart`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_files_upload_part(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Fetch specific messages in one conversation (`GetMessages`).
+     *
+     * `target_kind` is `"user"`/`"room"`/`"chat"`; `message_ids` must be
+     * non-empty positive ids in the same conversation. Large batches are
+     * chunked to the protocol bound (`MAX_MESSAGE_IDS_PER_REQUEST`) and
+     * merged; messages the server cannot disclose are omitted, never
+     * errors. Bodies share the message's stable `accept_seq` token: when
+     * two copies disagree, keep the fresher by later `edit_date`.
+     *
+     * Returns the encoded `GetMessagesResponse` protobuf bytes; hosts
+     * decode with their own generated bindings.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `getMessages`(`targetKind`: kotlin.String, `targetId`: kotlin.Long, `messageIds`: List<kotlin.Long>) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_get_messages(
+                uniffiHandle,
+
+        FfiConverterString.lower(`targetKind`),
+        FfiConverterLong.lower(`targetId`),
+        FfiConverterSequenceLong.lower(`messageIds`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * List retained conversation mutations strictly after one accept
+     * position (`GetTargetChanges`).
+     *
+     * `after_accept_seq` is the exclusive lower bound (zero requests
+     * everything retained); `limit` bounds one page (`0` selects the
+     * deployment default, `1..=500` otherwise). Changes ascend strictly by
+     * `accept_seq`; edited changes carry the current body while
+     * deleted/revoked changes carry identity and kind only.
+     * `more_available` reports continuation: `Some(true)` means request the
+     * next page from `last_accept_seq`; `Some(false)` confirms caught up;
+     * absent is unknown, never caught up.
+     *
+     * Returns the encoded `GetTargetChangesResponse` protobuf bytes; hosts
+     * decode with their own generated bindings.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `getTargetChanges`(`targetKind`: kotlin.String, `targetId`: kotlin.Long, `afterAcceptSeq`: kotlin.Long, `limit`: kotlin.Int) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_get_target_changes(
+                uniffiHandle,
+
+        FfiConverterString.lower(`targetKind`),
+        FfiConverterLong.lower(`targetId`),
+        FfiConverterLong.lower(`afterAcceptSeq`),
+        FfiConverterInt.lower(`limit`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * True while the transport is live (connection exists and its
+     * notification pump has not exited).
+     */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `isConnected`() : kotlin.Boolean {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_is_connected(
+                uniffiHandle,
+
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_i8(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_i8(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_i8(future) },
+        // lift function
+        { FfiConverterBoolean.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+
+    /**
+     * True while [`Self::suspend`] is in effect.
+     */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `isSuspended`() : kotlin.Boolean {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_is_suspended(
+                uniffiHandle,
+
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_i8(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_i8(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_i8(future) },
+        // lift function
+        { FfiConverterBoolean.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+
+    /**
+     * Fetch dialogs. Like [`Self::load_history`], the fetch never touches
+     * accept positions.
+     *
+     * Returns the encoded `GetDialogsResponse` protobuf bytes.
+     * `HydrateCache` also upserts authoritative users/chats plus
+     * authoritative dialog rows.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `loadDialogs`(`request`: FfiDialogsRequest, `policy`: FfiLoadPolicy) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_load_dialogs(
+                uniffiHandle,
+
+        FfiConverterTypeFfiDialogsRequest.lower(`request`),
+        FfiConverterTypeFfiLoadPolicy.lower(`policy`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Fetch message history. History lives outside the reconciliation
+     * journal: the fetch never advances or resets any accept position.
+     * Message bodies ARE cached: `HydrateCache` upserts authoritative
+     * users/chats into the shared SQLite cache and projects message
+     * bodies into message rows committed at the current journal cursor
+     * (the cursor itself is unchanged — history heals the cache without
+     * moving the journal).
+     *
+     * Returns the encoded `GetHistoryResponse` protobuf bytes; hosts
+     * decode with their own generated bindings. `NetworkOnly` returns
+     * bodies without touching the cache.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `loadHistory`(`request`: FfiHistoryRequest, `policy`: FfiLoadPolicy) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_load_history(
+                uniffiHandle,
+
+        FfiConverterTypeFfiHistoryRequest.lower(`request`),
+        FfiConverterTypeFfiLoadPolicy.lower(`policy`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
      * Next sync app event. `None` when the client is closed.
+     *
+     * Reconciliation contract: `ConversationChanged`/`MessagesChanged`
+     * tell the host what to refresh (cache reads or `get_messages`
+     * hydration); `ReconcileFailed`/`CheckpointFailed` are per-target and
+     * recoverable via `reconcile_now` (target status stays `Failed` until
+     * then). There is nothing to acknowledge: positions advance inside the
+     * SDK as journals reconcile.
      */
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `nextEvent`() : FfiSyncEvent? {
@@ -3128,8 +4218,62 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
 
     /**
-     * Reconnect + re-handshake + explicit resubscribe from persisted
-     * cursors (network change / wake from push).
+     * Number of outstanding RPCs on the live connection (zero offline).
+     * Send-state query: a nonzero value after reconnect means results
+     * reported `UNAVAILABLE` with unknown outcome — retry only with the
+     * same `random_id` and fresh correlation.
+     */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `pendingLen`() : kotlin.ULong {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_pending_len(
+                uniffiHandle,
+
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_u64(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_u64(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_u64(future) },
+        // lift function
+        { FfiConverterULong.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+
+    /**
+     * Trigger a reconciliation pass over the tracked conversations now
+     * (journal pages + hydration for anything behind). Notification hints
+     * and reconnects trigger this automatically; call it after the app
+     * returns to the foreground or after handling `ReconcileFailed`.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `reconcileNow`() {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_reconcile_now(
+                uniffiHandle,
+
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_void(future) },
+        // lift function
+        { },
+
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Reconnect + re-handshake + explicit resubscribe from tracked targets
+     * (network change / wake from push).
      */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
@@ -3154,18 +4298,51 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
 
     /**
-     * Minimal write path end-to-end: send a text message to a room.
+     * Clear suspension set by [`Self::suspend`]. The supervisor resumes
+     * reconnecting on its next tick; callers needing immediacy can
+     * `reconnect` directly.
+     */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `resume`() {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_resume(
+                uniffiHandle,
+
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_void(future) },
+        // lift function
+        { },
+
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+
+    /**
+     * Minimal write path end-to-end: send a text message to a conversation.
      * Returns the server-assigned message id.
+     *
+     * `target_id` must be positive; `target_kind` is `"user"` for direct
+     * messages, `"room"`/`"chat"` for groups. `random_id` must be nonzero
+     * (and fit in `i64` — the application operation key for idempotent
+     * retry). The server response must carry a message with a positive id;
+     * a missing or non-positive id is a codec error, never zero.
      */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `sendMessage`(`roomId`: kotlin.Long, `text`: kotlin.String, `randomId`: kotlin.ULong) : kotlin.ULong {
+    override suspend fun `sendMessage`(`targetKind`: kotlin.String, `targetId`: kotlin.Long, `text`: kotlin.String, `randomId`: kotlin.ULong) : kotlin.ULong {
         return uniffiRustCallAsync(
         callWithHandle { uniffiHandle ->
             UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_send_message(
                 uniffiHandle,
 
-        FfiConverterLong.lower(`roomId`),
+        FfiConverterString.lower(`targetKind`),
+        FfiConverterLong.lower(`targetId`),
         FfiConverterString.lower(`text`),
         FfiConverterULong.lower(`randomId`),
             )
@@ -3184,6 +4361,7 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
     /**
      * Set the authenticated principal from a known user id.
      */
+    @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `setPrincipalUserId`(`userId`: kotlin.Long) {
         return uniffiRustCallAsync(
@@ -3201,13 +4379,14 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
         { },
 
         // Error FFI converter
-        UniffiNullRustCallStatusErrorHandler,
+        FfiException.ErrorHandler,
     )
     }
 
 
     /**
-     * Graceful shutdown: stop RPCs, tear down transport.
+     * Graceful shutdown: stop RPCs, tear down transport. Equivalent to
+     * [`Self::stop`].
      */
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `shutdown`() {
@@ -3231,18 +4410,26 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
 
     /**
-     * Subscribe with durable cursor recovery. Returns the confirmation
-     * (interests registered, not replay completion).
+     * Supervised lifecycle: connect (if needed), subscribe, and start the
+     * reconciliation supervisor, which owns automatic re-reconciliation
+     * and reconnection from here on. The host only consumes `next_event()`;
+     * hints, dead transports, and per-target failures are handled inside
+     * the SDK and reported as events + target status.
+     *
+     * Idempotent: concurrent callers share the single supervisor and get
+     * the initial establishment result. Call `stop()` (or `shutdown()`)
+     * to shut down; `connect`/`subscribe`/`reconnect` remain as
+     * low-level primitives for manual control.
      */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `subscribe`(`rooms`: List<RoomSub>, `watch`: List<kotlin.Long>) : FfiSubscribeResponse {
+    override suspend fun `start`(`targets`: List<TargetSub>, `watch`: List<kotlin.Long>) : FfiSubscribeResponse {
         return uniffiRustCallAsync(
         callWithHandle { uniffiHandle ->
-            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_subscribe(
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_start(
                 uniffiHandle,
 
-        FfiConverterSequenceTypeRoomSub.lower(`rooms`),
+        FfiConverterSequenceTypeTargetSub.lower(`targets`),
         FfiConverterSequenceLong.lower(`watch`),
             )
         },
@@ -3258,7 +4445,62 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
 
     /**
-     * Background suspension: graceful close, durable cursors kept.
+     * Stop the sync supervisor (if running) and tear down the connection.
+     * Idempotent. Supervised apps call this instead of `shutdown`;
+     * both tear down the transport, `stop` names the supervisor path.
+     */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stop`() {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stop(
+                uniffiHandle,
+
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_void(future) },
+        // lift function
+        { },
+
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+
+    /**
+     * Subscribe with durable per-target reconciliation. Returns the
+     * confirmation (tracked conversation keys, not reconciliation
+     * completion: journals reconcile in the background and report via
+     * `next_event` + target status).
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `subscribe`(`targets`: List<TargetSub>, `watch`: List<kotlin.Long>) : FfiSubscribeResponse {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_subscribe(
+                uniffiHandle,
+
+        FfiConverterSequenceTypeTargetSub.lower(`targets`),
+        FfiConverterSequenceLong.lower(`watch`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeFfiSubscribeResponse.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Background suspension: graceful close, durable positions kept.
      */
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `suspend`() {
@@ -3281,6 +4523,236 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
     }
 
 
+    /**
+     * Last applied accept position for a tracked conversation
+     * (`target:user:<id>` / `target:room:<id>`). `None` when untracked.
+     * Authoritative for UI progress: informational events may drop under
+     * pressure, positions do not.
+     */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `targetCursor`(`targetKey`: kotlin.String) : kotlin.Long? {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_target_cursor(
+                uniffiHandle,
+
+        FfiConverterString.lower(`targetKey`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalLong.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+
+    /**
+     * Per-target reconciliation status. `None` when untracked (never
+     * subscribed or since removed). Poll this instead of inferring demand
+     * from events: `Reconciling` means a journal page run is in flight or
+     * demanded, `Failed` is parked until `reconcile_now`.
+     */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `targetStatus`(`targetKey`: kotlin.String) : FfiReconcileStatus? {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_target_status(
+                uniffiHandle,
+
+        FfiConverterString.lower(`targetKey`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalTypeFfiReconcileStatus.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+
+    /**
+     * Canonical keys of the tracked conversations.
+     */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `trackedTargets`() : List<kotlin.String> {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_tracked_targets(
+                uniffiHandle,
+
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceString.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+
+    /**
+     * Bounded push wake: parse-then-commit without the foreground
+     * supervisor or socket.
+     *
+     * Drives `libtinkle::PushManager` on this client's shared SQLite file
+     * with a bounded executor (`timeout_secs`, `0` selects the 25s
+     * default; capped at 120s): ensures a connection independent of any
+     * foreground supervisor, fetches authoritative bodies via
+     * `get_messages`, commits through the shared ingest, reconciles
+     * mutations within the remaining budget, and completes the durable
+     * job exactly once.
+     *
+     * Cancellation-safe: dropping the foreign future leaves the durable
+     * job `claimed`; the next wake requeues stale claims and retries.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `handlePushWake`(`envelope`: FfiPushEnvelope, `timeoutSecs`: kotlin.ULong) : FfiPushOutcome {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_handle_push_wake(
+                uniffiHandle,
+
+        FfiConverterTypeFfiPushEnvelope.lower(`envelope`),
+        FfiConverterULong.lower(`timeoutSecs`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeFfiPushOutcome.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Logout + local cleanup: best-effort `AccountService/Logout`, then
+     * wipes the principal's SQLite rows, drops catch-up demand, and
+     * resets the session so in-flight push/reconcile work fences out.
+     * Returns the server's `logged_out` flag (`false` when the RPC was
+     * skipped or failed; the local wipe still happened).
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `logout`() : kotlin.Boolean {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_logout(
+                uniffiHandle,
+
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_i8(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_i8(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_i8(future) },
+        // lift function
+        { FfiConverterBoolean.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Foreground open-event hook: navigate to the envelope's target and
+     * refresh it. Returns the canonical target key when the envelope
+     * routes, after running a bounded reconcile pass for that
+     * conversation (`None` when the envelope carries no routing — show
+     * the conversation list instead).
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `openPushNotification`(`envelope`: FfiPushEnvelope) : kotlin.String? {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_open_push_notification(
+                uniffiHandle,
+
+        FfiConverterTypeFfiPushEnvelope.lower(`envelope`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalString.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Register a push token (`AccountService/RegisterPush`).
+     *
+     * `token_type` is `"apns"`, `"apns_voip"`, or `"fcm"` (unknown
+     * strings are codec errors, never guessed). Call after sign-in and
+     * on every rotation; the server keeps the latest token per device.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `registerPush`(`token`: kotlin.String, `tokenType`: kotlin.String, `langCode`: kotlin.String) {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_register_push(
+                uniffiHandle,
+
+        FfiConverterString.lower(`token`),
+        FfiConverterString.lower(`tokenType`),
+        FfiConverterString.lower(`langCode`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_void(future) },
+        // lift function
+        { },
+
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Unregister a push token (`AccountService/UnregisterPush`).
+     * Returns the server's `removed` flag. Call BEFORE `logout`.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `unregisterPush`(`token`: kotlin.String) : kotlin.Boolean {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_unregister_push(
+                uniffiHandle,
+
+        FfiConverterString.lower(`token`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_i8(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_i8(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_i8(future) },
+        // lift function
+        { FfiConverterBoolean.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
 
 
 
@@ -3289,12 +4761,15 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
     companion object {
 
     /**
-     * Create a client sharing one native SQLite file. Rust applies incoming
-     * updates and commits cache + checkpoint atomically, then emits
-     * `Applied`; UI reads the shared cache instead of acknowledging.
-     */ fun `newSqlite`(`config`: ClientConfigFfi, `credential`: kotlin.String, `storage`: SqliteStorage): TinkleClient {
+     * Create a client sharing one native SQLite file. Rust reconciles
+     * journals and commits cache + accept positions atomically, then emits
+     * `ConversationChanged`/`MessagesChanged`; UI reads the shared cache.
+     *
+     * Fails fast on invalid `grpc_endpoint` like [`Self::new`].
+     */
+    @Throws(FfiException::class) fun `newSqlite`(`config`: ClientConfigFfi, `credential`: kotlin.String, `storage`: SqliteStorage): TinkleClient {
             return FfiConverterTypeTinkleClient.lift(
-    uniffiRustCall() { _status ->
+    uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.uniffi_tinkle_ffi_fn_constructor_tinkleclient_new_sqlite(
 
 
@@ -3339,6 +4814,16 @@ public object FfiConverterTypeTinkleClient: FfiConverter<TinkleClient, Long> {
 
 /**
  * Record mirrored into [`libtinkle::ClientConfig`]. All fields owned.
+ *
+ * `grpc_endpoint` selects the direct-unary transport for reconciliation
+ * RPCs (`GetMessages`/`GetTargetChanges` over gRPC instead of the default
+ * Syntra unary RPC on the live connection). It is validated fail-fast by
+ * [`TinkleClient::new`] and [`TinkleClient::new_sqlite`]: a
+ * non-blank-but-invalid endpoint (missing scheme, non-`https` without
+ * `allow_insecure`) returns [`FfiError::Internal`] at construction instead
+ * of surfacing as a retried network failure at reconciliation time.
+ * `None` (or blank, treated as unset for backward compatibility) keeps the
+ * default Syntra unary path.
  */
 data class ClientConfigFfi (
     /**
@@ -3357,7 +4842,7 @@ data class ClientConfigFfi (
     var `userAgent`: kotlin.String?
     ,
     /**
-     * gRPC base endpoint for `ReadUpdates` catch-up.
+     * Direct-unary gRPC base endpoint for reconciliation RPCs.
      */
     var `grpcEndpoint`: kotlin.String?
 
@@ -3419,6 +4904,12 @@ data class FfiDialog (
     var `pinned`: kotlin.Boolean
     ,
     var `dialogProto`: kotlin.ByteArray
+    ,
+    /**
+     * True when an invalidation committed with the checkpoint and no
+     * authoritative refresh has cleared it yet; the host should refresh.
+     */
+    var `readStatePending`: kotlin.Boolean
 
 ){
 
@@ -3443,6 +4934,7 @@ public object FfiConverterTypeFfiDialog: FfiConverterRustBuffer<FfiDialog> {
             FfiConverterLong.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterByteArray.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
@@ -3454,7 +4946,8 @@ public object FfiConverterTypeFfiDialog: FfiConverterRustBuffer<FfiDialog> {
             FfiConverterLong.allocationSize(value.`readInboxMaxId`) +
             FfiConverterLong.allocationSize(value.`readOutboxMaxId`) +
             FfiConverterBoolean.allocationSize(value.`pinned`) +
-            FfiConverterByteArray.allocationSize(value.`dialogProto`)
+            FfiConverterByteArray.allocationSize(value.`dialogProto`) +
+            FfiConverterBoolean.allocationSize(value.`readStatePending`)
     )
 
     override fun write(value: FfiDialog, buf: ByteBuffer) {
@@ -3466,6 +4959,141 @@ public object FfiConverterTypeFfiDialog: FfiConverterRustBuffer<FfiDialog> {
             FfiConverterLong.write(value.`readOutboxMaxId`, buf)
             FfiConverterBoolean.write(value.`pinned`, buf)
             FfiConverterByteArray.write(value.`dialogProto`, buf)
+            FfiConverterBoolean.write(value.`readStatePending`, buf)
+    }
+}
+
+
+
+/**
+ * Dialog list request (mirrors `GetDialogsRequest` without proto types).
+ *
+ * `offset_peer_id` keeps the numeric peer vocabulary: it is a raw target
+ * id used together with `offset_date` for stable cursor pagination, not a
+ * `Target` kind/id pair.
+ */
+data class FfiDialogsRequest (
+    var `limit`: kotlin.Int?
+    ,
+    var `offsetDate`: kotlin.Int?
+    ,
+    var `offsetPeerId`: kotlin.Long?
+    ,
+    var `cursor`: kotlin.String?
+    ,
+    var `spaceId`: kotlin.Long?
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiDialogsRequest: FfiConverterRustBuffer<FfiDialogsRequest> {
+    override fun read(buf: ByteBuffer): FfiDialogsRequest {
+        return FfiDialogsRequest(
+            FfiConverterOptionalInt.read(buf),
+            FfiConverterOptionalInt.read(buf),
+            FfiConverterOptionalLong.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalLong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiDialogsRequest) = (
+            FfiConverterOptionalInt.allocationSize(value.`limit`) +
+            FfiConverterOptionalInt.allocationSize(value.`offsetDate`) +
+            FfiConverterOptionalLong.allocationSize(value.`offsetPeerId`) +
+            FfiConverterOptionalString.allocationSize(value.`cursor`) +
+            FfiConverterOptionalLong.allocationSize(value.`spaceId`)
+    )
+
+    override fun write(value: FfiDialogsRequest, buf: ByteBuffer) {
+            FfiConverterOptionalInt.write(value.`limit`, buf)
+            FfiConverterOptionalInt.write(value.`offsetDate`, buf)
+            FfiConverterOptionalLong.write(value.`offsetPeerId`, buf)
+            FfiConverterOptionalString.write(value.`cursor`, buf)
+            FfiConverterOptionalLong.write(value.`spaceId`, buf)
+    }
+}
+
+
+
+/**
+ * History page request (mirrors `GetHistoryRequest` without proto types).
+ */
+data class FfiHistoryRequest (
+    /**
+     * `"user"` for direct messages, `"room"`/`"chat"` for groups.
+     */
+    var `targetKind`: kotlin.String
+    ,
+    var `targetId`: kotlin.Long
+    ,
+    var `limit`: kotlin.Int
+    ,
+    var `offsetId`: kotlin.Long?
+    ,
+    var `addOffset`: kotlin.Int
+    ,
+    var `maxId`: kotlin.Long?
+    ,
+    var `minId`: kotlin.Long?
+    ,
+    var `offsetDate`: kotlin.Int?
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiHistoryRequest: FfiConverterRustBuffer<FfiHistoryRequest> {
+    override fun read(buf: ByteBuffer): FfiHistoryRequest {
+        return FfiHistoryRequest(
+            FfiConverterString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterInt.read(buf),
+            FfiConverterOptionalLong.read(buf),
+            FfiConverterInt.read(buf),
+            FfiConverterOptionalLong.read(buf),
+            FfiConverterOptionalLong.read(buf),
+            FfiConverterOptionalInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiHistoryRequest) = (
+            FfiConverterString.allocationSize(value.`targetKind`) +
+            FfiConverterLong.allocationSize(value.`targetId`) +
+            FfiConverterInt.allocationSize(value.`limit`) +
+            FfiConverterOptionalLong.allocationSize(value.`offsetId`) +
+            FfiConverterInt.allocationSize(value.`addOffset`) +
+            FfiConverterOptionalLong.allocationSize(value.`maxId`) +
+            FfiConverterOptionalLong.allocationSize(value.`minId`) +
+            FfiConverterOptionalInt.allocationSize(value.`offsetDate`)
+    )
+
+    override fun write(value: FfiHistoryRequest, buf: ByteBuffer) {
+            FfiConverterString.write(value.`targetKind`, buf)
+            FfiConverterLong.write(value.`targetId`, buf)
+            FfiConverterInt.write(value.`limit`, buf)
+            FfiConverterOptionalLong.write(value.`offsetId`, buf)
+            FfiConverterInt.write(value.`addOffset`, buf)
+            FfiConverterOptionalLong.write(value.`maxId`, buf)
+            FfiConverterOptionalLong.write(value.`minId`, buf)
+            FfiConverterOptionalInt.write(value.`offsetDate`, buf)
     }
 }
 
@@ -3488,6 +5116,12 @@ data class FfiMessage (
     var `body`: kotlin.String
     ,
     var `messageProto`: kotlin.ByteArray
+    ,
+    /**
+     * The message's own `accept_seq` token (`None` for legacy rows accepted
+     * before the token was introduced; absent tokens never vote on dedup).
+     */
+    var `acceptSeq`: kotlin.Long?
 
 ){
 
@@ -3511,6 +5145,7 @@ public object FfiConverterTypeFfiMessage: FfiConverterRustBuffer<FfiMessage> {
             FfiConverterLong.read(buf),
             FfiConverterString.read(buf),
             FfiConverterByteArray.read(buf),
+            FfiConverterOptionalLong.read(buf),
         )
     }
 
@@ -3521,7 +5156,8 @@ public object FfiConverterTypeFfiMessage: FfiConverterRustBuffer<FfiMessage> {
             FfiConverterLong.allocationSize(value.`peerId`) +
             FfiConverterLong.allocationSize(value.`fromId`) +
             FfiConverterString.allocationSize(value.`body`) +
-            FfiConverterByteArray.allocationSize(value.`messageProto`)
+            FfiConverterByteArray.allocationSize(value.`messageProto`) +
+            FfiConverterOptionalLong.allocationSize(value.`acceptSeq`)
     )
 
     override fun write(value: FfiMessage, buf: ByteBuffer) {
@@ -3532,20 +5168,82 @@ public object FfiConverterTypeFfiMessage: FfiConverterRustBuffer<FfiMessage> {
             FfiConverterLong.write(value.`fromId`, buf)
             FfiConverterString.write(value.`body`, buf)
             FfiConverterByteArray.write(value.`messageProto`, buf)
+            FfiConverterOptionalLong.write(value.`acceptSeq`, buf)
     }
 }
 
 
 
 /**
- * Subscribe confirmation.
+ * FFI-safe push envelope (mirrors `libtinkle::PushEnvelope`).
+ *
+ * All ids accept decimal strings on the wire (parsed in
+ * `libtinkle::parse_push_payload`); this record already carries `i64`.
+ */
+data class FfiPushEnvelope (
+    var `version`: kotlin.UInt
+    ,
+    var `accountUserId`: kotlin.Long?
+    ,
+    var `targetKind`: kotlin.String?
+    ,
+    var `targetId`: kotlin.Long?
+    ,
+    var `messageIds`: List<kotlin.Long>
+    ,
+    var `eventId`: kotlin.String
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiPushEnvelope: FfiConverterRustBuffer<FfiPushEnvelope> {
+    override fun read(buf: ByteBuffer): FfiPushEnvelope {
+        return FfiPushEnvelope(
+            FfiConverterUInt.read(buf),
+            FfiConverterOptionalLong.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalLong.read(buf),
+            FfiConverterSequenceLong.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiPushEnvelope) = (
+            FfiConverterUInt.allocationSize(value.`version`) +
+            FfiConverterOptionalLong.allocationSize(value.`accountUserId`) +
+            FfiConverterOptionalString.allocationSize(value.`targetKind`) +
+            FfiConverterOptionalLong.allocationSize(value.`targetId`) +
+            FfiConverterSequenceLong.allocationSize(value.`messageIds`) +
+            FfiConverterString.allocationSize(value.`eventId`)
+    )
+
+    override fun write(value: FfiPushEnvelope, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`version`, buf)
+            FfiConverterOptionalLong.write(value.`accountUserId`, buf)
+            FfiConverterOptionalString.write(value.`targetKind`, buf)
+            FfiConverterOptionalLong.write(value.`targetId`, buf)
+            FfiConverterSequenceLong.write(value.`messageIds`, buf)
+            FfiConverterString.write(value.`eventId`, buf)
+    }
+}
+
+
+
+/**
+ * Subscribe confirmation: the canonical keys of the tracked
+ * conversations (`target:user:<id>` / `target:room:<id>`).
  */
 data class FfiSubscribeResponse (
-    var `stream`: kotlin.String
-    ,
-    var `afterCursor`: kotlin.ULong
-    ,
-    var `head`: kotlin.ULong?
+    var `targets`: List<kotlin.String>
 
 ){
 
@@ -3562,36 +5260,33 @@ data class FfiSubscribeResponse (
 public object FfiConverterTypeFfiSubscribeResponse: FfiConverterRustBuffer<FfiSubscribeResponse> {
     override fun read(buf: ByteBuffer): FfiSubscribeResponse {
         return FfiSubscribeResponse(
-            FfiConverterString.read(buf),
-            FfiConverterULong.read(buf),
-            FfiConverterOptionalULong.read(buf),
+            FfiConverterSequenceString.read(buf),
         )
     }
 
     override fun allocationSize(value: FfiSubscribeResponse) = (
-            FfiConverterString.allocationSize(value.`stream`) +
-            FfiConverterULong.allocationSize(value.`afterCursor`) +
-            FfiConverterOptionalULong.allocationSize(value.`head`)
+            FfiConverterSequenceString.allocationSize(value.`targets`)
     )
 
     override fun write(value: FfiSubscribeResponse, buf: ByteBuffer) {
-            FfiConverterString.write(value.`stream`, buf)
-            FfiConverterULong.write(value.`afterCursor`, buf)
-            FfiConverterOptionalULong.write(value.`head`, buf)
+            FfiConverterSequenceString.write(value.`targets`, buf)
     }
 }
 
 
 
 /**
- * One room interest for [`TinkleClient::subscribe`].
+ * One conversation interest for [`TinkleClient::subscribe`] /
+ * [`TinkleClient::start`].
  *
- * A record (not a `(i64, u64)` tuple) because UniFFI has no tuple type.
+ * A record (not a tuple) because UniFFI has no tuple type.
+ * `target_kind` is `"user"` for direct messages, `"room"`/`"chat"` for
+ * group conversations; `target_id` must be positive.
  */
-data class RoomSub (
-    var `roomId`: kotlin.Long
+data class TargetSub (
+    var `targetKind`: kotlin.String
     ,
-    var `afterCursor`: kotlin.ULong
+    var `targetId`: kotlin.Long
 
 ){
 
@@ -3605,22 +5300,22 @@ data class RoomSub (
 /**
  * @suppress
  */
-public object FfiConverterTypeRoomSub: FfiConverterRustBuffer<RoomSub> {
-    override fun read(buf: ByteBuffer): RoomSub {
-        return RoomSub(
+public object FfiConverterTypeTargetSub: FfiConverterRustBuffer<TargetSub> {
+    override fun read(buf: ByteBuffer): TargetSub {
+        return TargetSub(
+            FfiConverterString.read(buf),
             FfiConverterLong.read(buf),
-            FfiConverterULong.read(buf),
         )
     }
 
-    override fun allocationSize(value: RoomSub) = (
-            FfiConverterLong.allocationSize(value.`roomId`) +
-            FfiConverterULong.allocationSize(value.`afterCursor`)
+    override fun allocationSize(value: TargetSub) = (
+            FfiConverterString.allocationSize(value.`targetKind`) +
+            FfiConverterLong.allocationSize(value.`targetId`)
     )
 
-    override fun write(value: RoomSub, buf: ByteBuffer) {
-            FfiConverterLong.write(value.`roomId`, buf)
-            FfiConverterULong.write(value.`afterCursor`, buf)
+    override fun write(value: TargetSub, buf: ByteBuffer) {
+            FfiConverterString.write(value.`targetKind`, buf)
+            FfiConverterLong.write(value.`targetId`, buf)
     }
 }
 
@@ -3702,6 +5397,30 @@ sealed class FfiException: kotlin.Exception() {
             get() = "v1=${ v1 }"
     }
 
+    /**
+     * Authentication/authorization failure. Re-authenticate (or rotate the
+     * credential); never retry the same bytes in a tight loop.
+     */
+    class Auth(
+
+        val v1: kotlin.String
+        ) : FfiException() {
+        override val message
+            get() = "v1=${ v1 }"
+    }
+
+    /**
+     * Transient failure: bounded retry with backoff is safe. Reconciliation
+     * reads are idempotent; sends still require their `random_id` policy.
+     */
+    class Retryable(
+
+        val v1: kotlin.String
+        ) : FfiException() {
+        override val message
+            get() = "v1=${ v1 }"
+    }
+
 
 
 
@@ -3738,6 +5457,12 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
                 )
             8 -> FfiException.ReconnectExhausted()
             9 -> FfiException.Internal(
+                FfiConverterString.read(buf),
+                )
+            10 -> FfiException.Auth(
+                FfiConverterString.read(buf),
+                )
+            11 -> FfiException.Retryable(
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
@@ -3783,6 +5508,16 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
                 4UL
             )
             is FfiException.Internal -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.v1)
+            )
+            is FfiException.Auth -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.v1)
+            )
+            is FfiException.Retryable -> (
                 // Add the size for the Int that specifies the variant plus the size needed for all fields
                 4UL
                 + FfiConverterString.allocationSize(value.v1)
@@ -3833,6 +5568,16 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
                 FfiConverterString.write(value.v1, buf)
                 Unit
             }
+            is FfiException.Auth -> {
+                buf.putInt(10)
+                FfiConverterString.write(value.v1, buf)
+                Unit
+            }
+            is FfiException.Retryable -> {
+                buf.putInt(11)
+                FfiConverterString.write(value.v1, buf)
+                Unit
+            }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
     }
 
@@ -3841,15 +5586,231 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
 
 
 /**
- * App-visible sync events. Update payloads cross as protobuf bytes;
- * hosts decode `tinkle.v1.Update` with their own generated bindings.
+ * Cache/network policy for [`TinkleClient::load_history`] and
+ * [`TinkleClient::load_dialogs`].
+ *
+ * History and dialogs live outside the reconciliation journal: neither
+ * policy advances or resets any accept-seq position. `HydrateCache`
+ * additionally upserts the authoritative snapshot into the shared
+ * SQLite cache (users/chats, plus authoritative dialogs); `NetworkOnly`
+ * returns the snapshot without touching the cache.
+ */
+
+enum class FfiLoadPolicy {
+
+    NETWORK_ONLY,
+    HYDRATE_CACHE;
+
+
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiLoadPolicy: FfiConverterRustBuffer<FfiLoadPolicy> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiLoadPolicy.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiLoadPolicy) = 4UL
+
+    override fun write(value: FfiLoadPolicy, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * FFI-safe push wake outcome (mirrors `libtinkle::PushOutcome`).
+ */
+sealed class FfiPushOutcome {
+
+    /**
+     * Bodies are durable in SQLite (plus best-effort reconcile).
+     */
+    data class Committed(
+        val `targetKey`: kotlin.String,
+        val `messageIds`: List<kotlin.Long>) : FfiPushOutcome()
+
+    {
+
+
+        companion object
+    }
+
+    /**
+     * Not yet committed; the durable job is (re)queued for retry.
+     */
+    data class Deferred(
+        val `reason`: kotlin.String) : FfiPushOutcome()
+
+    {
+
+
+        companion object
+    }
+
+    /**
+     * Terminal for this wake (never retries with the same inputs).
+     */
+    data class Failed(
+        val `reason`: kotlin.String) : FfiPushOutcome()
+
+    {
+
+
+        companion object
+    }
+
+
+
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiPushOutcome : FfiConverterRustBuffer<FfiPushOutcome>{
+    override fun read(buf: ByteBuffer): FfiPushOutcome {
+        return when(buf.getInt()) {
+            1 -> FfiPushOutcome.Committed(
+                FfiConverterString.read(buf),
+                FfiConverterSequenceLong.read(buf),
+                )
+            2 -> FfiPushOutcome.Deferred(
+                FfiConverterString.read(buf),
+                )
+            3 -> FfiPushOutcome.Failed(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: FfiPushOutcome): ULong = when(value) {
+        is FfiPushOutcome.Committed -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`targetKey`)
+                + FfiConverterSequenceLong.allocationSize(value.`messageIds`)
+            )
+        }
+        is FfiPushOutcome.Deferred -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+        is FfiPushOutcome.Failed -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+    }
+
+    override fun write(value: FfiPushOutcome, buf: ByteBuffer) {
+        when(value) {
+            is FfiPushOutcome.Committed -> {
+                buf.putInt(1)
+                FfiConverterString.write(value.`targetKey`, buf)
+                FfiConverterSequenceLong.write(value.`messageIds`, buf)
+                Unit
+            }
+            is FfiPushOutcome.Deferred -> {
+                buf.putInt(2)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+            is FfiPushOutcome.Failed -> {
+                buf.putInt(3)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+/**
+ * Per-target reconciliation status (see `libtinkle::ReconcileStatus`).
+ *
+ * `None` from [`TinkleClient::target_status`] means untracked (never
+ * subscribed or since removed); any returned variant is the live
+ * per-target state.
+ */
+
+enum class FfiReconcileStatus {
+
+    IDLE,
+    RECONCILING,
+    FAILED;
+
+
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiReconcileStatus: FfiConverterRustBuffer<FfiReconcileStatus> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiReconcileStatus.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiReconcileStatus) = 4UL
+
+    override fun write(value: FfiReconcileStatus, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * App-visible sync events.
+ *
+ * Journal payloads cross as protobuf bytes where noted; hosts decode with
+ * their own generated bindings. Reconciliation progress is queryable via
+ * `target_cursor`/`target_status` instead of inferring it from events.
  */
 sealed class FfiSyncEvent {
 
-    data class UpdateReady(
-        val `stream`: kotlin.String,
-        val `cursor`: kotlin.ULong,
-        val `updateProto`: kotlin.ByteArray) : FfiSyncEvent()
+    /**
+     * One conversation reconciled forward: `applied_accept_seq` is the new
+     * per-target accept position. Refresh the conversation from the cache
+     * (or hydrate via `get_messages`).
+     */
+    data class ConversationChanged(
+        val `targetKey`: kotlin.String,
+        val `appliedAcceptSeq`: kotlin.Long) : FfiSyncEvent()
 
     {
 
@@ -3857,9 +5818,14 @@ sealed class FfiSyncEvent {
         companion object
     }
 
-    data class Applied(
-        val `stream`: kotlin.String,
-        val `cursor`: kotlin.ULong) : FfiSyncEvent()
+    /**
+     * Fresh bodies arrived for these message ids in one conversation
+     * (send reconciliation / hydration). Fetch via `get_messages` or read
+     * the cache.
+     */
+    data class MessagesChanged(
+        val `targetKey`: kotlin.String,
+        val `messageIds`: List<kotlin.Long>) : FfiSyncEvent()
 
     {
 
@@ -3867,9 +5833,11 @@ sealed class FfiSyncEvent {
         companion object
     }
 
-    data class Duplicate(
-        val `stream`: kotlin.String,
-        val `cursor`: kotlin.ULong) : FfiSyncEvent()
+    /**
+     * The conversation is gone (deleted/revoked scope). Drop cached rows.
+     */
+    data class ConversationRemoved(
+        val `targetKey`: kotlin.String) : FfiSyncEvent()
 
     {
 
@@ -3877,21 +5845,13 @@ sealed class FfiSyncEvent {
         companion object
     }
 
-    data class Gap(
-        val `stream`: kotlin.String,
-        val `expected`: kotlin.ULong,
-        val `got`: kotlin.ULong) : FfiSyncEvent()
-
-    {
-
-
-        companion object
-    }
-
-    data class Stale(
-        val `stream`: kotlin.String,
-        val `applied`: kotlin.ULong,
-        val `got`: kotlin.ULong) : FfiSyncEvent()
+    /**
+     * Reconciliation for one conversation failed and is parked in `Failed`
+     * status; `error` is diagnostic. Retry via `reconcile_now`.
+     */
+    data class ReconcileFailed(
+        val `targetKey`: kotlin.String,
+        val `error`: kotlin.String) : FfiSyncEvent()
 
     {
 
@@ -3910,29 +5870,9 @@ sealed class FfiSyncEvent {
         companion object
     }
 
-    data class Progress(
-        val `stream`: kotlin.String,
-        val `head`: kotlin.ULong?) : FfiSyncEvent()
-
-    {
-
-
-        companion object
-    }
-
-    data class RebuildRequired(
-        val `stream`: kotlin.String,
-        val `head`: kotlin.ULong?) : FfiSyncEvent()
-
-    {
-
-
-        companion object
-    }
-
     data class CheckpointFailed(
-        val `stream`: kotlin.String,
-        val `cursor`: kotlin.ULong,
+        val `targetKey`: kotlin.String,
+        val `acceptSeq`: kotlin.Long,
         val `error`: kotlin.String) : FfiSyncEvent()
 
     {
@@ -3957,45 +5897,29 @@ sealed class FfiSyncEvent {
 public object FfiConverterTypeFfiSyncEvent : FfiConverterRustBuffer<FfiSyncEvent>{
     override fun read(buf: ByteBuffer): FfiSyncEvent {
         return when(buf.getInt()) {
-            1 -> FfiSyncEvent.UpdateReady(
+            1 -> FfiSyncEvent.ConversationChanged(
                 FfiConverterString.read(buf),
-                FfiConverterULong.read(buf),
-                FfiConverterByteArray.read(buf),
+                FfiConverterLong.read(buf),
                 )
-            2 -> FfiSyncEvent.Applied(
+            2 -> FfiSyncEvent.MessagesChanged(
                 FfiConverterString.read(buf),
-                FfiConverterULong.read(buf),
+                FfiConverterSequenceLong.read(buf),
                 )
-            3 -> FfiSyncEvent.Duplicate(
+            3 -> FfiSyncEvent.ConversationRemoved(
                 FfiConverterString.read(buf),
-                FfiConverterULong.read(buf),
                 )
-            4 -> FfiSyncEvent.Gap(
+            4 -> FfiSyncEvent.ReconcileFailed(
                 FfiConverterString.read(buf),
-                FfiConverterULong.read(buf),
-                FfiConverterULong.read(buf),
-                )
-            5 -> FfiSyncEvent.Stale(
                 FfiConverterString.read(buf),
-                FfiConverterULong.read(buf),
-                FfiConverterULong.read(buf),
                 )
-            6 -> FfiSyncEvent.Connectivity(
+            5 -> FfiSyncEvent.Connectivity(
                 FfiConverterLong.read(buf),
                 FfiConverterBoolean.read(buf),
                 FfiConverterBoolean.read(buf),
                 )
-            7 -> FfiSyncEvent.Progress(
+            6 -> FfiSyncEvent.CheckpointFailed(
                 FfiConverterString.read(buf),
-                FfiConverterOptionalULong.read(buf),
-                )
-            8 -> FfiSyncEvent.RebuildRequired(
-                FfiConverterString.read(buf),
-                FfiConverterOptionalULong.read(buf),
-                )
-            9 -> FfiSyncEvent.CheckpointFailed(
-                FfiConverterString.read(buf),
-                FfiConverterULong.read(buf),
+                FfiConverterLong.read(buf),
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
@@ -4003,47 +5927,35 @@ public object FfiConverterTypeFfiSyncEvent : FfiConverterRustBuffer<FfiSyncEvent
     }
 
     override fun allocationSize(value: FfiSyncEvent): ULong = when(value) {
-        is FfiSyncEvent.UpdateReady -> {
+        is FfiSyncEvent.ConversationChanged -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
-                + FfiConverterString.allocationSize(value.`stream`)
-                + FfiConverterULong.allocationSize(value.`cursor`)
-                + FfiConverterByteArray.allocationSize(value.`updateProto`)
+                + FfiConverterString.allocationSize(value.`targetKey`)
+                + FfiConverterLong.allocationSize(value.`appliedAcceptSeq`)
             )
         }
-        is FfiSyncEvent.Applied -> {
+        is FfiSyncEvent.MessagesChanged -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
-                + FfiConverterString.allocationSize(value.`stream`)
-                + FfiConverterULong.allocationSize(value.`cursor`)
+                + FfiConverterString.allocationSize(value.`targetKey`)
+                + FfiConverterSequenceLong.allocationSize(value.`messageIds`)
             )
         }
-        is FfiSyncEvent.Duplicate -> {
+        is FfiSyncEvent.ConversationRemoved -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
-                + FfiConverterString.allocationSize(value.`stream`)
-                + FfiConverterULong.allocationSize(value.`cursor`)
+                + FfiConverterString.allocationSize(value.`targetKey`)
             )
         }
-        is FfiSyncEvent.Gap -> {
+        is FfiSyncEvent.ReconcileFailed -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
-                + FfiConverterString.allocationSize(value.`stream`)
-                + FfiConverterULong.allocationSize(value.`expected`)
-                + FfiConverterULong.allocationSize(value.`got`)
-            )
-        }
-        is FfiSyncEvent.Stale -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-                + FfiConverterString.allocationSize(value.`stream`)
-                + FfiConverterULong.allocationSize(value.`applied`)
-                + FfiConverterULong.allocationSize(value.`got`)
+                + FfiConverterString.allocationSize(value.`targetKey`)
+                + FfiConverterString.allocationSize(value.`error`)
             )
         }
         is FfiSyncEvent.Connectivity -> {
@@ -4055,28 +5967,12 @@ public object FfiConverterTypeFfiSyncEvent : FfiConverterRustBuffer<FfiSyncEvent
                 + FfiConverterBoolean.allocationSize(value.`known`)
             )
         }
-        is FfiSyncEvent.Progress -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-                + FfiConverterString.allocationSize(value.`stream`)
-                + FfiConverterOptionalULong.allocationSize(value.`head`)
-            )
-        }
-        is FfiSyncEvent.RebuildRequired -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-                + FfiConverterString.allocationSize(value.`stream`)
-                + FfiConverterOptionalULong.allocationSize(value.`head`)
-            )
-        }
         is FfiSyncEvent.CheckpointFailed -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
-                + FfiConverterString.allocationSize(value.`stream`)
-                + FfiConverterULong.allocationSize(value.`cursor`)
+                + FfiConverterString.allocationSize(value.`targetKey`)
+                + FfiConverterLong.allocationSize(value.`acceptSeq`)
                 + FfiConverterString.allocationSize(value.`error`)
             )
         }
@@ -4084,62 +5980,40 @@ public object FfiConverterTypeFfiSyncEvent : FfiConverterRustBuffer<FfiSyncEvent
 
     override fun write(value: FfiSyncEvent, buf: ByteBuffer) {
         when(value) {
-            is FfiSyncEvent.UpdateReady -> {
+            is FfiSyncEvent.ConversationChanged -> {
                 buf.putInt(1)
-                FfiConverterString.write(value.`stream`, buf)
-                FfiConverterULong.write(value.`cursor`, buf)
-                FfiConverterByteArray.write(value.`updateProto`, buf)
+                FfiConverterString.write(value.`targetKey`, buf)
+                FfiConverterLong.write(value.`appliedAcceptSeq`, buf)
                 Unit
             }
-            is FfiSyncEvent.Applied -> {
+            is FfiSyncEvent.MessagesChanged -> {
                 buf.putInt(2)
-                FfiConverterString.write(value.`stream`, buf)
-                FfiConverterULong.write(value.`cursor`, buf)
+                FfiConverterString.write(value.`targetKey`, buf)
+                FfiConverterSequenceLong.write(value.`messageIds`, buf)
                 Unit
             }
-            is FfiSyncEvent.Duplicate -> {
+            is FfiSyncEvent.ConversationRemoved -> {
                 buf.putInt(3)
-                FfiConverterString.write(value.`stream`, buf)
-                FfiConverterULong.write(value.`cursor`, buf)
+                FfiConverterString.write(value.`targetKey`, buf)
                 Unit
             }
-            is FfiSyncEvent.Gap -> {
+            is FfiSyncEvent.ReconcileFailed -> {
                 buf.putInt(4)
-                FfiConverterString.write(value.`stream`, buf)
-                FfiConverterULong.write(value.`expected`, buf)
-                FfiConverterULong.write(value.`got`, buf)
-                Unit
-            }
-            is FfiSyncEvent.Stale -> {
-                buf.putInt(5)
-                FfiConverterString.write(value.`stream`, buf)
-                FfiConverterULong.write(value.`applied`, buf)
-                FfiConverterULong.write(value.`got`, buf)
+                FfiConverterString.write(value.`targetKey`, buf)
+                FfiConverterString.write(value.`error`, buf)
                 Unit
             }
             is FfiSyncEvent.Connectivity -> {
-                buf.putInt(6)
+                buf.putInt(5)
                 FfiConverterLong.write(value.`userId`, buf)
                 FfiConverterBoolean.write(value.`online`, buf)
                 FfiConverterBoolean.write(value.`known`, buf)
                 Unit
             }
-            is FfiSyncEvent.Progress -> {
-                buf.putInt(7)
-                FfiConverterString.write(value.`stream`, buf)
-                FfiConverterOptionalULong.write(value.`head`, buf)
-                Unit
-            }
-            is FfiSyncEvent.RebuildRequired -> {
-                buf.putInt(8)
-                FfiConverterString.write(value.`stream`, buf)
-                FfiConverterOptionalULong.write(value.`head`, buf)
-                Unit
-            }
             is FfiSyncEvent.CheckpointFailed -> {
-                buf.putInt(9)
-                FfiConverterString.write(value.`stream`, buf)
-                FfiConverterULong.write(value.`cursor`, buf)
+                buf.putInt(6)
+                FfiConverterString.write(value.`targetKey`, buf)
+                FfiConverterLong.write(value.`acceptSeq`, buf)
                 FfiConverterString.write(value.`error`, buf)
                 Unit
             }
@@ -4155,28 +6029,28 @@ public object FfiConverterTypeFfiSyncEvent : FfiConverterRustBuffer<FfiSyncEvent
 /**
  * @suppress
  */
-public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
-    override fun read(buf: ByteBuffer): kotlin.ULong? {
+public object FfiConverterOptionalInt: FfiConverterRustBuffer<kotlin.Int?> {
+    override fun read(buf: ByteBuffer): kotlin.Int? {
         if (buf.get().toInt() == 0) {
             return null
         }
-        return FfiConverterULong.read(buf)
+        return FfiConverterInt.read(buf)
     }
 
-    override fun allocationSize(value: kotlin.ULong?): ULong {
+    override fun allocationSize(value: kotlin.Int?): ULong {
         if (value == null) {
             return 1UL
         } else {
-            return 1UL + FfiConverterULong.allocationSize(value)
+            return 1UL + FfiConverterInt.allocationSize(value)
         }
     }
 
-    override fun write(value: kotlin.ULong?, buf: ByteBuffer) {
+    override fun write(value: kotlin.Int?, buf: ByteBuffer) {
         if (value == null) {
             buf.put(0)
         } else {
             buf.put(1)
-            FfiConverterULong.write(value, buf)
+            FfiConverterInt.write(value, buf)
         }
     }
 }
@@ -4283,6 +6157,38 @@ public object FfiConverterOptionalByteArray: FfiConverterRustBuffer<kotlin.ByteA
 /**
  * @suppress
  */
+public object FfiConverterOptionalTypeFfiReconcileStatus: FfiConverterRustBuffer<FfiReconcileStatus?> {
+    override fun read(buf: ByteBuffer): FfiReconcileStatus? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiReconcileStatus.read(buf)
+    }
+
+    override fun allocationSize(value: FfiReconcileStatus?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiReconcileStatus.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiReconcileStatus?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiReconcileStatus.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalTypeFfiSyncEvent: FfiConverterRustBuffer<FfiSyncEvent?> {
     override fun read(buf: ByteBuffer): FfiSyncEvent? {
         if (buf.get().toInt() == 0) {
@@ -4333,6 +6239,34 @@ public object FfiConverterSequenceLong: FfiConverterRustBuffer<List<kotlin.Long>
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterLong.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
+    override fun read(buf: ByteBuffer): List<kotlin.String> {
+        val len = buf.getInt()
+        return List<kotlin.String>(len) {
+            FfiConverterString.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.String>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterString.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterString.write(it, buf)
         }
     }
 }
@@ -4399,24 +6333,24 @@ public object FfiConverterSequenceTypeFfiMessage: FfiConverterRustBuffer<List<Ff
 /**
  * @suppress
  */
-public object FfiConverterSequenceTypeRoomSub: FfiConverterRustBuffer<List<RoomSub>> {
-    override fun read(buf: ByteBuffer): List<RoomSub> {
+public object FfiConverterSequenceTypeTargetSub: FfiConverterRustBuffer<List<TargetSub>> {
+    override fun read(buf: ByteBuffer): List<TargetSub> {
         val len = buf.getInt()
-        return List<RoomSub>(len) {
-            FfiConverterTypeRoomSub.read(buf)
+        return List<TargetSub>(len) {
+            FfiConverterTypeTargetSub.read(buf)
         }
     }
 
-    override fun allocationSize(value: List<RoomSub>): ULong {
+    override fun allocationSize(value: List<TargetSub>): ULong {
         val sizeForLength = 4UL
-        val sizeForItems = value.map { FfiConverterTypeRoomSub.allocationSize(it) }.sum()
+        val sizeForItems = value.map { FfiConverterTypeTargetSub.allocationSize(it) }.sum()
         return sizeForLength + sizeForItems
     }
 
-    override fun write(value: List<RoomSub>, buf: ByteBuffer) {
+    override fun write(value: List<TargetSub>, buf: ByteBuffer) {
         buf.putInt(value.size)
         value.iterator().forEach {
-            FfiConverterTypeRoomSub.write(it, buf)
+            FfiConverterTypeTargetSub.write(it, buf)
         }
     }
 }
@@ -4426,6 +6360,70 @@ public object FfiConverterSequenceTypeRoomSub: FfiConverterRustBuffer<List<RoomS
 
 
 
+
+
+        /**
+         * Parse a provider push payload into an envelope.
+         *
+         * `payload` is the raw JSON bytes: the full APNs `userInfo` dictionary
+         * (iOS, including OneSignal `custom.a`), the `additionalData` JSONObject
+         * string (Android/OneSignal), or the backend handoff object directly.
+         * Display text (`aps.alert`, titles, bodies) is ignored by construction
+         * and must NEVER be persisted as a message row.
+         */
+    @Throws(FfiException::class) fun `parsePushPayload`(`payload`: kotlin.ByteArray): FfiPushEnvelope {
+            return FfiConverterTypeFfiPushEnvelope.lift(
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_func_parse_push_payload(
+
+
+        FfiConverterByteArray.lower(`payload`),_status)
+}
+    )
+    }
+
+
+        /**
+         * Cold-start recovery: requeue stale `claimed` push jobs whose lease
+         * expired (e.g. an extension killed mid-wake) so the next wake retries
+         * them. Call once at app/extension startup after opening the shared
+         * database. Returns the number of jobs requeued.
+         */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+     suspend fun `pushRecoverStaleJobs`(`storage`: SqliteStorage, `principal`: kotlin.String, `leaseSecs`: kotlin.Long) : kotlin.ULong {
+        return uniffiRustCallAsync(
+        UniffiLib.uniffi_tinkle_ffi_fn_func_push_recover_stale_jobs(
+        FfiConverterTypeSqliteStorage.lower(`storage`),
+        FfiConverterString.lower(`principal`),
+        FfiConverterLong.lower(`leaseSecs`),),
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_u64(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_u64(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_u64(future) },
+        // lift function
+        { FfiConverterULong.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+        /**
+         * Canonical target key for an envelope, if it routes
+         * (`target:user:<id>` / `target:room:<id>`).
+         *
+         * Foreground/open-event hook: when the user taps the notification, pass
+         * the parsed envelope here to learn where to navigate, then call
+         * `reconcileNow()` to refresh that conversation from the durable cache.
+         */ fun `pushTargetKey`(`envelope`: FfiPushEnvelope): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_func_push_target_key(
+
+
+        FfiConverterTypeFfiPushEnvelope.lower(`envelope`),_status)
+}
+    )
+    }
 
 
         /**

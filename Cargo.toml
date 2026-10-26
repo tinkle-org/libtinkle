@@ -32,6 +32,7 @@ tokio-util = { version = "0.7", features = ["full"] }
 zeroize = { version = "1", features = ["derive"] }
 async-trait = "0.1"
 futures-channel = "0.3"
+serde_json = "1"
 uniffi = { version = "=0.32.2", features = ["tokio"] }
 
 syntra-core = { version = "=1.0.0-rc.1" }
@@ -44,8 +45,8 @@ tempfile = "3"
 
 # BSR-generated bindings (public index, no token).
 # Versions pinned from `buf registry sdk version` (see PROTO_PINNING.md).
-tinkle-org_schema_community_neoeinstein-prost = { version = "0.5.0-20261025011045-a444aece5d59.2", registry = "buf" }
-tinkle-org_schema_community_neoeinstein-tonic = { version = "0.5.0-20261025011045-a444aece5d59.4", registry = "buf" }
+tinkle-org_schema_community_neoeinstein-prost = { version = "0.5.0-20261026025606-782100705bf9.2", registry = "buf" }
+tinkle-org_schema_community_neoeinstein-tonic = { version = "0.5.0-20261026025606-782100705bf9.4", registry = "buf" }
 tonic = { version = "0.14", features = ["transport", "tls-native-roots"] }
 tonic-prost = { version = "0.14" }
 
