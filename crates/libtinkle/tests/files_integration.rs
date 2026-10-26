@@ -792,7 +792,7 @@ async fn files_chunked_upload_download_happy_path() {
     // Chunked download loop reassembles the bytes.
     let mut out = Vec::new();
     let mut offset: i64 = 0;
-    loop {
+    for _ in 0..100 {
         let part = c
             .download_part(DownloadPartRequest {
                 file_id: file.file_id,
@@ -802,6 +802,10 @@ async fn files_chunked_upload_download_happy_path() {
             .await
             .unwrap();
         assert_eq!(part.offset, offset);
+        assert!(
+            !part.data.is_empty() || part.eof,
+            "empty chunk must imply eof"
+        );
         out.extend_from_slice(&part.data);
         offset += part.data.len() as i64;
         if part.eof {

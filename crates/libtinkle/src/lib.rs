@@ -20,7 +20,10 @@
 //! observations (`UpdatesService/ObserveConnectivity`) are ephemeral and
 //! never advance a cursor. History windows (`GetHistory.more_available`:
 //! `Some(true)` more, `Some(false)` done, `None` legacy window-edge
-//! heuristic) heal journal skips without moving the cursor.
+//! heuristic) heal journal skips without moving the cursor. On `wasm32`
+//! the same entry point uses a checkpoint-only in-memory store and skips
+//! the SQLite history catch-up below, so there are no atomic journal
+//! commits there.
 
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(not(target_arch = "wasm32"))]
@@ -29,7 +32,7 @@ pub(crate) mod client;
 pub(crate) mod config;
 pub(crate) mod cursor;
 pub(crate) mod errors;
-pub mod files;
+pub(crate) mod files;
 pub(crate) mod grpc;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod push;

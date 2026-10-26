@@ -138,14 +138,21 @@ pub fn validate_changes_page(
             SyncError::InvalidUpdate(format!("unknown target change kind {}", change.kind))
         })?;
         match kind {
-            TargetChangeKind::Edited => {
-                if change.message.is_none() {
+            TargetChangeKind::Edited => match &change.message {
+                None => {
                     return Err(SyncError::InvalidUpdate(format!(
                         "edited change for message {} must carry the current body",
                         change.message_id
                     )));
                 }
-            }
+                Some(body) if body.message_id != change.message_id => {
+                    return Err(SyncError::InvalidUpdate(format!(
+                        "edited body id {} must match change {}",
+                        body.message_id, change.message_id
+                    )));
+                }
+                Some(_) => {}
+            },
             TargetChangeKind::Deleted | TargetChangeKind::Revoked => {
                 if change.message.is_some() {
                     return Err(SyncError::InvalidUpdate(format!(
@@ -185,15 +192,18 @@ pub fn validate_changes_page(
 pub enum AcceptSeqDecision {
     /// The fetched token is strictly newer than the applied one.
     Newer,
-    /// The fetched token is at or below the applied one.
+    /// The fetched token is strictly below the applied one.
     DuplicateOrStale,
-    /// No fetched token to rank (absent tokens never vote on dedup).
+    /// No ranking from tokens alone: either side is absent, or the tokens
+    /// tie (stable across edits). Callers fall back to `edit_date`
+    /// (`fresher_body`); absent tokens never vote on dedup.
     UnknownOrder,
 }
 
 /// Rank a fetched `accept_seq` against the applied one. Tokens are
-/// conversation-local and stable across edits; absent tokens order with
-/// date and never count as dedup votes.
+/// conversation-local and stable across edits, so equal tokens are normal
+/// for edits and must not count as stale: they fall back to `edit_date`.
+/// Absent tokens order with date and never count as dedup votes.
 pub fn accept_seq_decision(applied: Option<i64>, got: Option<i64>) -> AcceptSeqDecision {
     match (applied, got) {
         (_, None) => AcceptSeqDecision::UnknownOrder,
@@ -201,6 +211,8 @@ pub fn accept_seq_decision(applied: Option<i64>, got: Option<i64>) -> AcceptSeqD
         (Some(a), Some(g)) => {
             if g > a {
                 AcceptSeqDecision::Newer
+            } else if g == a {
+                AcceptSeqDecision::UnknownOrder
             } else {
                 AcceptSeqDecision::DuplicateOrStale
             }

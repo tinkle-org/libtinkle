@@ -200,6 +200,10 @@ impl TinkleClient {
     /// routes, after running a bounded reconcile pass for that
     /// conversation (`None` when the envelope carries no routing — show
     /// the conversation list instead).
+    ///
+    /// The reconcile is best-effort and bounded by
+    /// [`libtinkle::PUSH_DEFAULT_BUDGET_SECS`]: failures and deadline expiry
+    /// are logged and still return the key for navigation.
     pub async fn open_push_notification(
         &self,
         envelope: FfiPushEnvelope,
@@ -207,7 +211,19 @@ impl TinkleClient {
         let core_envelope = libtinkle::PushEnvelope::from(envelope);
         let key = libtinkle::push_envelope_target_key(&core_envelope);
         if let Some(ref target_key) = key {
-            let _ = self.core_client().reconcile_target(target_key).await;
+            let deadline = tokio::time::Instant::now()
+                + std::time::Duration::from_secs(libtinkle::PUSH_DEFAULT_BUDGET_SECS);
+            match tokio::time::timeout_at(deadline, self.core_client().reconcile_target(target_key))
+                .await
+            {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    tracing::debug!(target_key, error = %e, "open_push reconcile failed");
+                }
+                Err(_) => {
+                    tracing::debug!(target_key, "open_push reconcile hit deadline");
+                }
+            }
         }
         Ok(key)
     }
@@ -226,8 +242,8 @@ pub async fn push_recover_stale_jobs(
     if principal.trim().is_empty() {
         return Err(FfiError::Codec("principal must not be blank".into()));
     }
-    if lease_secs < 0 {
-        return Err(FfiError::Codec("lease_secs must be non-negative".into()));
+    if lease_secs <= 0 {
+        return Err(FfiError::Codec("lease_secs must be positive".into()));
     }
     let native = storage.native_handle();
     let now = std::time::SystemTime::now()

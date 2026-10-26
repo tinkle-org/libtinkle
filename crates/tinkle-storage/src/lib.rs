@@ -400,6 +400,11 @@ pub struct CacheOps {
     pub message_files: Vec<MessageFileRef>,
     /// Entity → file refs (idempotent).
     pub entity_files: Vec<EntityFileRef>,
+    /// `(kind, entity_id)` whose current ref set is replaced by
+    /// `entity_files` in the same transaction. Populated for every hydrated
+    /// entity (even when its new ref set is empty) so avatar removals clear
+    /// stale refs instead of leaking them.
+    pub replace_entity_files: Vec<(String, i64)>,
 }
 
 /// Durable per-conversation validity + fencing generation.
@@ -1142,6 +1147,7 @@ impl Storage {
             || ops.files.len() > 512
             || ops.message_files.len() > 1024
             || ops.entity_files.len() > 512
+            || ops.replace_entity_files.len() > 512
         {
             return Err(StorageError::InvalidInput("sync batch too large".into()));
         }
@@ -1234,6 +1240,14 @@ impl Storage {
             if r.entity_id <= 0 {
                 return Err(StorageError::InvalidInput(
                     "bad entity_file entity_id".into(),
+                ));
+            }
+        }
+        for (kind, entity_id) in &ops.replace_entity_files {
+            check_entity_file_kind(kind)?;
+            if *entity_id <= 0 {
+                return Err(StorageError::InvalidInput(
+                    "bad replace_entity_file entity_id".into(),
                 ));
             }
         }
@@ -1461,11 +1475,27 @@ impl Storage {
                 ],
             )?;
         }
+        // Replace semantics: clear each hydrated entity's current ref set
+        // first so stale avatar refs are collected; the fresh set below is
+        // inserted in the same transaction.
+        {
+            use std::collections::HashSet;
+            let mut seen: HashSet<(&str, i64)> = HashSet::new();
+            for (kind, entity_id) in &ops.replace_entity_files {
+                if seen.insert((kind.as_str(), *entity_id)) {
+                    tx.execute(
+                        "DELETE FROM entity_files
+                          WHERE principal=?1 AND kind=?2 AND entity_id=?3",
+                        params![principal, kind, entity_id],
+                    )?;
+                }
+            }
+        }
         for r in &ops.entity_files {
             tx.execute(
                 "INSERT OR IGNORE INTO entity_files(principal, kind, entity_id,
                    file_scope, file_id, role)
-                 VALUES(?1,?2,?3,?4,?5,?6)",
+                  VALUES(?1,?2,?3,?4,?5,?6)",
                 params![
                     principal,
                     r.kind,
@@ -2382,6 +2412,57 @@ impl Storage {
                 r.role
             ],
         )?;
+        Ok(())
+    }
+
+    /// Transactional replace of one entity's ref set (snapshot ingest):
+    /// delete current refs for `(kind, entity_id)`, then insert `new_refs`.
+    /// Stale avatar refs are collected; an empty `new_refs` clears removals.
+    pub fn replace_entity_file_refs(
+        &self,
+        principal: &str,
+        kind: &str,
+        entity_id: i64,
+        new_refs: &[EntityFileRef],
+    ) -> Result<(), StorageError> {
+        check_principal(principal)?;
+        check_entity_file_kind(kind)?;
+        if entity_id <= 0 {
+            return Err(StorageError::InvalidInput(
+                "bad entity_file entity_id".into(),
+            ));
+        }
+        for r in new_refs {
+            check_file_scope(&r.file_scope)?;
+            check_file_id(r.file_id)?;
+            check_file_role(&r.role)?;
+            if r.kind != kind || r.entity_id != entity_id {
+                return Err(StorageError::InvalidInput(
+                    "replace refs must match (kind, entity_id)".into(),
+                ));
+            }
+        }
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM entity_files WHERE principal=?1 AND kind=?2 AND entity_id=?3",
+            params![principal, kind, entity_id],
+        )?;
+        for r in new_refs {
+            tx.execute(
+                "INSERT OR IGNORE INTO entity_files(principal, kind, entity_id, file_scope, file_id, role)
+                 VALUES(?1,?2,?3,?4,?5,?6)",
+                params![
+                    principal,
+                    r.kind,
+                    r.entity_id,
+                    r.file_scope,
+                    r.file_id,
+                    r.role
+                ],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 

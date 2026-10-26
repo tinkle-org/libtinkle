@@ -380,3 +380,125 @@ impl FfiCursorStore for SqliteStorage {
         self.clear_principal(principal).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prost::Message as _;
+
+    fn user_bytes(id: Option<i64>) -> Vec<u8> {
+        let user_type = id.map(|v| {
+            tinkle_schema::proto::user::UserType::Data(tinkle_schema::proto::user::UserData {
+                id: v,
+                ..Default::default()
+            })
+        });
+        tinkle_schema::proto::User { user_type }.encode_to_vec()
+    }
+
+    fn chat_bytes(chat_id: i64) -> Vec<u8> {
+        tinkle_schema::proto::Chat {
+            chat_id,
+            ..Default::default()
+        }
+        .encode_to_vec()
+    }
+
+    #[tokio::test]
+    async fn save_user_proto_matching_id_roundtrips() {
+        let db = SqliteStorage::open_in_memory().unwrap();
+        let bytes = user_bytes(Some(42));
+        db.save_user_proto("user:42".into(), 42, bytes.clone())
+            .await
+            .unwrap();
+        let got = db.get_user_proto("user:42".into(), 42).await.unwrap();
+        assert_eq!(got, Some(bytes));
+    }
+
+    #[tokio::test]
+    async fn save_user_proto_rejects_mismatched_id() {
+        let db = SqliteStorage::open_in_memory().unwrap();
+        let bytes = user_bytes(Some(99));
+        let err = db
+            .save_user_proto("user:42".into(), 42, bytes)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FfiError::Codec(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn save_user_proto_rejects_missing_user_type() {
+        let db = SqliteStorage::open_in_memory().unwrap();
+        let bytes = tinkle_schema::proto::User { user_type: None }.encode_to_vec();
+        let err = db
+            .save_user_proto("user:42".into(), 42, bytes)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FfiError::Codec(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn save_user_proto_rejects_undecodable_blob() {
+        let db = SqliteStorage::open_in_memory().unwrap();
+        let err = db
+            .save_user_proto("user:42".into(), 42, vec![0xFF, 0xFF, 0xFF])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FfiError::Codec(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn save_user_proto_rejects_non_positive_ids() {
+        let db = SqliteStorage::open_in_memory().unwrap();
+        // Non-positive param.
+        let bytes = user_bytes(Some(42));
+        let err = db
+            .save_user_proto("user:42".into(), 0, bytes)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FfiError::Codec(_)), "got {err:?}");
+        // Non-positive embedded id.
+        let bytes = user_bytes(Some(0));
+        let err = db
+            .save_user_proto("user:42".into(), 42, bytes)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FfiError::Codec(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn save_chat_proto_matching_id_roundtrips() {
+        let db = SqliteStorage::open_in_memory().unwrap();
+        let bytes = chat_bytes(7);
+        db.save_chat_proto("user:42".into(), 7, bytes.clone())
+            .await
+            .unwrap();
+        let got = db.get_chat_proto("user:42".into(), 7).await.unwrap();
+        assert_eq!(got, Some(bytes));
+    }
+
+    #[tokio::test]
+    async fn save_chat_proto_rejects_mismatch_and_bad_blobs() {
+        let db = SqliteStorage::open_in_memory().unwrap();
+        let err = db
+            .save_chat_proto("user:42".into(), 7, chat_bytes(8))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FfiError::Codec(_)), "got {err:?}");
+        let err = db
+            .save_chat_proto("user:42".into(), 7, vec![0xFF, 0xFF])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FfiError::Codec(_)), "got {err:?}");
+        let err = db
+            .save_chat_proto("user:42".into(), 0, chat_bytes(7))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FfiError::Codec(_)), "got {err:?}");
+        let err = db
+            .save_chat_proto("user:42".into(), 7, chat_bytes(0))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FfiError::Codec(_)), "got {err:?}");
+    }
+}

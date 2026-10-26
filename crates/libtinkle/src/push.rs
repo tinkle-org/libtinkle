@@ -157,17 +157,33 @@ pub fn push_job_id(envelope: &PushEnvelope) -> String {
             return id;
         }
     }
-    // Fallback: target + sorted ids (deterministic, bounded).
+    // Fallback: hash of the FULL sorted id list. Dropping ids past 20 or
+    // truncating to 200 bytes collides distinct wakes onto one job id,
+    // merging unrelated fetches and losing messages.
     let mut ids = envelope.message_ids.clone();
     ids.sort_unstable();
     ids.dedup();
-    let joined: Vec<String> = ids.iter().take(20).map(|v| v.to_string()).collect();
     let target = envelope
         .target_key()
         .unwrap_or_else(|| "account".to_string());
-    let mut id = format!("push:{target}:{}", joined.join(","));
-    truncate_to_char_boundary(&mut id, 200);
-    id
+    // FNV-1a/64 over target + full id list (deterministic, no new deps);
+    // output stays far under the 256-byte `check_job_id` bound.
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in target.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h ^= 0xff;
+    h = h.wrapping_mul(0x100000001b3);
+    for id in &ids {
+        for b in id.to_le_bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        h ^= 0x00;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("push:{target}:n{}:{h:016x}", ids.len())
 }
 
 /// Truncate to at most `max` bytes, backing off to a UTF-8 character
@@ -299,9 +315,12 @@ pub fn parse_push_payload(bytes: &[u8]) -> Result<PushEnvelope, TinkleError> {
     }
     let candidates = candidate_objects(&root);
 
-    let version = find_first(&candidates, &["v", "version", "ver"])
-        .and_then(|v| json_u32(&v))
-        .unwrap_or(PUSH_ENVELOPE_VERSION);
+    // Absent version defaults to v1 (back-compat); present-but-unparsable
+    // must NOT fail open to v1 — defer as version_mismatch instead.
+    let version = match find_first(&candidates, &["v", "version", "ver"]) {
+        None => PUSH_ENVELOPE_VERSION,
+        Some(raw) => json_u32(&raw).unwrap_or(u32::MAX),
+    };
 
     let account_user_id = find_first(
         &candidates,
@@ -486,13 +505,45 @@ impl PushManager {
                 };
             }
         };
-        let (current_principal, current_gen) = self.client.push_fence_snapshot().await;
+        let (mut current_principal, current_gen) = self.client.push_fence_snapshot().await;
         if current_principal == crate::sync::UNKNOWN_PRINCIPAL {
-            self.persist_envelope_job(&wanted, &envelope, &target_key, now)
-                .await;
-            return PushOutcome::Deferred {
-                reason: "logged_out".into(),
-            };
+            // Cold start (NSE/worker never restored the in-memory principal):
+            // adopt the envelope's account ONLY with durable evidence of
+            // prior auth, so a true logout (storage wiped) still fences as
+            // logged_out instead of resurrecting the session.
+            let mut restored = false;
+            if let Some(id) = envelope.account_user_id.filter(|v| *v > 0) {
+                if let Some(storage) = self.client.sqlite_storage() {
+                    let wanted_c = wanted.clone();
+                    let target_c = target_key.clone();
+                    let has_evidence = tokio::task::spawn_blocking(move || {
+                        if let Ok(jobs) = storage.list_background_sync_jobs(&wanted_c, None) {
+                            if !jobs.is_empty() {
+                                return true;
+                            }
+                        }
+                        storage
+                            .get_messages(&wanted_c, &target_c, 1, None)
+                            .map(|rows| !rows.is_empty())
+                            .unwrap_or(false)
+                    })
+                    .await
+                    .unwrap_or(false);
+                    if has_evidence {
+                        self.client.set_principal_user_id(id).await;
+                        restored = true;
+                    }
+                }
+            }
+            if restored {
+                current_principal = self.client.push_fence_snapshot().await.0;
+            } else {
+                self.persist_envelope_job(&wanted, &envelope, &target_key, now)
+                    .await;
+                return PushOutcome::Deferred {
+                    reason: "logged_out".into(),
+                };
+            }
         }
         if current_principal != wanted {
             self.persist_envelope_job(&wanted, &envelope, &target_key, now)
@@ -544,21 +595,42 @@ impl PushManager {
                 if e.to_string().contains("no such table") {
                     // Pre-v4 database: proceed without durability.
                 } else {
-                    tracing::debug!(error = %e, "push enqueue failed");
+                    tracing::warn!(error = %e, job_id, "push enqueue failed; not persisted");
+                    return PushOutcome::Deferred {
+                        reason: format!("transient:enqueue:{e}"),
+                    };
                 }
             }
             Err(e) => {
-                tracing::debug!(error = %e, "push enqueue task failed");
+                tracing::warn!(error = %e, job_id, "push enqueue task failed; not persisted");
+                return PushOutcome::Deferred {
+                    reason: "transient:enqueue_task".into(),
+                };
             }
         }
         // Recover claims leaked by a killed extension before claiming.
+        // Best-effort: log failures but continue — a stale claim only
+        // forces this wake to lose the race, never to corrupt state.
         {
             let st = storage.clone();
             let wanted_c = wanted.clone();
-            let _ = tokio::task::spawn_blocking(move || {
+            match tokio::task::spawn_blocking(move || {
                 st.requeue_stale_background_jobs(&wanted_c, now - PUSH_CLAIM_LEASE_SECS, now, now)
             })
-            .await;
+            .await
+            {
+                Ok(Ok(n)) => {
+                    if n > 0 {
+                        tracing::debug!(requeued = n, "push requeued stale claims");
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "push requeue stale claims failed");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "push requeue task failed");
+                }
+            }
         }
         let owner = push_owner_id();
         let claimed = {
@@ -610,17 +682,34 @@ impl PushManager {
             };
         }
 
-        // From here we hold the claim; every early return must release.
+        // From here we hold the claim; every early return must release —
+        // but only our own claim (never steal another owner, never reopen
+        // completed work).
         let release = |storage: &std::sync::Arc<tinkle_storage::Storage>,
                        wanted: &str,
-                       job_id: &str| {
-            let (st, w, j) = (storage.clone(), wanted.to_string(), job_id.to_string());
+                       job_id: &str,
+                       owner: &str| {
+            let (st, w, j, o) = (
+                storage.clone(),
+                wanted.to_string(),
+                job_id.to_string(),
+                owner.to_string(),
+            );
             let due = now_unix() + 30;
             let at = now_unix();
             async move {
-                let _ =
-                    tokio::task::spawn_blocking(move || st.release_background_job(&w, &j, due, at))
-                        .await;
+                let _ = tokio::task::spawn_blocking(move || {
+                    let owned = match st.get_background_job(&w, &j) {
+                        Ok(Some(job)) => job.claimed_by.as_deref() == Some(o.as_str()),
+                        _ => false,
+                    };
+                    if owned {
+                        let _ = st.release_background_job(&w, &j, due, at);
+                    } else {
+                        tracing::debug!(job_id = %j, "push release skipped: not owner");
+                    }
+                })
+                .await;
             }
         };
         let complete = |storage: &std::sync::Arc<tinkle_storage::Storage>,
@@ -642,13 +731,13 @@ impl PushManager {
         };
 
         if Instant::now() >= deadline {
-            release(&storage, &wanted, &job_id).await;
+            release(&storage, &wanted, &job_id, &owner).await;
             return PushOutcome::Deferred {
                 reason: "deadline".into(),
             };
         }
         if !self.client.push_fence_check(&wanted, current_gen).await {
-            release(&storage, &wanted, &job_id).await;
+            release(&storage, &wanted, &job_id, &owner).await;
             return PushOutcome::Deferred {
                 reason: "account_mismatch".into(),
             };
@@ -661,13 +750,13 @@ impl PushManager {
             match tokio::time::timeout_at(deadline, connect_fut).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
-                    release(&storage, &wanted, &job_id).await;
+                    release(&storage, &wanted, &job_id, &owner).await;
                     return PushOutcome::Deferred {
                         reason: format!("connect:{e}"),
                     };
                 }
                 Err(_) => {
-                    release(&storage, &wanted, &job_id).await;
+                    release(&storage, &wanted, &job_id, &owner).await;
                     return PushOutcome::Deferred {
                         reason: "deadline".into(),
                     };
@@ -675,10 +764,12 @@ impl PushManager {
             }
         }
         // Re-snapshot generation once connected (cold extension had none).
+        // Prefer the pre-connect snapshot: adopting the post-connect
+        // generation re-baselines onto a fresh scope and defeats the fence.
         let (_, live_gen) = self.client.push_fence_snapshot().await;
-        let fence_gen = live_gen.or(current_gen);
+        let fence_gen = current_gen.or(live_gen);
         if !self.client.push_fence_check(&wanted, fence_gen).await {
-            release(&storage, &wanted, &job_id).await;
+            release(&storage, &wanted, &job_id, &owner).await;
             return PushOutcome::Deferred {
                 reason: "account_mismatch".into(),
             };
@@ -717,27 +808,27 @@ impl PushManager {
                         };
                     }
                     _ => {
-                        release(&storage, &wanted, &job_id).await;
+                        release(&storage, &wanted, &job_id, &owner).await;
                         return PushOutcome::Deferred {
                             reason: format!("transient:{e}"),
                         };
                     }
                 },
                 Err(_) => {
-                    release(&storage, &wanted, &job_id).await;
+                    release(&storage, &wanted, &job_id, &owner).await;
                     return PushOutcome::Deferred {
                         reason: "deadline".into(),
                     };
                 }
             }
             if Instant::now() >= deadline {
-                release(&storage, &wanted, &job_id).await;
+                release(&storage, &wanted, &job_id, &owner).await;
                 return PushOutcome::Deferred {
                     reason: "deadline".into(),
                 };
             }
             if !self.client.push_fence_check(&wanted, fence_gen).await {
-                release(&storage, &wanted, &job_id).await;
+                release(&storage, &wanted, &job_id, &owner).await;
                 return PushOutcome::Deferred {
                     reason: "account_mismatch".into(),
                 };
@@ -770,7 +861,7 @@ impl PushManager {
                             || msg.contains("ScopeMismatch")
                             || msg.contains("scope")
                         {
-                            release(&storage, &wanted, &job_id).await;
+                            release(&storage, &wanted, &job_id, &owner).await;
                             return PushOutcome::Deferred {
                                 reason: "account_mismatch".into(),
                             };
@@ -782,7 +873,7 @@ impl PushManager {
                                 reason: format!("invalid:{e}"),
                             };
                         }
-                        release(&storage, &wanted, &job_id).await;
+                        release(&storage, &wanted, &job_id, &owner).await;
                         return PushOutcome::Deferred {
                             reason: format!("transient:{e}"),
                         };
@@ -859,8 +950,10 @@ impl PushManager {
             claimed_by: None,
             updated_at: now,
         };
+        // Insert-if-absent: never upsert over a claimed/done job (would
+        // reopen completed work or steal another invocation's claim).
         let _ = tokio::task::spawn_blocking(move || {
-            let _ = storage.enqueue_background_sync_job(&principal, &job);
+            let _ = storage.enqueue_background_job(&principal, &job);
         })
         .await;
     }
@@ -896,8 +989,9 @@ impl PushManager {
             updated_at: now,
         };
         let (st, p) = (storage.clone(), principal.to_string());
+        // Insert-if-absent: never upsert over a claimed/done job.
         let _ = tokio::task::spawn_blocking(move || {
-            let _ = st.enqueue_background_sync_job(&p, &job);
+            let _ = st.enqueue_background_job(&p, &job);
         })
         .await;
     }

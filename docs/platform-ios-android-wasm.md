@@ -100,10 +100,13 @@ logic. Syntra comes from crates.io (`syntra-core`/`syntra-runtime`/
   `reconcile_now` on `reconcile_failed`; poll `target_cursor`/
   `target_status` for authoritative progress. History/dialog targets use
   `targetKind`/`targetId` naming.
-- Example:
+- Example (target surface; runnable natively today, pending the
+  `spawn_local` adaptation on `wasm32` — `start` returns an
+  unsupported-runtime error in the browser until then):
 
 ```js
 const client = new TinkleWebClient(url, token);
+await client.set_principal_user_id(42n);
 const confirmation = JSON.parse(await client.start('[{"target_kind":"room","target_id":7}]', '[]'));
 const evtJson = await client.next_event(); // JSON string or undefined
 await client.reconcile_now();

@@ -1729,6 +1729,7 @@ dependencies = [
  "tinkle-schema",
  "tinkle-storage",
  "tokio",
+ "tracing",
  "uniffi",
 ]
 

@@ -1,8 +1,10 @@
-//! Native-only tonic unary helper for `GetTargetChanges` / `GetMessages`.
+//! Native-only tonic unary helpers for `MessagesService`
+//! (`GetTargetChanges` / `GetMessages`) and `FilesService` (upload /
+//! download / info), plus wasm stubs.
 //!
 //! Syntra (`call_raw` with `GET_TARGET_CHANGES_METHOD` / `GET_MESSAGES_METHOD`)
 //! is the primary transport; this module covers the opt-in dedicated gRPC
-//! path against `grpc_endpoint` (native only). Wasm keeps the stub shape
+//! path against `grpc_endpoint` (native only). Wasm keeps the stub shapes
 //! compiling and always reports unavailable.
 
 #[cfg(not(target_arch = "wasm32"))]

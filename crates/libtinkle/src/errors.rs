@@ -119,8 +119,12 @@ impl TinkleError {
 pub enum RecoveryDecision {
     /// Transient failure: back off and retry the page.
     Retry,
-    /// History expired or unbridgeable: drop the journal cursor and heal
-    /// via `GetHistory` instead of retrying a window that can never succeed.
+    /// Retention gap: the journal no longer covers the cursor (e.g.
+    /// `OutOfRange`). The run fails without moving the cursor, parks the
+    /// target in `Failed` with a `ReconcileFailed` event, and retries via
+    /// `reconcile_now`/supervisor backoff. Skips observed on the next
+    /// successful page heal best-effort via `GetHistory` without moving
+    /// the cursor; there is no cursor reset or snapshot fencing.
     Rebuild,
     /// Authentication/authorization failure: re-authenticate, do not retry.
     Auth,

@@ -96,9 +96,13 @@ the specifications in `../syntra/specifications/`:
     bounded queue, pre-ACTIVE ignored with diagnostic.
 11. Reconnection — fresh handshake + fresh ids, `UNAVAILABLE` with unknown
     outcome, bounded backoff, explicit resubscribe.
-12. Tinkle event decoding — `tinkle-schema::sync` single-decoder `Update`
-    validation (envelope span shape, stream/cursor agreement), span-aware
-    dedup, gap/stale/rebuild rules, floor/head checks.
+12. Tinkle event decoding — `tinkle-schema::sync` single-decoder
+    journal validation (`validate_changes_page`: `accept_seq`
+    strictly ascending within a page, `last_accept_seq` must cover the
+    page, edited messages carry bodies with matching ids, removals carry
+    none, empty pages only with explicit completion), span-aware dedup
+    (`accept_seq` equal tokens fall back to `edit_date`), gap/stale rules,
+    floor/head checks.
 
 The generic Syntra implementation is independent of Tinkle types wherever
 practical; `syntra-core` never imports `tinkle-schema`. Syntra internals
@@ -138,7 +142,8 @@ UniFFI (`tinkle-ffi::TinkleClient`) and browser (`libtinkle-web::
 TinkleWebClient`) expose the same flow: `start`/`subscribe`, `next_event`,
 `get_messages`/`get_target_changes`, `load_history`/`load_dialogs` (with
 cache/network policy), `target_cursor`/`target_status`/`tracked_targets`,
-`reconcile_now`, `suspend`/`resume`, `stop`/`shutdown`.
+ `reconcile_now`, `suspend`/`resume`; teardown is `stop`/`shutdown` on
+ `tinkle-ffi` while the browser wrapper exposes `shutdown`, not `stop`.
 Structured errors preserve codes across the boundary (`Auth`, `Retryable`
 — never collapsed to a network string).
 
@@ -199,9 +204,9 @@ foreground `connect` + `subscribe` on the manual path), background
 `suspend` (graceful close, keep cursors; supervisor blocked until
 `resume`), `reconnect`/`resume` with backoff + resubscribe,
 `rotate_credential` on token expiry, durable store survives process
-termination/app restart. No permanent background WebSocket is assumed;
-push notifications trigger `sync_after_wake` (reconnect + resubscribe
-from persisted accept positions). Hosts drive `next_event` and
+ termination/app restart. No permanent background WebSocket is assumed;
+ push notifications trigger `PushManager::process_push` (reconnect +
+ resubscribe from persisted accept positions). Hosts drive `next_event` and
 poll `target_cursor`/`target_status`; `read_state_pending` on dialogs
 means refresh via `load_dialogs(HydrateCache)`.
 

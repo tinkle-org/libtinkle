@@ -1124,7 +1124,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_func_tinkle_ffi_init() and 0xFFFF) != 34048) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_connect() and 0xFFFF) != 48303) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_connect() and 0xFFFF) != 57683) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_abort_upload() and 0xFFFF) != 34739) {
@@ -1181,7 +1181,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_reconcile_now() and 0xFFFF) != 51897) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect() and 0xFFFF) != 46216) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect() and 0xFFFF) != 32861) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_resume() and 0xFFFF) != 27994) {
@@ -1196,13 +1196,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_shutdown() and 0xFFFF) != 59360) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_start() and 0xFFFF) != 7430) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_start() and 0xFFFF) != 18779) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stop() and 0xFFFF) != 14181) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_subscribe() and 0xFFFF) != 7253) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_subscribe() and 0xFFFF) != 15725) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_suspend() and 0xFFFF) != 29619) {
@@ -1223,7 +1223,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_logout() and 0xFFFF) != 58830) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_open_push_notification() and 0xFFFF) != 61692) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_open_push_notification() and 0xFFFF) != 18901) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_register_push() and 0xFFFF) != 39244) {
@@ -1896,6 +1896,16 @@ public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
  * All params are owned (`String`/`i64`); references are unsupported in
  * foreign trait methods. Every method returns `Result` so foreign
  * failures convert into [`crate::FfiError`] instead of panicking.
+ *
+ * Ordering: persist `accept_seq` via `save_journal` only after the page's
+ * effects commit (SQLite does both atomically via
+ * `apply_journal_page_fenced`; checkpoint-only stores persist after the
+ * host applies the page). Never advance the cursor before the bodies it
+ * covers are durable.
+ *
+ * Scope: `clear_principal` removes all state owned by `principal` — journal
+ * cursors plus, where applicable, cached messages/dialogs/users/chats — so
+ * logout leaves no offline bodies behind.
  */
 public interface FfiCursorStore {
 
@@ -1916,6 +1926,16 @@ public interface FfiCursorStore {
  * All params are owned (`String`/`i64`); references are unsupported in
  * foreign trait methods. Every method returns `Result` so foreign
  * failures convert into [`crate::FfiError`] instead of panicking.
+ *
+ * Ordering: persist `accept_seq` via `save_journal` only after the page's
+ * effects commit (SQLite does both atomically via
+ * `apply_journal_page_fenced`; checkpoint-only stores persist after the
+ * host applies the page). Never advance the cursor before the bodies it
+ * covers are durable.
+ *
+ * Scope: `clear_principal` removes all state owned by `principal` — journal
+ * cursors plus, where applicable, cached messages/dialogs/users/chats — so
+ * logout leaves no offline bodies behind.
  */
 open class FfiCursorStoreImpl: Disposable, AutoCloseable, FfiCursorStore
 {
@@ -3268,6 +3288,8 @@ public interface TinkleClientInterface {
 
     /**
      * Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
+     * Reissues the retained watch set on the fresh connection, so presence
+     * observations survive reconnects.
      */
     suspend fun `connect`()
 
@@ -3444,7 +3466,8 @@ public interface TinkleClientInterface {
 
     /**
      * Reconnect + re-handshake + explicit resubscribe from tracked targets
-     * (network change / wake from push).
+     * (network change / wake from push). Reissues the retained watch set on
+     * the fresh connection, so presence observations survive reconnects.
      */
     suspend fun `reconnect`()
 
@@ -3485,6 +3508,9 @@ public interface TinkleClientInterface {
      * hints, dead transports, and per-target failures are handled inside
      * the SDK and reported as events + target status.
      *
+     * `watch` is retained and reissued on every new connection (reconnect/
+     * supervisor reestablish), so presence observations survive reconnects.
+     *
      * Idempotent: concurrent callers share the single supervisor and get
      * the initial establishment result. Call `stop()` (or `shutdown()`)
      * to shut down; `connect`/`subscribe`/`reconnect` remain as
@@ -3504,6 +3530,9 @@ public interface TinkleClientInterface {
      * confirmation (tracked conversation keys, not reconciliation
      * completion: journals reconcile in the background and report via
      * `next_event` + target status).
+     *
+     * `watch` is retained and reissued on every new connection, so presence
+     * observations survive reconnects.
      */
     suspend fun `subscribe`(`targets`: List<TargetSub>, `watch`: List<kotlin.Long>): FfiSubscribeResponse
 
@@ -3565,6 +3594,10 @@ public interface TinkleClientInterface {
      * routes, after running a bounded reconcile pass for that
      * conversation (`None` when the envelope carries no routing — show
      * the conversation list instead).
+     *
+     * The reconcile is best-effort and bounded by
+     * [`libtinkle::PUSH_DEFAULT_BUDGET_SECS`]: failures and deadline expiry
+     * are logged and still return the key for navigation.
      */
     suspend fun `openPushNotification`(`envelope`: FfiPushEnvelope): kotlin.String?
 
@@ -3713,6 +3746,8 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
     /**
      * Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
+     * Reissues the retained watch set on the fresh connection, so presence
+     * observations survive reconnects.
      */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
@@ -4273,7 +4308,8 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
     /**
      * Reconnect + re-handshake + explicit resubscribe from tracked targets
-     * (network change / wake from push).
+     * (network change / wake from push). Reissues the retained watch set on
+     * the fresh connection, so presence observations survive reconnects.
      */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
@@ -4416,6 +4452,9 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
      * hints, dead transports, and per-target failures are handled inside
      * the SDK and reported as events + target status.
      *
+     * `watch` is retained and reissued on every new connection (reconnect/
+     * supervisor reestablish), so presence observations survive reconnects.
+     *
      * Idempotent: concurrent callers share the single supervisor and get
      * the initial establishment result. Call `stop()` (or `shutdown()`)
      * to shut down; `connect`/`subscribe`/`reconnect` remain as
@@ -4475,6 +4514,9 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
      * confirmation (tracked conversation keys, not reconciliation
      * completion: journals reconcile in the background and report via
      * `next_event` + target status).
+     *
+     * `watch` is retained and reissued on every new connection, so presence
+     * observations survive reconnects.
      */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
@@ -4672,6 +4714,10 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
      * routes, after running a bounded reconcile pass for that
      * conversation (`None` when the envelope carries no routing — show
      * the conversation list instead).
+     *
+     * The reconcile is best-effort and bounded by
+     * [`libtinkle::PUSH_DEFAULT_BUDGET_SECS`]: failures and deadline expiry
+     * are logged and still return the key for navigation.
      */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
@@ -4815,15 +4861,15 @@ public object FfiConverterTypeTinkleClient: FfiConverter<TinkleClient, Long> {
 /**
  * Record mirrored into [`libtinkle::ClientConfig`]. All fields owned.
  *
- * `grpc_endpoint` selects the direct-unary transport for reconciliation
- * RPCs (`GetMessages`/`GetTargetChanges` over gRPC instead of the default
- * Syntra unary RPC on the live connection). It is validated fail-fast by
- * [`TinkleClient::new`] and [`TinkleClient::new_sqlite`]: a
- * non-blank-but-invalid endpoint (missing scheme, non-`https` without
- * `allow_insecure`) returns [`FfiError::Internal`] at construction instead
- * of surfacing as a retried network failure at reconciliation time.
- * `None` (or blank, treated as unset for backward compatibility) keeps the
- * default Syntra unary path.
+ * `grpc_endpoint` enables the direct-unary gRPC fallback for reconciliation
+ * RPCs (`GetMessages`/`GetTargetChanges`). Syntra stays primary on the live
+ * connection; when set, retryable Syntra failures fall back to this endpoint
+ * automatically. It is validated fail-fast by [`TinkleClient::new`] and
+ * [`TinkleClient::new_sqlite`]: a non-blank-but-invalid endpoint (missing
+ * scheme, non-`https` without `allow_insecure`) returns
+ * [`FfiError::Internal`] at construction instead of surfacing as a retried
+ * network failure at reconciliation time. `None` (or blank, treated as
+ * unset for backward compatibility) keeps Syntra-only reconciliation.
  */
 data class ClientConfigFfi (
     /**

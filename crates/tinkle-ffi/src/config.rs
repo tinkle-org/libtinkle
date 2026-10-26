@@ -4,15 +4,15 @@ use crate::FfiError;
 
 /// Record mirrored into [`libtinkle::ClientConfig`]. All fields owned.
 ///
-/// `grpc_endpoint` selects the direct-unary transport for reconciliation
-/// RPCs (`GetMessages`/`GetTargetChanges` over gRPC instead of the default
-/// Syntra unary RPC on the live connection). It is validated fail-fast by
-/// [`TinkleClient::new`] and [`TinkleClient::new_sqlite`]: a
-/// non-blank-but-invalid endpoint (missing scheme, non-`https` without
-/// `allow_insecure`) returns [`FfiError::Internal`] at construction instead
-/// of surfacing as a retried network failure at reconciliation time.
-/// `None` (or blank, treated as unset for backward compatibility) keeps the
-/// default Syntra unary path.
+/// `grpc_endpoint` enables the direct-unary gRPC fallback for reconciliation
+/// RPCs (`GetMessages`/`GetTargetChanges`). Syntra stays primary on the live
+/// connection; when set, retryable Syntra failures fall back to this endpoint
+/// automatically. It is validated fail-fast by [`TinkleClient::new`] and
+/// [`TinkleClient::new_sqlite`]: a non-blank-but-invalid endpoint (missing
+/// scheme, non-`https` without `allow_insecure`) returns
+/// [`FfiError::Internal`] at construction instead of surfacing as a retried
+/// network failure at reconciliation time. `None` (or blank, treated as
+/// unset for backward compatibility) keeps Syntra-only reconciliation.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct ClientConfigFfi {
     /// Gateway URL, e.g. `wss://gateway.example.com/syntra/v1/ws`.
@@ -74,27 +74,4 @@ pub(crate) fn validated_core_config(
     cfg.user_agent = c.user_agent;
     cfg.grpc_endpoint = grpc_endpoint;
     Ok(cfg)
-}
-
-impl From<ClientConfigFfi> for libtinkle::ClientConfig {
-    fn from(c: ClientConfigFfi) -> Self {
-        // Infallible legacy path: invalid endpoints are left unset (client
-        // falls back to Syntra unary). Fallible callers should use
-        // `TryFrom` (via `TinkleClient::new`) to fail fast instead.
-        let allow_insecure = c.allow_insecure;
-        let mut cfg = Self::new(c.url);
-        if allow_insecure {
-            cfg = cfg.insecure_dev();
-        }
-        cfg.user_agent = c.user_agent;
-        if let Some(ep) = c.grpc_endpoint {
-            let ep = ep.trim().to_string();
-            if !ep.is_empty()
-                && libtinkle::ClientConfig::validate_grpc_endpoint(&ep, allow_insecure).is_ok()
-            {
-                cfg.grpc_endpoint = Some(ep);
-            }
-        }
-        cfg
-    }
 }

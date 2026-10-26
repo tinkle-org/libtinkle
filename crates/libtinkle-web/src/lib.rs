@@ -193,11 +193,26 @@ impl TinkleWebClient {
         }
     }
 
+    /// Set the authenticated principal (`user:<id>`) after sign-in and on
+    /// every identity change. `new()` leaves the client scoped to the
+    /// `unknown` principal, and `start`/`subscribe` reject `unknown`, so
+    /// call this with the authenticated user id before subscribing.
+    pub async fn set_principal_user_id(&self, user_id: i64) -> Result<(), JsValue> {
+        if user_id <= 0 {
+            return Err(JsValue::from_str("user_id must be positive"));
+        }
+        self.inner.set_principal_user_id(user_id).await;
+        Ok(())
+    }
+
     /// Supervised lifecycle: connect (if needed), subscribe, and start the
     /// reconciliation supervisor. `targets_json` is a JSON array of
     /// `{"target_kind":"room","target_id":7}`; `watch_json` is a JSON array
     /// of user ids for connectivity observations. Returns the subscribe
     /// confirmation as JSON (`{"targets":["target:room:7"]}`).
+    ///
+    /// Requires `set_principal_user_id` first: a client still scoped to
+    /// the `unknown` principal is rejected before any subscription.
     ///
     /// `wasm32` runtime state: the supervisor monitor cannot spawn on the
     /// browser executor yet; this returns the core's stub error there.
@@ -222,7 +237,8 @@ impl TinkleWebClient {
 
     /// Subscribe with durable per-target reconciliation. Same JSON contract
     /// as [`Self::start`]; returns the confirmation (tracked conversation
-    /// keys, not reconciliation completion).
+    /// keys, not reconciliation completion). Requires
+    /// `set_principal_user_id` first (see [`Self::start`]).
     pub async fn subscribe(
         &self,
         targets_json: String,
@@ -572,8 +588,9 @@ impl TinkleWebClient {
     /// Rust-owned download (file id in, bytes out).
     ///
     /// Minimal browser pass-through over `DownloadManager`: verifies size
-    /// + SHA-256. No per-consumer token crosses the boundary; dropping the
-    /// JS promise cancels only that consumer.
+    /// + SHA-256. No per-consumer token crosses the boundary (passes
+    /// `None`); dropping the JS promise does not cancel the shared
+    /// download.
     pub async fn files_download_bytes(&self, file_id: i64) -> Result<Vec<u8>, JsValue> {
         if file_id <= 0 {
             return Err(JsValue::from_str("file_id must be positive"));

@@ -40,15 +40,7 @@ use tinkle_storage::Storage;
 // SHA-256 (vendored, no new deps so `--locked` stays green).
 // ---------------------------------------------------------------------------
 
-/// Compute SHA-256 over `data` (FIPS 180-4). Used to verify downloads and
-/// to synthesize the retry digest when a `CompleteUpload`-supplied digest
-/// was wrong but the `BeginUpload` declaration was absent.
-pub fn sha256(data: &[u8]) -> [u8; 32] {
-    // Initial hash values.
-    let mut h: [u32; 8] = [
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
-        0x5be0cd19,
-    ];
+fn sha256_compress(h: &mut [u32; 8], block: &[u8; 64]) {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
         0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
@@ -61,75 +53,93 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
         0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
         0xc67178f2,
     ];
-
-    // Padding.
-    let mut msg = data.to_vec();
-    let bit_len = (data.len() as u64).wrapping_mul(8);
-    msg.push(0x80);
-    while msg.len() % 64 != 56 {
-        msg.push(0);
+    let mut w = [0u32; 64];
+    for i in 0..16 {
+        w[i] = u32::from_be_bytes([
+            block[4 * i],
+            block[4 * i + 1],
+            block[4 * i + 2],
+            block[4 * i + 3],
+        ]);
     }
-    msg.extend_from_slice(&bit_len.to_be_bytes());
+    for i in 16..64 {
+        let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+        let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+        w[i] = w[i - 16]
+            .wrapping_add(s0)
+            .wrapping_add(w[i - 7])
+            .wrapping_add(s1);
+    }
+    let (mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh) =
+        (h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]);
+    for i in 0..64 {
+        let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+        let ch = (e & f) ^ ((!e) & g);
+        let t1 = hh
+            .wrapping_add(s1)
+            .wrapping_add(ch)
+            .wrapping_add(K[i])
+            .wrapping_add(w[i]);
+        let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+        let maj = (a & b) ^ (a & c) ^ (b & c);
+        let t2 = s0.wrapping_add(maj);
+        hh = g;
+        g = f;
+        f = e;
+        e = d.wrapping_add(t1);
+        d = c;
+        c = b;
+        b = a;
+        a = t1.wrapping_add(t2);
+    }
+    h[0] = h[0].wrapping_add(a);
+    h[1] = h[1].wrapping_add(b);
+    h[2] = h[2].wrapping_add(c);
+    h[3] = h[3].wrapping_add(d);
+    h[4] = h[4].wrapping_add(e);
+    h[5] = h[5].wrapping_add(f);
+    h[6] = h[6].wrapping_add(g);
+    h[7] = h[7].wrapping_add(hh);
+}
 
-    for chunk in msg.chunks(64) {
-        let mut w = [0u32; 64];
-        for i in 0..16 {
-            w[i] = u32::from_be_bytes([
-                chunk[4 * i],
-                chunk[4 * i + 1],
-                chunk[4 * i + 2],
-                chunk[4 * i + 3],
-            ]);
-        }
-        for i in 16..64 {
-            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16]
-                .wrapping_add(s0)
-                .wrapping_add(w[i - 7])
-                .wrapping_add(s1);
-        }
-        let (mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh) =
-            (h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]);
-        for i in 0..64 {
-            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-            let ch = (e & f) ^ ((!e) & g);
-            let t1 = hh
-                .wrapping_add(s1)
-                .wrapping_add(ch)
-                .wrapping_add(K[i])
-                .wrapping_add(w[i]);
-            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let maj = (a & b) ^ (a & c) ^ (b & c);
-            let t2 = s0.wrapping_add(maj);
-            hh = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(t1);
-            d = c;
-            c = b;
-            b = a;
-            a = t1.wrapping_add(t2);
-        }
-        h[0] = h[0].wrapping_add(a);
-        h[1] = h[1].wrapping_add(b);
-        h[2] = h[2].wrapping_add(c);
-        h[3] = h[3].wrapping_add(d);
-        h[4] = h[4].wrapping_add(e);
-        h[5] = h[5].wrapping_add(f);
-        h[6] = h[6].wrapping_add(g);
-        h[7] = h[7].wrapping_add(hh);
+/// Compute SHA-256 over `data` (FIPS 180-4). Used to verify downloads and
+/// to synthesize the retry digest when a `CompleteUpload`-supplied digest
+/// was wrong but the `BeginUpload` declaration was absent.
+///
+/// Full 64-byte blocks are hashed in place; only the final padded tail
+/// (one or two blocks) is copied.
+pub fn sha256(data: &[u8]) -> [u8; 32] {
+    // Initial hash values.
+    let mut h: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+
+    let (chunks, rem) = data.as_chunks::<64>();
+    for block in chunks {
+        sha256_compress(&mut h, block);
+    }
+    let bit_len = (data.len() as u64).wrapping_mul(8);
+    if rem.len() < 56 {
+        let mut block = [0u8; 64];
+        block[..rem.len()].copy_from_slice(rem);
+        block[rem.len()] = 0x80;
+        block[56..].copy_from_slice(&bit_len.to_be_bytes());
+        sha256_compress(&mut h, &block);
+    } else {
+        let mut first = [0u8; 64];
+        first[..rem.len()].copy_from_slice(rem);
+        first[rem.len()] = 0x80;
+        sha256_compress(&mut h, &first);
+        let mut second = [0u8; 64];
+        second[56..].copy_from_slice(&bit_len.to_be_bytes());
+        sha256_compress(&mut h, &second);
     }
     let mut out = [0u8; 32];
     for (i, v) in h.iter().enumerate() {
         out[4 * i..4 * i + 4].copy_from_slice(&v.to_be_bytes());
     }
     out
-}
-
-/// SHA-256 of the empty byte sequence (zero-byte upload fast path).
-pub fn sha256_empty() -> [u8; 32] {
-    sha256(&[])
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -326,10 +336,16 @@ pub fn project_entity_files_to_ops(
     let mut ops = tinkle_storage::CacheOps::default();
     let _ = chats;
     let mut seen_files: HashSet<i64> = HashSet::new();
+    let mut seen_entities: HashSet<i64> = HashSet::new();
     for u in users {
         let eid = user_entity_id(u);
         if eid <= 0 {
             continue;
+        }
+        // Replace marker even when the new ref set is empty so avatar
+        // removals clear stale refs transactionally.
+        if seen_entities.insert(eid) {
+            ops.replace_entity_files.push(("user".to_string(), eid));
         }
         for (fid, role) in extract_user_files(u) {
             if seen_files.insert(fid) {
@@ -356,9 +372,13 @@ pub fn project_entity_files_to_ops(
 pub fn project_sticker_files_to_ops(stickers: &[StickerView]) -> tinkle_storage::CacheOps {
     let mut ops = tinkle_storage::CacheOps::default();
     let mut seen: HashSet<i64> = HashSet::new();
+    let mut seen_entities: HashSet<i64> = HashSet::new();
     for s in stickers {
         if s.id <= 0 {
             continue;
+        }
+        if seen_entities.insert(s.id) {
+            ops.replace_entity_files.push(("sticker".to_string(), s.id));
         }
         for (fid, role) in extract_sticker_files(s) {
             if seen.insert(fid) {
@@ -379,6 +399,8 @@ pub fn project_sticker_files_to_ops(stickers: &[StickerView]) -> tinkle_storage:
 /// Rewrite placeholder origins (`""`) to a journal target so the batch
 /// passes `apply_journal_page_fenced` validation
 /// (`file origin_stream must equal page target_key`).
+/// Kept for journal callers that commit outside `merge_ops`.
+#[allow(dead_code)]
 #[cfg(not(target_arch = "wasm32"))]
 pub fn with_origin(
     mut ops: tinkle_storage::CacheOps,
@@ -496,6 +518,46 @@ impl FileManager {
         !self.is_reading(scope, file_id)
     }
 
+    /// Resolve `relative_path` strictly under `cache_dir`. Returns `None`
+    /// for empty, absolute, or non-normal paths (`..`, `.`, prefixes,
+    /// root components) and for joins that escape `cache_dir` after
+    /// lexical resolution. Callers skip the bytes delete on `None` but
+    /// still apply the authoritative DB delete.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn safe_cache_path(
+        cache_dir: &std::path::Path,
+        relative_path: &str,
+    ) -> Option<std::path::PathBuf> {
+        use std::path::Component;
+        if relative_path.is_empty() {
+            return None;
+        }
+        let rel = std::path::Path::new(relative_path);
+        if rel.is_absolute() {
+            return None;
+        }
+        for c in rel.components() {
+            if !matches!(c, Component::Normal(_)) {
+                return None;
+            }
+        }
+        let joined = cache_dir.join(rel);
+        // Lexical containment: a `Normal`-only relative join cannot escape
+        // via `..`, but symlinked prefixes could still resolve outside, so
+        // verify against the canonical cache dir when both sides resolve.
+        if let (Ok(canonical_dir), Ok(canonical_joined)) =
+            (cache_dir.canonicalize(), joined.canonicalize())
+        {
+            if !canonical_joined.starts_with(&canonical_dir) {
+                return None;
+            }
+            return Some(canonical_joined);
+        }
+        // Target may not exist (already evicted): fall back to the lexical
+        // join, which is safe because every component was `Normal`.
+        Some(joined)
+    }
+
     /// Evict unpinned, unread cache rows for one principal. Returns the
     /// number of `file_cache_entries` rows removed (bytes on disk are
     /// best-effort removed when `cache_dir` is supplied and the stored
@@ -531,9 +593,9 @@ impl FileManager {
                 }
             }
             // Best-effort bytes delete; DB row delete is authoritative.
+            // Unsafe paths never touch the filesystem.
             if let Some(dir) = cache_dir {
-                if !e.relative_path.is_empty() {
-                    let p = dir.join(&e.relative_path);
+                if let Some(p) = Self::safe_cache_path(dir, &e.relative_path) {
                     let _ = std::fs::remove_file(p);
                 }
             }
@@ -819,16 +881,24 @@ pub fn is_ambiguous(e: &TinkleError) -> bool {
     e.is_unknown_outcome()
 }
 
-/// Classify a `CompleteUpload` failure as a digest mismatch (code path only;
-/// message text never drives recovery).
+/// Classify a `CompleteUpload` failure as a digest mismatch: the protocol
+/// has no dedicated digest code, so both the code (`InvalidArgument` /
+/// `FailedPrecondition`) AND a digest-specific detail (`digest` / `sha256`
+/// / `checksum`) must match. All other failures stay on the normal path.
 fn is_digest_error(e: &TinkleError) -> bool {
     use syntra_core::error::ErrorCode as C;
+    fn detail_matches(msg: &str) -> bool {
+        let lower = msg.to_ascii_lowercase();
+        lower.contains("digest") || lower.contains("sha256") || lower.contains("checksum")
+    }
     match e {
-        TinkleError::Syntra(syntra_core::error::SyntraError::Rpc { code, .. }) => {
-            *code == C::InvalidArgument || *code == C::FailedPrecondition
+        TinkleError::Syntra(syntra_core::error::SyntraError::Rpc { code, message, .. }) => {
+            (*code == C::InvalidArgument || *code == C::FailedPrecondition)
+                && detail_matches(message)
         }
-        TinkleError::GrpcStatus { code, .. } => {
-            *code == C::InvalidArgument || *code == C::FailedPrecondition
+        TinkleError::GrpcStatus { code, message } => {
+            (*code == C::InvalidArgument || *code == C::FailedPrecondition)
+                && detail_matches(message)
         }
         _ => false,
     }
@@ -1385,7 +1455,10 @@ pub fn validate_download_part(
     if want_offset < 0 || want_offset > file_size {
         return Err(TinkleError::Codec("download offset out of range".into()));
     }
-    if len < 0 || want_offset + len > file_size {
+    let end = want_offset
+        .checked_add(len)
+        .ok_or_else(|| TinkleError::Codec("download offset+len overflow".into()))?;
+    if len < 0 || end > file_size {
         return Err(TinkleError::Sync("download overflow past file size".into()));
     }
     // Progress rule: a successful call with a positive limit and a nonempty
@@ -1395,7 +1468,7 @@ pub fn validate_download_part(
             "download made no progress without eof".into(),
         ));
     }
-    let at_end = want_offset + len == file_size;
+    let at_end = end == file_size;
     if resp.eof != at_end {
         return Err(TinkleError::Sync(format!(
             "download eof mismatch at offset {want_offset}+{len}/{}: eof={}",
@@ -1483,19 +1556,182 @@ fn inflight() -> &'static Mutex<InflightMap> {
 }
 
 /// Rust-owned download manager. Holds a `Client` clone (cheap).
+///
+/// When `cache_dir` is configured (native only), verified bytes are served
+/// from the SQLite `file_cache_entries` + on-disk cache and every verified
+/// download atomically publishes its cache copy before returning.
 #[derive(Clone)]
 pub struct DownloadManager {
     client: crate::client::Client,
+    #[cfg(not(target_arch = "wasm32"))]
+    cache_dir: Option<std::path::PathBuf>,
 }
 
 impl DownloadManager {
     pub fn new(client: crate::client::Client) -> Self {
-        Self { client }
+        Self {
+            client,
+            #[cfg(not(target_arch = "wasm32"))]
+            cache_dir: None,
+        }
+    }
+
+    /// Configure the on-disk file cache directory (native only). The
+    /// directory is created on first cache publish; lookups work as soon as
+    /// it (and the SQLite rows) exist.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_cache_dir(mut self, cache_dir: std::path::PathBuf) -> Self {
+        self.cache_dir = Some(cache_dir);
+        self
+    }
+
+    /// Update the cache directory after construction (native only).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_cache_dir(&mut self, cache_dir: Option<std::path::PathBuf>) {
+        self.cache_dir = cache_dir;
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn storage(&self) -> Option<Arc<Storage>> {
         self.client.sqlite_storage()
+    }
+
+    /// Deterministic cache filename for one file (stable across restarts so
+    /// lookups hit). Flat layout avoids deep trees; collisions are
+    /// impossible because `file_id` is unique within the shared scope.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn default_cache_relative(file_id: i64) -> String {
+        format!("file-{file_id}.bin")
+    }
+
+    /// Verified cache lookup: complete entry + on-disk bytes that still
+    /// verify against `file` (size + SHA-256). Any mismatch is a miss
+    /// (never served, never fatal); hits refresh `last_access`.
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn cached_bytes(&self, file_id: i64, file: &FileInfo) -> Option<Vec<u8>> {
+        let storage = self.storage()?;
+        let cache_dir = self.cache_dir.clone()?;
+        if file.size_bytes < 0 {
+            return None;
+        }
+        let principal = self.client.principal().await;
+        if principal == crate::sync::UNKNOWN_PRINCIPAL {
+            return None;
+        }
+        let entry = {
+            let s = storage.clone();
+            let p = principal.clone();
+            let q = p.clone();
+            tokio::task::spawn_blocking(move || {
+                s.get_file_cache_entry(&q, SHARED_FILE_SCOPE, file_id)
+            })
+            .await
+            .ok()?
+            .ok()??
+        };
+        if entry.availability != "complete" || entry.actual_size != file.size_bytes {
+            return None;
+        }
+        // Reuse the stored path when safe; otherwise fall back to the
+        // deterministic default (older rows may predate it).
+        let rel = if entry.relative_path.is_empty() {
+            Self::default_cache_relative(file_id)
+        } else {
+            entry.relative_path.clone()
+        };
+        let path = FileManager::safe_cache_path(&cache_dir, &rel)?;
+        let bytes = tokio::task::spawn_blocking(move || std::fs::read(&path))
+            .await
+            .ok()?
+            .ok()?;
+        if verify_downloaded_bytes(&bytes, file).is_err() {
+            return None;
+        }
+        // Best-effort LRU touch.
+        {
+            let s = storage.clone();
+            let mut touched = entry;
+            touched.last_access = now_secs();
+            let _ = tokio::task::spawn_blocking(move || {
+                s.upsert_file_cache_entry(&principal, &touched)
+            })
+            .await;
+        }
+        Some(bytes)
+    }
+
+    /// Atomically publish verified `bytes` into the cache and upsert the
+    /// complete `file_cache_entries` row. Reuses the existing safe
+    /// `relative_path` when present, else the deterministic default.
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn publish_cache_entry(&self, file_id: i64, file: &FileInfo, bytes: &[u8]) {
+        let storage = match self.storage() {
+            Some(s) => s,
+            None => return,
+        };
+        let cache_dir = match self.cache_dir.clone() {
+            Some(d) => d,
+            None => return,
+        };
+        let principal = self.client.principal().await;
+        if principal == crate::sync::UNKNOWN_PRINCIPAL {
+            return;
+        }
+        let rel = {
+            let s = storage.clone();
+            let p = principal.clone();
+            let existing: Option<tinkle_storage::FileCacheEntry> =
+                match tokio::task::spawn_blocking(move || {
+                    s.get_file_cache_entry(&p, SHARED_FILE_SCOPE, file_id)
+                })
+                .await
+                {
+                    Ok(Ok(e)) => e,
+                    _ => None,
+                };
+            match existing {
+                Some(e)
+                    if !e.relative_path.is_empty()
+                        && FileManager::safe_cache_path(&cache_dir, &e.relative_path).is_some() =>
+                {
+                    (e.relative_path, e.pinned)
+                }
+                Some(e) => (Self::default_cache_relative(file_id), e.pinned),
+                None => (Self::default_cache_relative(file_id), false),
+            }
+        };
+        let (relative_path, pinned) = rel;
+        let path = match FileManager::safe_cache_path(&cache_dir, &relative_path) {
+            Some(p) => p,
+            None => return,
+        };
+        if let Some(parent) = path.parent() {
+            let _ = tokio::task::spawn_blocking({
+                let parent = parent.to_path_buf();
+                move || std::fs::create_dir_all(&parent)
+            })
+            .await;
+        }
+        let bytes_owned = bytes.to_vec();
+        let published = tokio::task::spawn_blocking(move || publish_atomic(&path, &bytes_owned))
+            .await
+            .map(|r| r.is_ok())
+            .unwrap_or(false);
+        if !published {
+            return;
+        }
+        let entry = tinkle_storage::FileCacheEntry {
+            scope: SHARED_FILE_SCOPE.to_string(),
+            file_id,
+            relative_path,
+            actual_size: file.size_bytes,
+            availability: "complete".to_string(),
+            last_access: now_secs(),
+            pinned,
+        };
+        let s2 = storage.clone();
+        let _ = tokio::task::spawn_blocking(move || s2.upsert_file_cache_entry(&principal, &entry))
+            .await;
     }
 
     /// Download one file to memory, verifying size + SHA-256.
@@ -1646,13 +1882,29 @@ impl DownloadManager {
             return Err(TinkleError::Sync("GetFileInfo file_id mismatch".into()));
         }
         let limit = effective_download_limit(&info)?;
-        // Resume deliberately starts at offset 0: the persisted prefix
-        // bytes are not restored into `out`, so a nonzero offset would
-        // skip bytes required by the final full-file verification.
-        // `load_resume_offset` stays (allowed dead) until a prefix-restore
-        // change lands; the durable offset is still persisted below.
+        if file.size_bytes < 0 {
+            return Err(TinkleError::Codec(
+                "FileInfo.size_bytes must be non-negative".into(),
+            ));
+        }
+        // Verified SQLite file-cache lookup: serve complete, verified bytes
+        // without touching the network (never serve unverified bytes).
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(hit) = self.cached_bytes(file_id, &file).await {
+            return Ok(hit);
+        }
+        // Downloads always start at offset 0: no durable prefix bytes exist
+        // to restore, so a nonzero resume offset would skip bytes required
+        // by the final full-file verification. No resume offsets are
+        // persisted (a stale offset would mislead recovery into skipping
+        // bytes it cannot reproduce).
         let mut offset: i64 = 0;
-        let mut out = Vec::with_capacity(file.size_bytes.max(0) as usize);
+        // Cap the initial reservation: a malicious or corrupt `size_bytes`
+        // must not abort the process with a huge upfront allocation. The
+        // buffer still grows to the verified size as parts arrive.
+        const MAX_INITIAL_CAP: usize = 1_048_576;
+        let initial_cap = (file.size_bytes.max(0) as usize).min(MAX_INITIAL_CAP);
+        let mut out = Vec::with_capacity(initial_cap);
         loop {
             check_cancel(&cancel)?;
             let req = tinkle_schema::proto::DownloadPartRequest {
@@ -1682,8 +1934,6 @@ impl DownloadManager {
             out.extend_from_slice(&resp.data);
             // Continue from offset + len(data) (never offset + limit).
             offset += len;
-            #[cfg(not(target_arch = "wasm32"))]
-            self.persist_resume_offset(file_id, offset, &file).await;
             if eof {
                 break;
             }
@@ -1692,8 +1942,10 @@ impl DownloadManager {
             }
         }
         verify_downloaded_bytes(&out, &file)?;
+        // Atomically publish the verified bytes into the file cache before
+        // returning so the next consumer hits the cache.
         #[cfg(not(target_arch = "wasm32"))]
-        self.clear_resume(file_id).await;
+        self.publish_cache_entry(file_id, &file, &out).await;
         Ok(out)
     }
 
@@ -1710,81 +1962,6 @@ impl DownloadManager {
         let bytes = self.download_bytes(file_id, cancel).await?;
         publish_atomic(final_path, &bytes).map_err(|e| TinkleError::Sync(e.to_string()))?;
         Ok(final_path.to_path_buf())
-    }
-
-    // Unused until a prefix-restore change lands (downloads restart at
-    // offset 0; see `fetch_bytes`). Kept so the persisted offsets written
-    // by `persist_resume_offset` remain readable.
-    #[allow(dead_code)]
-    #[cfg(not(target_arch = "wasm32"))]
-    async fn load_resume_offset(&self, file_id: i64, file_size: i64) -> i64 {
-        let storage = match self.storage() {
-            Some(s) => s,
-            None => return 0,
-        };
-        let principal = self.client.principal().await;
-        let job_id = download_job_id(file_id);
-        let s2 = storage.clone();
-        let job =
-            match tokio::task::spawn_blocking(move || s2.get_file_transfer(&principal, &job_id))
-                .await
-            {
-                Ok(Ok(Some(j))) => j,
-                _ => return 0,
-            };
-        if job.kind != "download" {
-            return 0;
-        }
-        if job.resume_offset > 0 && job.resume_offset < file_size {
-            job.resume_offset
-        } else {
-            0
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    async fn persist_resume_offset(&self, file_id: i64, offset: i64, file: &FileInfo) {
-        let storage = match self.storage() {
-            Some(s) => s,
-            None => return,
-        };
-        let principal = self.client.principal().await;
-        if principal == crate::sync::UNKNOWN_PRINCIPAL {
-            return;
-        }
-        let job = tinkle_storage::FileTransferJob {
-            job_id: download_job_id(file_id),
-            kind: "download".to_string(),
-            file_scope: SHARED_FILE_SCOPE.to_string(),
-            file_id,
-            upload_id: String::new(),
-            state: "active".to_string(),
-            session_json: format!(
-                "v1|{}|{}|{}",
-                file_id,
-                file.size_bytes,
-                hex_encode(file.sha256.as_ref())
-            ),
-            temp_path: String::new(),
-            resume_offset: offset,
-            updated_at: now_secs(),
-        };
-        let s2 = storage.clone();
-        let _ =
-            tokio::task::spawn_blocking(move || s2.upsert_file_transfer(&principal, &job)).await;
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    async fn clear_resume(&self, file_id: i64) {
-        let storage = match self.storage() {
-            Some(s) => s,
-            None => return,
-        };
-        let principal = self.client.principal().await;
-        let job_id = download_job_id(file_id);
-        let s2 = storage.clone();
-        let _ =
-            tokio::task::spawn_blocking(move || s2.delete_file_transfer(&principal, &job_id)).await;
     }
 
     /// Crash recovery (native): drop `file_transfers/download` jobs whose
@@ -1851,50 +2028,91 @@ impl DownloadManager {
                 }
             }
         }
-        // Orphan temps: best-effort sweep, never fatal.
+        // Orphan temps: best-effort sweep, never fatal. Durable jobs never
+        // claim the short-lived `publish_atomic` temps, so age-gate the
+        // sweep: `.part` files younger than the threshold may be active
+        // in-progress publishes and must not be deleted.
+        const ORPHAN_PART_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(15 * 60);
         if let Ok(rd) = std::fs::read_dir(cache_dir) {
             for ent in rd.flatten() {
                 let p = ent.path();
-                if p.extension().and_then(|e| e.to_str()) == Some("part") {
-                    let pstr = p.to_string_lossy().to_string();
-                    let still_claimed = jobs.iter().any(|jj| jj.temp_path == pstr);
-                    if !still_claimed {
-                        let _ = std::fs::remove_file(&p);
-                        cleaned += 1;
-                    }
+                if p.extension().and_then(|e| e.to_str()) != Some("part") {
+                    continue;
                 }
+                let pstr = p.to_string_lossy().to_string();
+                let still_claimed = jobs.iter().any(|jj| jj.temp_path == pstr);
+                if still_claimed {
+                    continue;
+                }
+                // Unknown age (metadata/IO failure) is treated as young:
+                // never delete a file that might still be written.
+                let is_old = ent
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .map(|t| t.elapsed().unwrap_or_default() >= ORPHAN_PART_MAX_AGE)
+                    .unwrap_or(false);
+                if !is_old {
+                    continue;
+                }
+                let _ = std::fs::remove_file(&p);
+                cleaned += 1;
             }
         }
         Ok(cleaned)
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn download_job_id(file_id: i64) -> String {
-    format!("download:{SHARED_FILE_SCOPE}:{file_id}")
-}
-
-/// Atomic publish: write `bytes` to a temp file in the same directory as
-/// `final_path`, `fsync`, then rename over the destination. Same-filesystem
-/// rename guarantees readers never observe a partial file.
+/// Atomic publish: write `bytes` to a unique temp file in the same
+/// directory as `final_path`, `fsync`, then rename over the destination.
+/// Same-filesystem rename guarantees readers never observe a partial file.
+/// Each publish uses `create_new` + a per-process nonce so concurrent
+/// publishers (same pid, same filename) never share one temp pathname.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn publish_atomic(final_path: &std::path::Path, bytes: &[u8]) -> Result<(), std::io::Error> {
     use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static PUBLISH_NONCE: AtomicU64 = AtomicU64::new(0);
     let parent = final_path.parent().unwrap_or(std::path::Path::new("."));
     // Same directory ⇒ same filesystem ⇒ atomic rename.
-    let mut tmp = parent.to_path_buf();
     let fname = final_path
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "download".to_string());
-    tmp.push(format!(".{fname}.{}.part", std::process::id()));
-    {
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
+    let pid = std::process::id();
+    // Bound the create_new retry loop: nonce uniqueness makes collisions
+    // near-impossible; retries only cover pid-reuse + nonce-wrap races.
+    for _ in 0..16 {
+        let nonce = PUBLISH_NONCE.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp = parent.join(format!(".{fname}.{pid}.{nanos}.{nonce}.part"));
+        let mut f = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        };
+        let result = (|| -> Result<(), std::io::Error> {
+            f.write_all(bytes)?;
+            f.sync_all()?;
+            drop(f);
+            std::fs::rename(&tmp, final_path)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        return result;
     }
-    std::fs::rename(&tmp, final_path)?;
-    Ok(())
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "publish_atomic could not claim a unique temp file",
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1921,7 +2139,7 @@ mod tests {
     fn sha256_matches_empty_vector() {
         // SHA-256("") = e3b0c442...
         assert_eq!(
-            hex_encode(&sha256_empty()),
+            hex_encode(&sha256(&[])),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
     }

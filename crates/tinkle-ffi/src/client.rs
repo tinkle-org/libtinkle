@@ -221,15 +221,10 @@ fn check_watch(watch: &[i64]) -> Result<(), FfiError> {
 }
 
 async fn observe_watch(inner: &libtinkle::Client, watch: Vec<i64>) -> Result<(), FfiError> {
-    if watch.is_empty() {
-        return Ok(());
-    }
-    let req = tinkle_schema::proto::ObserveConnectivityRequest { user_ids: watch };
-    inner
-        .updates()
-        .observe_connectivity(req)
-        .await
-        .map_err(FfiError::from)?;
+    // Persist + (re)issue via the retained core watch set. The core stores
+    // the union and reissues it on every new connection (connect/reconnect/
+    // supervisor reestablish), so presence survives reconnects.
+    inner.set_watch(watch).await.map_err(FfiError::from)?;
     Ok(())
 }
 
@@ -278,6 +273,8 @@ impl TinkleClient {
     }
 
     /// Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
+    /// Reissues the retained watch set on the fresh connection, so presence
+    /// observations survive reconnects.
     pub async fn connect(&self) -> Result<(), FfiError> {
         self.inner.connect().await.map_err(FfiError::from)
     }
@@ -287,6 +284,9 @@ impl TinkleClient {
     /// and reconnection from here on. The host only consumes `next_event()`;
     /// hints, dead transports, and per-target failures are handled inside
     /// the SDK and reported as events + target status.
+    ///
+    /// `watch` is retained and reissued on every new connection (reconnect/
+    /// supervisor reestablish), so presence observations survive reconnects.
     ///
     /// Idempotent: concurrent callers share the single supervisor and get
     /// the initial establishment result. Call `stop()` (or `shutdown()`)
@@ -370,6 +370,9 @@ impl TinkleClient {
     /// confirmation (tracked conversation keys, not reconciliation
     /// completion: journals reconcile in the background and report via
     /// `next_event` + target status).
+    ///
+    /// `watch` is retained and reissued on every new connection, so presence
+    /// observations survive reconnects.
     pub async fn subscribe(
         &self,
         targets: Vec<TargetSub>,
@@ -769,7 +772,8 @@ impl TinkleClient {
     }
 
     /// Reconnect + re-handshake + explicit resubscribe from tracked targets
-    /// (network change / wake from push).
+    /// (network change / wake from push). Reissues the retained watch set on
+    /// the fresh connection, so presence observations survive reconnects.
     pub async fn reconnect(&self) -> Result<(), FfiError> {
         self.inner.reconnect().await.map_err(FfiError::from)
     }

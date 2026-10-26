@@ -57,9 +57,10 @@ own mutation journal, and sync reconciles journals per target.
    completion on its own.
 6. Deduplicate by `accept_seq`: the token is conversation-local, assigned
    once on acceptance, and stable across edits of the same message. A
-   fetched token strictly newer than the applied one is newer; at or below
-   is duplicate-or-stale. Absent tokens order with date and never count as
-   dedup votes. Retention windows may drop older journal positions
+   fetched token strictly newer than the applied one is newer; strictly
+   below is duplicate-or-stale; equal tokens (normal for edits) and any
+   absent token order by `edit_date` instead (`fresher_body`). Absent
+   tokens never count as dedup votes. Retention windows may drop older journal positions
    entirely: a page that starts higher than the requested bound does not
    imply the skipped past was disclosed — full-history repair stays the
    responsibility of history fetches, not of the journal alone.
@@ -75,13 +76,16 @@ own mutation journal, and sync reconciles journals per target.
    through `GetTargetChanges`, not by diffing fetched bodies.
 8. Journal failures are per-target, never terminal for the session: a
    failed target parks in `Failed` status and emits
-   `ReconcileFailed{target_key, error}`; `reconcile_now()` retries it.
+   `ReconcileFailed{target_key, error}`; the supervisor keeps retrying
+   it with backoff while `reconcile_now()` triggers an immediate retry.
    There is no replay distance to bound and no rebuild to enter — no
    `max_replay_distance`, no `RebuildRequired`, no snapshot fencing.
 9. History (`load_history`) and dialogs (`load_dialogs`) live outside the
    journal: they never advance or reset accept positions. Pair snapshots
-   with cache hydration (`HydrateCache`) for offline reads; snapshot
-   messages are returned but not cached as message rows.
+   with cache hydration (`HydrateCache`) for offline reads; `NetworkOnly`
+   snapshots are returned without caching, while `HydrateCache` snapshots
+   commit authoritative bodies into message rows via the same-cursor path
+   (the journal cursor itself never moves on either policy).
 10. Connectivity observations are ephemeral, never checkpointed, cleared
     on disconnect.
 11. Sends persist `{request, random_id≠0}` before transmitting; lost
@@ -97,9 +101,14 @@ own mutation journal, and sync reconciles journals per target.
 - Poll `target_cursor(target_key)` for authoritative UI progress
   (informational events may drop under pressure; positions do not),
   `target_status(target_key)` for per-target demand state (`Idle` quiet,
-  `Reconciling` in flight/demanded, `Failed` parked until
-  `reconcile_now`), and `tracked_targets()` for the subscribed set.
-  `None` from cursor/status means untracked.
+  `Reconciling` in flight/demanded, `Failed` under supervisor backoff
+  retry — `reconcile_now()` triggers an immediate retry), and
+  `tracked_targets()` for the subscribed set.
+  `None` from the cursor means never-reconciled for a tracked target (or
+  no authenticated principal / no store entry); `None` from the status
+  means untracked, or no live manager while offline/suspended — so hosts
+  must not drop tracked conversations on a status `None` during
+  reconnect.
 - Journal reads (`get_messages`, `get_target_changes`) and snapshots
   (`load_history`, `load_dialogs`) never move accept positions. Pair
   snapshots with `HydrateCache` for offline reads; journal hydration

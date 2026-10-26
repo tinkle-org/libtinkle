@@ -37,8 +37,9 @@ pub(crate) const UNKNOWN_PRINCIPAL: &str = "unknown";
 const EVENT_CHANNEL_CAPACITY: usize = 1024;
 
 /// Internal recovery signal from the reconcile pipeline to the connection
-/// supervisor. Hints only: target states persist in the manager, and the
-/// supervisor watchdog covers lost signals. Never blocks the pump.
+/// supervisor. Hints only (bounded `try_send`, never blocks the pump):
+/// target states persist in the manager, and the supervisor tick sweep
+/// over tracked + dirty keys retries demands whose enqueue dropped.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 #[derive(Debug, Clone)]
 pub(crate) enum RecoverySignal {
@@ -66,10 +67,11 @@ pub enum SyncEvent {
         target_key: String,
         message_ids: Vec<i64>,
     },
-    /// One conversation removed from tracking.
+    /// One conversation removed from tracking via `unsubscribe` (also
+    /// emitted by `SyncManager::untrack_targets`). Hosts drop cached rows.
     ConversationRemoved { target_key: String },
-    /// One reconcile run failed (retryable demand persists; supervisor
-    /// reschedules).
+    /// One reconcile run failed (retryable demand persists in the manager
+    /// and the supervisor tick sweep reschedules).
     ReconcileFailed { target_key: String, error: String },
     /// Ephemeral connectivity observation (never checkpointed).
     Connectivity(ConnectivityChanged),
@@ -166,9 +168,16 @@ impl SyncManager {
         *self.signals.lock().await = Some(tx);
     }
 
-    pub(crate) async fn emit_signal(&self, signal: RecoverySignal) {
+    /// Best-effort signal enqueue. Returns true when the signal was queued
+    /// or when no supervisor channel is installed (manual path: nothing to
+    /// retry via signals). Returns false when the channel is full or
+    /// closed; callers must retain their demand marker so the supervisor
+    /// tick sweep can retry.
+    pub(crate) async fn emit_signal(&self, signal: RecoverySignal) -> bool {
         if let Some(tx) = self.signals.lock().await.clone() {
-            let _ = tx.try_send(signal);
+            tx.try_send(signal).is_ok()
+        } else {
+            true
         }
     }
 
@@ -223,22 +232,42 @@ impl SyncManager {
         self.status.lock().await.get(target_key).copied()
     }
 
-    /// Single-flight guard: true when this call started the run, false when
-    /// a run is already in flight for the target.
-    pub(crate) async fn begin_reconcile(&self, target_key: &str) -> bool {
+    /// Single-flight guard: `Some(generation)` when this call started the
+    /// run, `None` when a run is already in flight for the target. The
+    /// returned generation fences the run; pass it to `end_reconcile`.
+    pub(crate) async fn begin_reconcile(&self, target_key: &str) -> Option<u64> {
         let mut flight = self.in_flight.lock().await;
         if !flight.insert(target_key.to_string()) {
-            return false;
+            return None;
         }
+        let generation = self.state.lock().await.generation;
         self.status
             .lock()
             .await
             .insert(target_key.to_string(), ReconcileStatus::Reconciling);
-        true
+        Some(generation)
     }
 
-    pub(crate) async fn end_reconcile(&self, target_key: &str, failed: bool) {
-        self.in_flight.lock().await.remove(target_key);
+    /// Close a run started by `begin_reconcile`. No-op when `generation`
+    /// no longer matches the live scope: a stale run must not clear the
+    /// fresh run's in-flight marker nor overwrite its status.
+    ///
+    /// Holds the in-flight guard across removal + dirty consume so a
+    /// concurrent `handle_hint` check+insert cannot interleave and lose a
+    /// hint. The dirty marker is retained until the follow-up demand
+    /// actually enqueues (best-effort `try_send` can drop under pressure;
+    /// the supervisor tick sweep retries retained markers).
+    pub(crate) async fn end_reconcile(&self, target_key: &str, generation: u64, failed: bool) {
+        // Hold the guard for the whole transition (see above). The emit
+        // below only does a `try_send`, so holding across it is bounded.
+        let mut flight = self.in_flight.lock().await;
+        {
+            let state = self.state.lock().await;
+            if state.generation != generation {
+                return;
+            }
+        }
+        flight.remove(target_key);
         // Terminal `Failed` persists until the next run starts; `Idle`
         // means caught up. Only a new run clears `Failed`.
         self.status.lock().await.insert(
@@ -250,12 +279,18 @@ impl SyncManager {
             },
         );
         // A hint that arrived mid-run may describe a change the run never
-        // fetched; re-demand instead of dropping it.
-        if self.dirty.lock().await.remove(target_key) {
-            self.emit_signal(RecoverySignal::Demand {
-                target_key: target_key.to_string(),
-            })
-            .await;
+        // fetched; re-demand instead of dropping it. Retain the marker
+        // when the enqueue fails so the tick sweep retries.
+        let was_dirty = self.dirty.lock().await.contains(target_key);
+        if was_dirty {
+            let enqueued = self
+                .emit_signal(RecoverySignal::Demand {
+                    target_key: target_key.to_string(),
+                })
+                .await;
+            if enqueued {
+                self.dirty.lock().await.remove(target_key);
+            }
         }
     }
 
@@ -263,18 +298,72 @@ impl SyncManager {
         self.in_flight.lock().await.contains(target_key)
     }
 
+    /// Snapshot of dirty (hint-during-run) markers. The supervisor tick
+    /// uses it to retry demands whose `try_send` was dropped.
+    pub(crate) async fn dirty_keys(&self) -> Vec<String> {
+        self.dirty.lock().await.iter().cloned().collect()
+    }
+
+    /// Untrack conversations and notify hosts so they can drop cached
+    /// rows. Emits one `ConversationRemoved` per key (best-effort via the
+    /// bounded event channel, like all `SyncEvent`s).
+    pub(crate) async fn untrack_targets(&self, target_keys: &[String]) {
+        {
+            let mut tracked = self.tracked.lock().await;
+            let mut status = self.status.lock().await;
+            let mut flight = self.in_flight.lock().await;
+            let mut dirty = self.dirty.lock().await;
+            for key in target_keys {
+                tracked.remove(key);
+                status.remove(key);
+                flight.remove(key);
+                dirty.remove(key);
+            }
+        }
+        for key in target_keys {
+            self.emit_event(SyncEvent::ConversationRemoved {
+                target_key: key.clone(),
+            })
+            .await;
+        }
+    }
+
     /// Opaque notification hint: decode nothing. Each frame marks reconcile
     /// demand for every tracked target (single-flight: a hint for an
     /// already-reconciling target is recorded dirty instead of emitting a
-    /// duplicate demand; `end_reconcile` consumes it and re-demands, so a
-    /// change landing mid-run is never lost).
+    /// duplicate demand; `end_reconcile` consumes it and re-demands).
+    ///
+    /// Best-effort: `Demand` signals use a bounded `try_send` and can drop
+    /// under pressure. Dropped demands are retried by the supervisor tick
+    /// sweep over tracked + dirty keys, so a change landing mid-run is
+    /// eventually re-demanded rather than lost on the floor.
+    ///
+    /// Holds the in-flight guard across the check + dirty insert so a
+    /// concurrent `end_reconcile` cannot slip between the two and lose the
+    /// hint.
     pub(crate) async fn handle_hint(&self, _payload: &[u8]) {
         let keys = self.tracked_keys().await;
-        for key in keys {
-            if self.is_reconciling(&key).await {
-                self.dirty.lock().await.insert(key);
-                continue;
+        // Decide while holding the guard; emit after releasing it so a
+        // slow supervisor channel never blocks reconciliation.
+        let mut to_dirty = Vec::new();
+        let mut to_demand = Vec::new();
+        {
+            let flight = self.in_flight.lock().await;
+            for key in keys {
+                if flight.contains(&key) {
+                    to_dirty.push(key);
+                } else {
+                    to_demand.push(key);
+                }
             }
+            if !to_dirty.is_empty() {
+                let mut dirty = self.dirty.lock().await;
+                for key in &to_dirty {
+                    dirty.insert(key.clone());
+                }
+            }
+        }
+        for key in to_demand {
             self.emit_signal(RecoverySignal::Demand { target_key: key })
                 .await;
         }
@@ -341,7 +430,7 @@ mod tests {
             RecoverySignal::Demand { target_key } if target_key == "target:room:8"
         ));
         // Single-flight: reconciling targets are skipped.
-        assert!(mgr.begin_reconcile("target:room:7").await);
+        assert!(mgr.begin_reconcile("target:room:7").await.is_some());
         mgr.handle_hint(b"opaque").await;
         assert!(matches!(
             rx.try_recv().unwrap(),
@@ -356,20 +445,20 @@ mod tests {
         mgr.track_targets(vec![room_target(7)]).await;
         let (tx, mut rx) = mpsc::channel(16);
         mgr.set_signal_tx(tx).await;
-        assert!(mgr.begin_reconcile("target:room:7").await);
+        let gen = mgr.begin_reconcile("target:room:7").await.unwrap();
         // Hint during the run emits nothing yet, but is recorded.
         mgr.handle_hint(b"opaque").await;
         assert!(rx.try_recv().is_err());
         // Completion consumes the dirty flag and re-demands.
-        mgr.end_reconcile("target:room:7", false).await;
+        mgr.end_reconcile("target:room:7", gen, false).await;
         assert!(matches!(
             rx.try_recv().unwrap(),
             RecoverySignal::Demand { target_key } if target_key == "target:room:7"
         ));
         assert!(rx.try_recv().is_err());
         // A clean run emits no follow-up demand.
-        assert!(mgr.begin_reconcile("target:room:7").await);
-        mgr.end_reconcile("target:room:7", false).await;
+        let gen2 = mgr.begin_reconcile("target:room:7").await.unwrap();
+        mgr.end_reconcile("target:room:7", gen2, false).await;
         assert!(rx.try_recv().is_err());
     }
 
@@ -382,23 +471,84 @@ mod tests {
             Some(ReconcileStatus::Idle)
         );
         assert_eq!(mgr.target_status("target:room:9").await, None);
-        assert!(mgr.begin_reconcile("target:room:7").await);
-        assert!(!mgr.begin_reconcile("target:room:7").await);
+        let gen = mgr.begin_reconcile("target:room:7").await.unwrap();
+        assert!(mgr.begin_reconcile("target:room:7").await.is_none());
         assert_eq!(
             mgr.target_status("target:room:7").await,
             Some(ReconcileStatus::Reconciling)
         );
-        mgr.end_reconcile("target:room:7", false).await;
+        mgr.end_reconcile("target:room:7", gen, false).await;
         assert_eq!(
             mgr.target_status("target:room:7").await,
             Some(ReconcileStatus::Idle)
         );
-        assert!(mgr.begin_reconcile("target:room:7").await);
-        mgr.end_reconcile("target:room:7", true).await;
+        let gen2 = mgr.begin_reconcile("target:room:7").await.unwrap();
+        mgr.end_reconcile("target:room:7", gen2, true).await;
         assert_eq!(
             mgr.target_status("target:room:7").await,
             Some(ReconcileStatus::Failed)
         );
+    }
+
+    #[tokio::test]
+    async fn stale_end_is_noop_on_generation_mismatch() {
+        let mgr = SyncManager::new("user:1");
+        mgr.track_targets(vec![room_target(7)]).await;
+        let stale = mgr.begin_reconcile("target:room:7").await.unwrap();
+        // Scope reset clears in-flight and bumps generation.
+        mgr.on_disconnect().await;
+        // Fresh run starts after the reset.
+        let fresh = mgr.begin_reconcile("target:room:7").await.unwrap();
+        assert_ne!(stale, fresh);
+        // Stale completion must not clear the fresh run nor set Failed.
+        mgr.end_reconcile("target:room:7", stale, true).await;
+        assert!(mgr.is_reconciling("target:room:7").await);
+        assert_eq!(
+            mgr.target_status("target:room:7").await,
+            Some(ReconcileStatus::Reconciling)
+        );
+        mgr.end_reconcile("target:room:7", fresh, false).await;
+        assert_eq!(
+            mgr.target_status("target:room:7").await,
+            Some(ReconcileStatus::Idle)
+        );
+    }
+
+    #[tokio::test]
+    async fn dirty_retained_when_signal_dropped() {
+        let mgr = SyncManager::new("user:1");
+        mgr.track_targets(vec![room_target(7)]).await;
+        // No signal channel: full/closed channel simulated with capacity 0
+        // is racy, so use a channel that is already full.
+        let (tx, mut rx) = mpsc::channel(1);
+        // Fill it so the next try_send fails.
+        tx.try_send(RecoverySignal::PumpDead).unwrap();
+        mgr.set_signal_tx(tx).await;
+        let gen = mgr.begin_reconcile("target:room:7").await.unwrap();
+        mgr.handle_hint(b"opaque").await;
+        assert_eq!(mgr.dirty_keys().await, vec!["target:room:7".to_string()]);
+        mgr.end_reconcile("target:room:7", gen, false).await;
+        // Enqueue failed, so the marker must be retained for the tick sweep.
+        assert_eq!(mgr.dirty_keys().await, vec!["target:room:7".to_string()]);
+        // Drain to make room, then the next run's completion retries.
+        let _ = rx.try_recv().unwrap();
+        let gen2 = mgr.begin_reconcile("target:room:7").await.unwrap();
+        mgr.end_reconcile("target:room:7", gen2, false).await;
+        assert!(mgr.dirty_keys().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn untrack_emits_conversation_removed() {
+        let mgr = SyncManager::new("user:1");
+        mgr.track_targets(vec![room_target(7)]).await;
+        mgr.untrack_targets(&["target:room:7".to_string()]).await;
+        assert!(mgr.tracked_keys().await.is_empty());
+        assert_eq!(mgr.target_status("target:room:7").await, None);
+        assert!(matches!(
+            mgr.try_next_event().await,
+            Some(SyncEvent::ConversationRemoved { target_key })
+            if target_key == "target:room:7"
+        ));
     }
 
     #[tokio::test]

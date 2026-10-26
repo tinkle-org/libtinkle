@@ -87,8 +87,11 @@ impl ReconnectPolicy {
 /// High-level client configuration.
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
-    /// gRPC base endpoint for direct-unary reconciliation RPCs
-    /// (`GetTargetChanges` / `GetMessages`), e.g. `https://gateway.example.com`.
+    /// gRPC base endpoint for direct-unary reconciliation and file RPCs
+    /// (`GetTargetChanges` / `GetMessages`, plus `begin_upload` /
+    /// `upload_part` / `upload_status` / `complete_upload` /
+    /// `abort_upload` / `get_file_info` / `download_part`), e.g.
+    /// `https://gateway.example.com`.
     /// Syntra is primary; when set (native only), retryable Syntra failures
     /// fall back to this endpoint automatically.
     /// Prefer `with_grpc_endpoint` over direct assignment: the builder

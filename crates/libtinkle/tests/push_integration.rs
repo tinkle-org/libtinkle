@@ -417,6 +417,13 @@ async fn push_after_logout_defers_and_wipes() {
         matches!(committed, libtinkle::PushOutcome::Committed { .. }),
         "pre-logout wake must commit, got {committed:?}"
     );
+    let pre_rows = storage
+        .get_messages("user:42", "target:room:10", 20, None)
+        .unwrap();
+    assert!(
+        pre_rows.iter().any(|r| r.message_id == 400),
+        "message 400 must be present before logout()"
+    );
     assert!(c.logout().await.is_ok());
 
     let after = mgr.process_push(push_envelope("evt-lo-2", vec![401])).await;
@@ -426,7 +433,7 @@ async fn push_after_logout_defers_and_wipes() {
     }
     let rows = storage
         .get_messages("user:42", "target:room:10", 20, None)
-        .unwrap_or_default();
+        .unwrap();
     assert!(
         rows.is_empty(),
         "logout must wipe the principal's rows, got {}",

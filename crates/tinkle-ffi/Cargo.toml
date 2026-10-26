@@ -29,3 +29,4 @@ tokio.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
 prost.workspace = true
+tracing.workspace = true

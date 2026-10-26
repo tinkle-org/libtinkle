@@ -406,6 +406,18 @@ fn changes_page_rejects_violations() {
         last_accept_seq: 11,
     };
     assert!(validate_changes_page(10, &bad).is_err());
+    // Edited bodies must match the change's message id.
+    let bad = GetTargetChangesResponse {
+        changes: vec![change(
+            1,
+            TargetChangeKind::Edited,
+            Some(msg(2, None, Some(11))),
+            11,
+        )],
+        more_available: None,
+        last_accept_seq: 11,
+    };
+    assert!(validate_changes_page(10, &bad).is_err());
     // Deleted/revoked changes must not carry a body.
     for kind in [TargetChangeKind::Deleted, TargetChangeKind::Revoked] {
         let bad = GetTargetChangesResponse {
@@ -431,7 +443,9 @@ fn changes_page_rejects_violations() {
 fn accept_seq_decisions() {
     use AcceptSeqDecision::*;
     assert_eq!(accept_seq_decision(Some(5), Some(7)), Newer);
-    assert_eq!(accept_seq_decision(Some(5), Some(5)), DuplicateOrStale);
+    // Equal tokens are normal for edits (stable across mutations): fall
+    // back to edit_date instead of voting stale.
+    assert_eq!(accept_seq_decision(Some(5), Some(5)), UnknownOrder);
     assert_eq!(accept_seq_decision(Some(5), Some(3)), DuplicateOrStale);
     assert_eq!(accept_seq_decision(Some(5), None), UnknownOrder);
     assert_eq!(accept_seq_decision(None, Some(3)), UnknownOrder);

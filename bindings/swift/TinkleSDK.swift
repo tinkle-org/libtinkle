@@ -629,6 +629,16 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
  * All params are owned (`String`/`i64`); references are unsupported in
  * foreign trait methods. Every method returns `Result` so foreign
  * failures convert into [`crate::FfiError`] instead of panicking.
+ *
+ * Ordering: persist `accept_seq` via `save_journal` only after the page's
+ * effects commit (SQLite does both atomically via
+ * `apply_journal_page_fenced`; checkpoint-only stores persist after the
+ * host applies the page). Never advance the cursor before the bodies it
+ * covers are durable.
+ *
+ * Scope: `clear_principal` removes all state owned by `principal` — journal
+ * cursors plus, where applicable, cached messages/dialogs/users/chats — so
+ * logout leaves no offline bodies behind.
  */
 public protocol FfiCursorStore: AnyObject, Sendable {
 
@@ -647,6 +657,16 @@ public protocol FfiCursorStore: AnyObject, Sendable {
  * All params are owned (`String`/`i64`); references are unsupported in
  * foreign trait methods. Every method returns `Result` so foreign
  * failures convert into [`crate::FfiError`] instead of panicking.
+ *
+ * Ordering: persist `accept_seq` via `save_journal` only after the page's
+ * effects commit (SQLite does both atomically via
+ * `apply_journal_page_fenced`; checkpoint-only stores persist after the
+ * host applies the page). Never advance the cursor before the bodies it
+ * covers are durable.
+ *
+ * Scope: `clear_principal` removes all state owned by `principal` — journal
+ * cursors plus, where applicable, cached messages/dialogs/users/chats — so
+ * logout leaves no offline bodies behind.
  */
 open class FfiCursorStoreImpl: FfiCursorStore, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -1548,6 +1568,8 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
 
     /**
      * Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
+     * Reissues the retained watch set on the fresh connection, so presence
+     * observations survive reconnects.
      */
     func connect() async throws
 
@@ -1724,7 +1746,8 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
 
     /**
      * Reconnect + re-handshake + explicit resubscribe from tracked targets
-     * (network change / wake from push).
+     * (network change / wake from push). Reissues the retained watch set on
+     * the fresh connection, so presence observations survive reconnects.
      */
     func reconnect() async throws
 
@@ -1765,6 +1788,9 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
      * hints, dead transports, and per-target failures are handled inside
      * the SDK and reported as events + target status.
      *
+     * `watch` is retained and reissued on every new connection (reconnect/
+     * supervisor reestablish), so presence observations survive reconnects.
+     *
      * Idempotent: concurrent callers share the single supervisor and get
      * the initial establishment result. Call `stop()` (or `shutdown()`)
      * to shut down; `connect`/`subscribe`/`reconnect` remain as
@@ -1784,6 +1810,9 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
      * confirmation (tracked conversation keys, not reconciliation
      * completion: journals reconcile in the background and report via
      * `next_event` + target status).
+     *
+     * `watch` is retained and reissued on every new connection, so presence
+     * observations survive reconnects.
      */
     func subscribe(targets: [TargetSub], watch: [Int64]) async throws  -> FfiSubscribeResponse
 
@@ -1845,6 +1874,10 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
      * routes, after running a bounded reconcile pass for that
      * conversation (`None` when the envelope carries no routing — show
      * the conversation list instead).
+     *
+     * The reconcile is best-effort and bounded by
+     * [`libtinkle::PUSH_DEFAULT_BUDGET_SECS`]: failures and deadline expiry
+     * are logged and still return the key for navigation.
      */
     func openPushNotification(envelope: FfiPushEnvelope) async throws  -> String?
 
@@ -1960,6 +1993,8 @@ public static func newSqlite(config: ClientConfigFfi, credential: String, storag
 
     /**
      * Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
+     * Reissues the retained watch set on the fresh connection, so presence
+     * observations survive reconnects.
      */
 open func connect()async throws   {
     return
@@ -2406,7 +2441,8 @@ open func reconcileNow()async throws   {
 
     /**
      * Reconnect + re-handshake + explicit resubscribe from tracked targets
-     * (network change / wake from push).
+     * (network change / wake from push). Reissues the retained watch set on
+     * the fresh connection, so presence observations survive reconnects.
      */
 open func reconnect()async throws   {
     return
@@ -2519,6 +2555,9 @@ open func shutdown()async   {
      * hints, dead transports, and per-target failures are handled inside
      * the SDK and reported as events + target status.
      *
+     * `watch` is retained and reissued on every new connection (reconnect/
+     * supervisor reestablish), so presence observations survive reconnects.
+     *
      * Idempotent: concurrent callers share the single supervisor and get
      * the initial establishment result. Call `stop()` (or `shutdown()`)
      * to shut down; `connect`/`subscribe`/`reconnect` remain as
@@ -2567,6 +2606,9 @@ open func stop()async   {
      * confirmation (tracked conversation keys, not reconciliation
      * completion: journals reconcile in the background and report via
      * `next_event` + target status).
+     *
+     * `watch` is retained and reissued on every new connection, so presence
+     * observations survive reconnects.
      */
 open func subscribe(targets: [TargetSub], watch: [Int64])async throws  -> FfiSubscribeResponse  {
     return
@@ -2730,6 +2772,10 @@ open func logout()async throws  -> Bool  {
      * routes, after running a bounded reconcile pass for that
      * conversation (`None` when the envelope carries no routing — show
      * the conversation list instead).
+     *
+     * The reconcile is best-effort and bounded by
+     * [`libtinkle::PUSH_DEFAULT_BUDGET_SECS`]: failures and deadline expiry
+     * are logged and still return the key for navigation.
      */
 open func openPushNotification(envelope: FfiPushEnvelope)async throws  -> String?  {
     return
@@ -2841,15 +2887,15 @@ public func FfiConverterTypeTinkleClient_lower(_ value: TinkleClient) -> UInt64 
 /**
  * Record mirrored into [`libtinkle::ClientConfig`]. All fields owned.
  *
- * `grpc_endpoint` selects the direct-unary transport for reconciliation
- * RPCs (`GetMessages`/`GetTargetChanges` over gRPC instead of the default
- * Syntra unary RPC on the live connection). It is validated fail-fast by
- * [`TinkleClient::new`] and [`TinkleClient::new_sqlite`]: a
- * non-blank-but-invalid endpoint (missing scheme, non-`https` without
- * `allow_insecure`) returns [`FfiError::Internal`] at construction instead
- * of surfacing as a retried network failure at reconciliation time.
- * `None` (or blank, treated as unset for backward compatibility) keeps the
- * default Syntra unary path.
+ * `grpc_endpoint` enables the direct-unary gRPC fallback for reconciliation
+ * RPCs (`GetMessages`/`GetTargetChanges`). Syntra stays primary on the live
+ * connection; when set, retryable Syntra failures fall back to this endpoint
+ * automatically. It is validated fail-fast by [`TinkleClient::new`] and
+ * [`TinkleClient::new_sqlite`]: a non-blank-but-invalid endpoint (missing
+ * scheme, non-`https` without `allow_insecure`) returns
+ * [`FfiError::Internal`] at construction instead of surfacing as a retried
+ * network failure at reconciliation time. `None` (or blank, treated as
+ * unset for backward compatibility) keeps Syntra-only reconciliation.
  */
 public struct ClientConfigFfi: Equatable, Hashable {
     /**
@@ -4535,7 +4581,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_func_tinkle_ffi_init() != 34048) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_connect() != 48303) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_connect() != 57683) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_abort_upload() != 34739) {
@@ -4592,7 +4638,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_reconcile_now() != 51897) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect() != 46216) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect() != 32861) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_resume() != 27994) {
@@ -4607,13 +4653,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_shutdown() != 59360) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_start() != 7430) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_start() != 18779) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stop() != 14181) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_subscribe() != 7253) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_subscribe() != 15725) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_suspend() != 29619) {
@@ -4634,7 +4680,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_logout() != 58830) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_open_push_notification() != 61692) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_open_push_notification() != 18901) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_register_push() != 39244) {

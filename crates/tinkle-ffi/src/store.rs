@@ -18,6 +18,16 @@ use libtinkle::CursorStore as _;
 /// All params are owned (`String`/`i64`); references are unsupported in
 /// foreign trait methods. Every method returns `Result` so foreign
 /// failures convert into [`crate::FfiError`] instead of panicking.
+///
+/// Ordering: persist `accept_seq` via `save_journal` only after the page's
+/// effects commit (SQLite does both atomically via
+/// `apply_journal_page_fenced`; checkpoint-only stores persist after the
+/// host applies the page). Never advance the cursor before the bodies it
+/// covers are durable.
+///
+/// Scope: `clear_principal` removes all state owned by `principal` — journal
+/// cursors plus, where applicable, cached messages/dialogs/users/chats — so
+/// logout leaves no offline bodies behind.
 // TODO(runtime-acceptance-storage): GRDB/Room acceptance — principal
 // isolation between users, no credential persistence in the cursor store,
 // crash recovery resumes reconciliation from the last persisted accept_seq.

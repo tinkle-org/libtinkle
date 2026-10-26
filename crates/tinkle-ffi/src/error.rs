@@ -59,15 +59,18 @@ impl From<libtinkle::TinkleError> for FfiError {
                 let msg = s.to_string();
                 match s.code() {
                     syntra_core::ErrorCode::Cancelled => Self::Cancelled,
-                    syntra_core::ErrorCode::DeadlineExceeded => Self::Timeout,
-                    syntra_core::ErrorCode::Unauthenticated
-                    | syntra_core::ErrorCode::PermissionDenied => Self::Auth(msg),
-                    syntra_core::ErrorCode::Unavailable
+                    // DeadlineExceeded is retryable (bounded retry with
+                    // backoff), matching `GrpcStatus` + `RecoveryDecision::Retry`.
+                    // `Timeout` is retained for API compat but currently unmapped.
+                    syntra_core::ErrorCode::DeadlineExceeded
+                    | syntra_core::ErrorCode::Unavailable
                     | syntra_core::ErrorCode::Aborted
                     | syntra_core::ErrorCode::ResourceExhausted
                     | syntra_core::ErrorCode::Internal
                     | syntra_core::ErrorCode::Unknown
                     | syntra_core::ErrorCode::DataLoss => Self::Retryable(msg),
+                    syntra_core::ErrorCode::Unauthenticated
+                    | syntra_core::ErrorCode::PermissionDenied => Self::Auth(msg),
                     syntra_core::ErrorCode::Unspecified
                     | syntra_core::ErrorCode::InvalidArgument
                     | syntra_core::ErrorCode::NotFound
@@ -85,6 +88,7 @@ impl From<libtinkle::TinkleError> for FfiError {
             // by construction (connect/read framing, no status code).
             libtinkle::TinkleError::Grpc(msg) => Self::Retryable(msg),
             libtinkle::TinkleError::GrpcStatus { code, message } => match code {
+                syntra_core::ErrorCode::Cancelled => Self::Cancelled,
                 syntra_core::ErrorCode::Unauthenticated
                 | syntra_core::ErrorCode::PermissionDenied => Self::Auth(message),
                 syntra_core::ErrorCode::Unavailable
@@ -122,6 +126,81 @@ impl From<FfiError> for libtinkle::TinkleError {
         match e {
             FfiError::Storage(msg) => Self::CursorStore(msg),
             other => Self::CursorStore(other.to_string()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn syntra_error(code: syntra_core::ErrorCode) -> libtinkle::TinkleError {
+        libtinkle::TinkleError::Syntra(syntra_core::error::SyntraError::Rpc {
+            code,
+            raw_code: None,
+            message: "injected".into(),
+        })
+    }
+
+    fn grpc_status(code: syntra_core::ErrorCode) -> libtinkle::TinkleError {
+        libtinkle::TinkleError::GrpcStatus {
+            code,
+            message: "injected".into(),
+        }
+    }
+
+    fn discriminant(e: &FfiError) -> &'static str {
+        match e {
+            FfiError::Network(_) => "Network",
+            FfiError::NotConnected => "NotConnected",
+            FfiError::Timeout => "Timeout",
+            FfiError::Cancelled => "Cancelled",
+            FfiError::Sync(_) => "Sync",
+            FfiError::Codec(_) => "Codec",
+            FfiError::Storage(_) => "Storage",
+            FfiError::ReconnectExhausted => "ReconnectExhausted",
+            FfiError::Internal(_) => "Internal",
+            FfiError::Auth(_) => "Auth",
+            FfiError::Retryable(_) => "Retryable",
+        }
+    }
+
+    #[test]
+    fn error_code_matrix_syntra_and_grpc_status() {
+        use syntra_core::ErrorCode as C;
+        // (code, expected FFI discriminant) — both paths must agree.
+        let cases: [(C, &str); 17] = [
+            (C::Unspecified, "Network"),
+            (C::Cancelled, "Cancelled"),
+            (C::Unknown, "Retryable"),
+            (C::InvalidArgument, "Network"),
+            (C::DeadlineExceeded, "Retryable"),
+            (C::NotFound, "Network"),
+            (C::AlreadyExists, "Network"),
+            (C::PermissionDenied, "Auth"),
+            (C::ResourceExhausted, "Retryable"),
+            (C::FailedPrecondition, "Network"),
+            (C::Aborted, "Retryable"),
+            (C::OutOfRange, "Network"),
+            (C::Unimplemented, "Network"),
+            (C::Internal, "Retryable"),
+            (C::Unavailable, "Retryable"),
+            (C::DataLoss, "Retryable"),
+            (C::Unauthenticated, "Auth"),
+        ];
+        for (code, expected) in cases {
+            let syntra_ffi = FfiError::from(syntra_error(code));
+            assert_eq!(
+                discriminant(&syntra_ffi),
+                expected,
+                "Syntra {code:?} must map to {expected}"
+            );
+            let grpc_ffi = FfiError::from(grpc_status(code));
+            assert_eq!(
+                discriminant(&grpc_ffi),
+                expected,
+                "GrpcStatus {code:?} must map to {expected}"
+            );
         }
     }
 }

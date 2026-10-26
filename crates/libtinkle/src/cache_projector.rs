@@ -154,7 +154,10 @@ fn push_message(
 }
 
 /// Merge `extra` into `base` (message/dialog/user/chat/removal vectors
-/// concatenated; read-state scopes concatenated).
+/// concatenated; read-state scopes concatenated). Dialog touches are
+/// coalesced so one journal page (up to 500 changes, all for the same
+/// conversation peer) commits a single dialog row instead of tripping the
+/// SQLite 256-dialog batch limit.
 pub fn merge_ops(base: &mut tinkle_storage::CacheOps, extra: tinkle_storage::CacheOps) {
     base.messages.extend(extra.messages);
     base.dialogs.extend(extra.dialogs);
@@ -165,6 +168,35 @@ pub fn merge_ops(base: &mut tinkle_storage::CacheOps, extra: tinkle_storage::Cac
     base.files.extend(extra.files);
     base.message_files.extend(extra.message_files);
     base.entity_files.extend(extra.entity_files);
+    base.replace_entity_files.extend(extra.replace_entity_files);
+    coalesce_dialog_touches(base);
+}
+
+/// Coalesce dialog touches to one row per `(peer_kind, peer_id)`, keeping
+/// the greatest `top_message` (and its proto/origin). Journal pages batch
+/// one dialog touch per change; without this a 500-change page for one
+/// conversation would exceed the SQLite 256-dialog
+/// `apply_journal_page_fenced` batch limit even though every touch targets
+/// the same peer.
+pub fn coalesce_dialog_touches(ops: &mut tinkle_storage::CacheOps) {
+    if ops.dialogs.len() <= 1 {
+        return;
+    }
+    use std::collections::HashMap;
+    let mut best: HashMap<(String, i64), usize> = HashMap::new();
+    let mut out: Vec<tinkle_storage::DialogRow> = Vec::with_capacity(ops.dialogs.len());
+    for d in ops.dialogs.drain(..) {
+        let key = (d.peer_kind.clone(), d.peer_id);
+        if let Some(&idx) = best.get(&key) {
+            if d.top_message > out[idx].top_message {
+                out[idx] = d;
+            }
+            continue;
+        }
+        best.insert(key, out.len());
+        out.push(d);
+    }
+    ops.dialogs = out;
 }
 
 /// Encode one user row, skipping non-positive ids and encode failures
@@ -228,6 +260,8 @@ pub fn project_entities_to_ops(
     let file_ops = crate::files::project_entity_files_to_ops(users, chats);
     ops.files.extend(file_ops.files);
     ops.entity_files.extend(file_ops.entity_files);
+    ops.replace_entity_files
+        .extend(file_ops.replace_entity_files);
     ops
 }
 
@@ -402,5 +436,21 @@ mod tests {
         assert_eq!(ops.messages.len(), 1);
         assert_eq!(ops.messages[0].peer_id, 0);
         assert!(ops.dialogs.is_empty());
+    }
+
+    #[test]
+    fn dialog_touches_coalesce_per_peer() {
+        let mut ops = tinkle_storage::CacheOps::default();
+        for id in [10, 11, 12] {
+            let extra =
+                project_message_to_ops("target:room:7", &message(id, Some(4), None)).unwrap();
+            merge_ops(&mut ops, extra);
+        }
+        assert_eq!(ops.messages.len(), 3);
+        // Same conversation peer: 3 touches coalesce to 1 row, keeping the
+        // greatest top_message so a 500-change page never trips the 256
+        // dialog batch limit.
+        assert_eq!(ops.dialogs.len(), 1);
+        assert_eq!(ops.dialogs[0].top_message, 12);
     }
 }

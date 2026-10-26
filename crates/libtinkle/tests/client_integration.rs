@@ -1057,6 +1057,32 @@ async fn journal_paging_follows_yes_until_no() {
     // First page starts at the journal cursor with limit 500.
     assert_eq!(room_reads[0].1, 0);
     assert_eq!(room_reads[0].2, 500);
+    // A small limit splits the 5-change journal into Yes,Yes,No pages.
+    let p1 = c.get_target_changes(room_target(7), 0, 2).await.unwrap();
+    assert_eq!(p1.changes.len(), 2);
+    assert_eq!(p1.more_available, Some(true));
+    let p2 = c
+        .get_target_changes(room_target(7), p1.last_accept_seq, 2)
+        .await
+        .unwrap();
+    assert_eq!(p2.changes.len(), 2);
+    assert_eq!(p2.more_available, Some(true));
+    let p3 = c
+        .get_target_changes(room_target(7), p2.last_accept_seq, 2)
+        .await
+        .unwrap();
+    assert_eq!(p3.changes.len(), 1);
+    assert_eq!(p3.more_available, Some(false));
+    assert_eq!(p3.last_accept_seq, 5);
+    let room_reads = log.target_changes.lock().unwrap().clone();
+    assert!(
+        room_reads
+            .iter()
+            .filter(|(k, _, _)| k == "target:room:7")
+            .count()
+            >= 3,
+        "expected ≥3 GetTargetChanges calls, got {room_reads:?}"
+    );
     c.close().await;
 }
 
@@ -1181,7 +1207,9 @@ async fn load_history_uses_more_available_tristate() {
 }
 
 #[tokio::test]
-async fn hint_kicks_reconcile_for_tracked_targets() {
+async fn reconcile_now_refreshes_tracked_targets() {
+    // Direct `reconcile_now` path (no mock hint is sent here; the
+    // hint-driven demand path is unit-tested in `sync.rs`).
     let addr = start_mock().await;
     let c = test_client(addr);
     c.connect().await.unwrap();

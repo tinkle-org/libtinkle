@@ -85,7 +85,7 @@ UniFFI hosts use the same pipeline without touching Rust async
 
 ```swift
 // iOS Notification Service Extension (after OneSignalExtension runs):
-let env = try parsePushPayload(payload: userInfoJson)
+let env = try parsePushPayload(payload: Data(userInfoJson.utf8))
 let outcome = try await client.handlePushWake(envelope: env, timeoutSecs: 25)
 // Foreground open: navigate, then refresh.
 if let key = pushTargetKey(envelope: env) { showConversation(key) }

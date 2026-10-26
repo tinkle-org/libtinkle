@@ -25,10 +25,10 @@ rand.workspace = true
 url.workspace = true
 zeroize.workspace = true
 async-trait.workspace = true
-serde_json.workspace = true
 
 # Native keeps full tokio/tokio-util (unchanged behavior).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tonic.workspace = true

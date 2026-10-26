@@ -101,6 +101,9 @@ pub struct Client {
     live: Arc<RwLock<Option<Live>>>,
     principal: Arc<RwLock<String>>,
     interests: Arc<tokio::sync::Mutex<Interests>>,
+    /// Connectivity watch set retained across reconnects: `ObserveConnectivity`
+    /// is per-connection, so every new connection must reissue the stored set.
+    watch: Arc<tokio::sync::Mutex<Vec<i64>>>,
     /// Serializes `subscribe` bodies: concurrent subscribes must not
     /// interleave tracking + kicking.
     sub_lock: Arc<tokio::sync::Mutex<()>>,
@@ -167,6 +170,7 @@ impl Client {
             live: Arc::new(RwLock::new(None)),
             principal: Arc::new(RwLock::new(UNKNOWN_PRINCIPAL.to_string())),
             interests: Arc::new(tokio::sync::Mutex::new(Interests::default())),
+            watch: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             sub_lock: Arc::new(tokio::sync::Mutex::new(())),
             connect_lock: Arc::new(tokio::sync::Mutex::new(())),
             signal_tx: Arc::new(tokio::sync::Mutex::new(None)),
@@ -196,6 +200,7 @@ impl Client {
             live: Arc::new(RwLock::new(None)),
             principal: Arc::new(RwLock::new(UNKNOWN_PRINCIPAL.to_string())),
             interests: Arc::new(tokio::sync::Mutex::new(Interests::default())),
+            watch: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             sub_lock: Arc::new(tokio::sync::Mutex::new(())),
             connect_lock: Arc::new(tokio::sync::Mutex::new(())),
             signal_tx: Arc::new(tokio::sync::Mutex::new(None)),
@@ -236,6 +241,48 @@ impl Client {
         }
     }
 
+    /// Retained connectivity watch set. `ObserveConnectivity` is
+    /// per-connection, so every new connection must reissue the stored set.
+    /// Merges (union + dedupe); empty input keeps the existing set.
+    /// When connected, observes the merged set immediately.
+    pub async fn set_watch(&self, watch: Vec<i64>) -> Result<(), TinkleError> {
+        for w in &watch {
+            if *w <= 0 {
+                return Err(TinkleError::Codec("watch user_id must be positive".into()));
+            }
+        }
+        let merged = {
+            let mut g = self.watch.lock().await;
+            for w in watch {
+                if !g.contains(&w) {
+                    g.push(w);
+                }
+            }
+            g.clone()
+        };
+        if merged.is_empty() || !self.is_connected().await {
+            return Ok(());
+        }
+        let req = tinkle_schema::proto::ObserveConnectivityRequest { user_ids: merged };
+        self.updates().observe_connectivity(req).await?;
+        Ok(())
+    }
+
+    /// Current retained watch set (for inspection/testing).
+    pub async fn watch_list(&self) -> Vec<i64> {
+        self.watch.lock().await.clone()
+    }
+
+    async fn reobserve_stored_watch(&self) -> Result<(), TinkleError> {
+        let watch = self.watch.lock().await.clone();
+        if watch.is_empty() {
+            return Ok(());
+        }
+        let req = tinkle_schema::proto::ObserveConnectivityRequest { user_ids: watch };
+        self.updates().observe_connectivity(req).await?;
+        Ok(())
+    }
+
     /// Push-path fence snapshot: current principal plus the live reconcile
     /// generation when a connection exists (`None` on a cold push
     /// extension with no `live` yet; principal equality still fences).
@@ -272,15 +319,16 @@ impl Client {
     }
 
     /// Logout-scoped local reset: principal back to unknown, tracked
-    /// interests cleared, in-memory catch-up demand dropped, and the live
-    /// reconcile scope fenced via `set_principal`. Durable rows are wiped
-    /// separately via `Storage::clear_principal`. Native-only: called from
-    /// the push module's `logout`.
+    /// interests and watch set cleared, in-memory catch-up demand dropped,
+    /// and the live reconcile scope fenced via `set_principal`. Durable rows
+    /// are wiped separately via `Storage::clear_principal`. Native-only:
+    /// called from the push module's `logout`.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) async fn reset_session_for_logout(&self) {
         *self.principal.write().await = UNKNOWN_PRINCIPAL.to_string();
         self.interests.lock().await.targets.clear();
         self.interests.lock().await.subscribed = false;
+        self.watch.lock().await.clear();
         #[cfg(not(target_arch = "wasm32"))]
         self.catchup_pending.lock().await.clear();
         if let Ok(mgr) = self.live_mgr().await {
@@ -364,6 +412,13 @@ impl Client {
         });
         drop(live_w);
         self.transport_ok.store(true, Ordering::SeqCst);
+        // Reissue the retained watch set on the fresh connection.
+        // `ObserveConnectivity` is per-connection; without this a reconnect
+        // silently drops presence observations.
+        if let Err(e) = self.reobserve_stored_watch().await {
+            self.teardown_connection().await;
+            return Err(e);
+        }
         Ok(())
     }
 
@@ -841,18 +896,18 @@ impl Client {
                 "authenticated principal unknown; call set_principal_user_id after sign_in".into(),
             ));
         }
-        if !mgr.begin_reconcile(target_key).await {
+        let Some(run_generation) = mgr.begin_reconcile(target_key).await else {
             return Ok(0);
-        }
+        };
         let fence_principal = principal.clone();
-        let fence_generation = mgr.generation().await;
+        let fence_generation = run_generation;
         let result = self
             .reconcile_target_inner(&mgr, &fence_principal, fence_generation, target_key, target)
             .await;
         match &result {
-            Ok(_) => mgr.end_reconcile(target_key, false).await,
+            Ok(_) => mgr.end_reconcile(target_key, run_generation, false).await,
             Err(_) => {
-                mgr.end_reconcile(target_key, true).await;
+                mgr.end_reconcile(target_key, run_generation, true).await;
                 if let Err(e) = &result {
                     let _ = mgr
                         .emit_event(SyncEvent::ReconcileFailed {
@@ -953,72 +1008,100 @@ impl Client {
                     }
                 }
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            let (ops, affected) = self
-                .build_page_ops(target_key, target, &page, &run_removals)
-                .await?;
+            // Journal pages batch up to 500 changes. Dialog touches are
+            // coalesced per peer by `cache_projector`, but a page can still
+            // exceed the SQLite per-commit batch limits (notably 256
+            // dialogs), so commit in shards with intermediate cursors. Each
+            // shard advances the cursor to its last change, so a crash
+            // replays from the last committed shard.
+            const JOURNAL_COMMIT_CHANGE_BUDGET: usize = 200;
             #[cfg(target_arch = "wasm32")]
             let affected: Vec<i64> = page.changes.iter().map(|c| c.message_id).collect();
+            #[cfg(not(target_arch = "wasm32"))]
+            let mut affected: Vec<i64> = Vec::with_capacity(page.changes.len());
             let new_cursor = page.last_accept_seq;
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(sqlite) = mgr.sqlite_clone().await {
-                let _guard = mgr.checkpoint_save_lock().await;
-                if !mgr.check_fence(fence_principal, fence_generation).await {
-                    return Err(TinkleError::Sync(format!(
-                        "reconcile scope changed for {target_key}; dropping stale pages"
-                    )));
-                }
-                let gen = {
-                    let sqlite_task = sqlite.clone();
-                    let p = fence_principal.to_string();
-                    let t = target_key.to_string();
-                    tokio::task::spawn_blocking(move || sqlite_task.stream_state(&p, &t))
+                let shards: Vec<&[tinkle_schema::proto::TargetChange]> =
+                    page.changes.chunks(JOURNAL_COMMIT_CHANGE_BUDGET).collect();
+                for chunk in shards {
+                    let Some(last) = chunk.last() else {
+                        continue;
+                    };
+                    let shard_cursor = last.accept_seq;
+                    let sub_page = tinkle_schema::sync::ValidatedChangesPage {
+                        changes: chunk.to_vec(),
+                        last_accept_seq: shard_cursor,
+                        more: page.more,
+                    };
+                    let (ops, mut shard_affected) = self
+                        .build_page_ops(target_key, target, &sub_page, &run_removals)
+                        .await?;
+                    let _guard = mgr.checkpoint_save_lock().await;
+                    if !mgr.check_fence(fence_principal, fence_generation).await {
+                        return Err(TinkleError::Sync(format!(
+                            "reconcile scope changed for {target_key}; dropping stale pages"
+                        )));
+                    }
+                    let gen = {
+                        let sqlite_task = sqlite.clone();
+                        let p = fence_principal.to_string();
+                        let t = target_key.to_string();
+                        tokio::task::spawn_blocking(move || sqlite_task.stream_state(&p, &t))
+                            .await
+                            .map_err(|e| {
+                                TinkleError::CursorStore(format!("stream_state task failed: {e}"))
+                            })?
+                            .map_err(|e| TinkleError::CursorStore(e.to_string()))?
+                            .generation
+                    };
+                    let apply = {
+                        let sqlite_task = sqlite.clone();
+                        let p = fence_principal.to_string();
+                        let t = target_key.to_string();
+                        let ops_task = ops;
+                        tokio::task::spawn_blocking(move || {
+                            sqlite_task.apply_journal_page_fenced(
+                                &p,
+                                &t,
+                                &ops_task,
+                                shard_cursor,
+                                gen,
+                            )
+                        })
                         .await
                         .map_err(|e| {
-                            TinkleError::CursorStore(format!("stream_state task failed: {e}"))
+                            TinkleError::CursorStore(format!("journal apply task failed: {e}"))
                         })?
-                        .map_err(|e| TinkleError::CursorStore(e.to_string()))?
-                        .generation
-                };
-                let apply = {
-                    let sqlite_task = sqlite.clone();
-                    let p = fence_principal.to_string();
-                    let t = target_key.to_string();
-                    let ops_task = ops;
-                    tokio::task::spawn_blocking(move || {
-                        sqlite_task.apply_journal_page_fenced(&p, &t, &ops_task, new_cursor, gen)
-                    })
-                    .await
-                    .map_err(|e| {
-                        TinkleError::CursorStore(format!("journal apply task failed: {e}"))
-                    })?
-                };
-                if let Err(e) = apply {
-                    use tinkle_storage::StorageError as SE;
-                    match &e {
-                        SE::GenerationMismatch { .. } | SE::ScopeMismatch { .. } => {
-                            return Err(TinkleError::Sync(e.to_string()));
-                        }
-                        _ => {
-                            let _ = mgr
-                                .emit_event(SyncEvent::CheckpointFailed {
+                    };
+                    if let Err(e) = apply {
+                        use tinkle_storage::StorageError as SE;
+                        match &e {
+                            SE::GenerationMismatch { .. } | SE::ScopeMismatch { .. } => {
+                                return Err(TinkleError::Sync(e.to_string()));
+                            }
+                            _ => {
+                                let _ = mgr
+                                    .emit_event(SyncEvent::CheckpointFailed {
+                                        target_key: target_key.to_string(),
+                                        accept_seq: shard_cursor,
+                                        error: e.to_string(),
+                                    })
+                                    .await;
+                                mgr.emit_signal(RecoverySignal::CheckpointFailed {
                                     target_key: target_key.to_string(),
-                                    accept_seq: new_cursor,
-                                    error: e.to_string(),
+                                    accept_seq: shard_cursor,
                                 })
                                 .await;
-                            mgr.emit_signal(RecoverySignal::CheckpointFailed {
-                                target_key: target_key.to_string(),
-                                accept_seq: new_cursor,
-                            })
-                            .await;
-                            return Err(TinkleError::CheckpointFailed {
-                                target_key: target_key.to_string(),
-                                accept_seq: new_cursor,
-                                error: e.to_string(),
-                            });
+                                return Err(TinkleError::CheckpointFailed {
+                                    target_key: target_key.to_string(),
+                                    accept_seq: shard_cursor,
+                                    error: e.to_string(),
+                                });
+                            }
                         }
                     }
+                    affected.append(&mut shard_affected);
                 }
             } else {
                 let _guard = mgr.checkpoint_save_lock().await;
@@ -1036,6 +1119,7 @@ impl Client {
                         .await;
                     return Err(e);
                 }
+                affected = page.changes.iter().map(|c| c.message_id).collect();
             }
             #[cfg(target_arch = "wasm32")]
             {
@@ -1150,6 +1234,7 @@ impl Client {
             && ops.files.is_empty()
             && ops.message_files.is_empty()
             && ops.entity_files.is_empty()
+            && ops.replace_entity_files.is_empty()
         {
             return Ok(Vec::new());
         }
@@ -1707,6 +1792,36 @@ impl Client {
         Ok(())
     }
 
+    /// Stop tracking conversations: drop interests, untrack in the live
+    /// manager (emits `ConversationRemoved` per key so hosts drop cached
+    /// rows), and drop journal cursors so a future re-subscribe starts at
+    /// 0 with a history heal. Best-effort when offline (interests + stored
+    /// cursors are still dropped; no event without a live manager).
+    pub async fn unsubscribe(&self, target_keys: &[String]) -> Result<(), TinkleError> {
+        let _sub = self.sub_lock.lock().await;
+        {
+            let mut g = self.interests.lock().await;
+            g.targets.retain(|t| {
+                target_key_of(t)
+                    .map(|k| !target_keys.contains(&k))
+                    .unwrap_or(true)
+            });
+            if g.targets.is_empty() {
+                g.subscribed = false;
+            }
+        }
+        if let Ok(mgr) = self.live_mgr().await {
+            mgr.untrack_targets(target_keys).await;
+        }
+        let principal = self.principal().await;
+        if principal != UNKNOWN_PRINCIPAL {
+            for key in target_keys {
+                let _ = self.store.remove_target(&principal, key).await;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn next_event(&self) -> Option<SyncEvent> {
         loop {
             {
@@ -1950,6 +2065,11 @@ impl Client {
                     }
                     if self.is_connected().await {
                         self.recover_due(&mut demand).await;
+                        // Bounded `try_send` signals can drop under pressure
+                        // without ever entering `demand`. Sweep tracked +
+                        // dirty + catch-up markers so a dropped `Demand` is
+                        // retried instead of stalling until the next hint.
+                        self.sweep_tracked(&mut demand).await;
                     }
                 }
                 Some(signal) = sig_rx.recv() => {
@@ -1993,6 +2113,50 @@ impl Client {
             .map(|(s, _)| s.clone())
             .collect();
         for target_key in due {
+            self.recover_one(&target_key, demand).await;
+        }
+    }
+
+    /// Periodic safety net for best-effort `Demand` signals: the pump and
+    /// `end_reconcile` use a bounded 64-slot `try_send` that drops under
+    /// pressure without entering `demand`. Sweep tracked + dirty +
+    /// catch-up markers and (re)queue anything that looks unreconciled so
+    /// a dropped signal is retried on the next tick instead of stalling.
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn sweep_tracked(&self, demand: &mut HashMap<String, TargetDemand>) {
+        let mgr = match self.live_mgr().await {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        let keys = mgr.tracked_keys().await;
+        if keys.is_empty() {
+            return;
+        }
+        let dirty: HashSet<String> = mgr.dirty_keys().await.into_iter().collect();
+        let pending_catchup: HashSet<String> =
+            self.catchup_pending.lock().await.iter().cloned().collect();
+        let mut added = Vec::new();
+        for key in keys {
+            if demand.contains_key(&key) {
+                continue;
+            }
+            if mgr.is_reconciling(&key).await {
+                continue;
+            }
+            let failed = matches!(
+                mgr.target_status(&key).await,
+                Some(crate::sync::ReconcileStatus::Failed)
+            );
+            if failed || dirty.contains(&key) || pending_catchup.contains(&key) {
+                demand
+                    .entry(key.clone())
+                    .or_insert_with(TargetDemand::fresh);
+                added.push(key);
+            }
+        }
+        // `recover_due` already ran this tick; drive only the entries this
+        // sweep (re)queued (fresh entries are immediately due).
+        for target_key in added {
             self.recover_one(&target_key, demand).await;
         }
     }
@@ -2298,6 +2462,7 @@ impl Client {
             && ops.chats.is_empty()
             && ops.files.is_empty()
             && ops.entity_files.is_empty()
+            && ops.replace_entity_files.is_empty()
         {
             return;
         }
@@ -2313,15 +2478,33 @@ impl Client {
                 }
             }
             // Global-pin file metadata + entity refs (avatars). First-wins
-            // metadata, idempotent refs — same shared-record path as journal.
+            // metadata, replace-per-entity refs — same shared-record path as
+            // journal (stale avatar refs are collected, not leaked).
             for row in &ops.files {
                 if let Err(e) = storage.upsert_file(&principal, row) {
                     tracing::debug!(error = %e, "history file ingest failed");
                 }
             }
-            for r in &ops.entity_files {
-                if let Err(e) = storage.upsert_entity_file_ref(&principal, r) {
-                    tracing::debug!(error = %e, "history entity-file ingest failed");
+            {
+                use std::collections::HashMap;
+                let mut by_entity: HashMap<(&str, i64), Vec<&tinkle_storage::EntityFileRef>> =
+                    HashMap::new();
+                for r in &ops.entity_files {
+                    by_entity
+                        .entry((r.kind.as_str(), r.entity_id))
+                        .or_default()
+                        .push(r);
+                }
+                for (kind, entity_id) in &ops.replace_entity_files {
+                    let refs: Vec<tinkle_storage::EntityFileRef> = by_entity
+                        .get(&(kind.as_str(), *entity_id))
+                        .map(|v| v.iter().map(|r| (*r).clone()).collect())
+                        .unwrap_or_default();
+                    if let Err(e) =
+                        storage.replace_entity_file_refs(&principal, kind, *entity_id, &refs)
+                    {
+                        tracing::debug!(error = %e, "history entity-file ingest failed");
+                    }
                 }
             }
         })
