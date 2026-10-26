@@ -6,3 +6,5 @@
 buf.lock
 skills-lock.json
 .agents/
+__pycache__/
+*.pyc

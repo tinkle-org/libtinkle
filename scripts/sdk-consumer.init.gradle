@@ -15,7 +15,7 @@ gradle.projectsEvaluated {
             def artifacts = sample.configurations.getByName('debugRuntimeClasspath')
                 .resolvedConfiguration.resolvedArtifacts
             def sdk = artifacts.findAll {
-                it.moduleVersion.id.group == 'com.github.tinklehq' &&
+                it.moduleVersion.id.group == 'com.github.tinkle-org' &&
                 it.name == 'tinkle-sdk-kotlin' &&
                 it.moduleVersion.id.version == expectedVersion && it.extension == 'aar'
             }

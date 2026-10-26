@@ -26,9 +26,13 @@ class ConsumerTests(unittest.TestCase):
         self.pins.write_text(json.dumps(self.data))
 
     def tree(self, sdk):
+        try:
+            names = ci.local_package_files(sdk)
+        except ValueError:
+            names = ci.CONSUMER_FILES[sdk]
         return {"truncated": False, "tree": [
             {"path": name, "type": "blob", "mode": "100644"}
-            for name in ci.CONSUMER_FILES[sdk]]}
+            for name in names]}
 
     def test_pr_without_inputs_uses_checked_in_immutable_pins(self):
         self.assertEqual(ci.consumer_refs(self.pins), {"swift": "a" * 40, "kotlin": "b" * 40})
@@ -79,7 +83,7 @@ class ConsumerTests(unittest.TestCase):
                     if args[-1].endswith("/commits/" + ref):
                         return json.dumps({"sha": sha})
                     self.assertEqual(args, ("gh", "api",
-                        f"repos/tinklehq/tinkle-sdk-{sdk}/git/trees/{sha}?recursive=1"))
+                        f"repos/tinkle-org/tinkle-sdk-{sdk}/git/trees/{sha}?recursive=1"))
                     return json.dumps(self.tree(sdk))
                 with patch.object(ci.release, "run", side_effect=command) as run, \
                         patch.dict(ci.os.environ, {"GITHUB_OUTPUT": str(output)}):
@@ -112,13 +116,19 @@ class ConsumerTests(unittest.TestCase):
 
     def test_symlink_blob_is_not_a_regular_scaffold_file(self):
         tree = self.tree("swift")
-        tree["tree"][0]["mode"] = "120000"
+        for entry in tree["tree"]:
+            if entry["path"] == "Package.swift":
+                entry["mode"] = "120000"
         with patch.object(ci.release, "run", side_effect=[json.dumps({"sha": "a" * 40}), json.dumps(tree)]):
             with self.assertRaisesRegex(ValueError, "Package.swift"):
                 ci.pin_consumers(self.pins)
 
     def test_fresh_scaffold_needs_no_metadata_or_binary_artifacts(self):
-        for sdk, names in ci.CONSUMER_FILES.items():
+        for sdk in ci.CONSUMER_FILES:
+            try:
+                names = ci.local_package_files(sdk)
+            except ValueError:
+                names = ci.CONSUMER_FILES[sdk]
             destination = self.root / sdk
             for name in names:
                 file = destination / name

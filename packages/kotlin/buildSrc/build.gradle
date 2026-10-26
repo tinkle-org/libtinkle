@@ -1,0 +1,16 @@
+plugins {
+    id 'groovy'
+}
+
+repositories { mavenCentral() }
+
+dependencies {
+    implementation gradleApi()
+    implementation localGroovy()
+    testImplementation 'junit:junit:4.13.2'
+}
+
+tasks.withType(Test).configureEach {
+    // ProjectBuilder injects its test fixtures into java.lang's loader.
+    jvmArgs '--add-opens=java.base/java.lang=ALL-UNNAMED'
+}

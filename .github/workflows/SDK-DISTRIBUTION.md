@@ -65,13 +65,13 @@ The canonical manifest has exactly these fields:
   "schema_version": 1,
   "version": "1.2.3",
   "source_revision": "0123456789abcdef0123456789abcdef01234567",
-  "source_repository": "tinklehq/libtinkle",
+  "source_repository": "tinkle-org/libtinkle",
   "source_tag": "tinkle-ffi-v1.2.3",
   "artifacts": {
-    "ios": {"filename": "TinkleSDKFFI.xcframework.zip", "url": "https://github.com/tinklehq/libtinkle/releases/download/tinkle-ffi-v1.2.3/TinkleSDKFFI.xcframework.zip", "sha256": "<64 lowercase hex characters>"},
-    "swift_bindings": {"filename": "swift-bindings.zip", "url": "https://github.com/tinklehq/libtinkle/releases/download/tinkle-ffi-v1.2.3/swift-bindings.zip", "sha256": "<64 lowercase hex characters>"},
-    "android": {"filename": "android-native-libraries.zip", "url": "https://github.com/tinklehq/libtinkle/releases/download/tinkle-ffi-v1.2.3/android-native-libraries.zip", "sha256": "<64 lowercase hex characters>"},
-    "kotlin_bindings": {"filename": "kotlin-bindings.zip", "url": "https://github.com/tinklehq/libtinkle/releases/download/tinkle-ffi-v1.2.3/kotlin-bindings.zip", "sha256": "<64 lowercase hex characters>"}
+    "ios": {"filename": "TinkleSDKFFI.xcframework.zip", "url": "https://github.com/tinkle-org/libtinkle/releases/download/tinkle-ffi-v1.2.3/TinkleSDKFFI.xcframework.zip", "sha256": "<64 lowercase hex characters>"},
+    "swift_bindings": {"filename": "swift-bindings.zip", "url": "https://github.com/tinkle-org/libtinkle/releases/download/tinkle-ffi-v1.2.3/swift-bindings.zip", "sha256": "<64 lowercase hex characters>"},
+    "android": {"filename": "android-native-libraries.zip", "url": "https://github.com/tinkle-org/libtinkle/releases/download/tinkle-ffi-v1.2.3/android-native-libraries.zip", "sha256": "<64 lowercase hex characters>"},
+    "kotlin_bindings": {"filename": "kotlin-bindings.zip", "url": "https://github.com/tinkle-org/libtinkle/releases/download/tinkle-ffi-v1.2.3/kotlin-bindings.zip", "sha256": "<64 lowercase hex characters>"}
   }
 }
 ```
@@ -128,10 +128,13 @@ used by the helper.
 
 ## Consumer/build integration contracts
 
-`scripts/sdk-ci.py` is automation-only and shared by core and downstream CI.
-It stages exact packaged artifacts. In ordinary SDK CI it **compares** checked-in
+`scripts/sdk-ci.py` is automation-only. In core CI it syncs the local
+`packages/` trees into a disposable directory, then stages exact packaged
+artifacts. In ordinary SDK CI it **compares** checked-in
 generated bindings with the published ZIP; only core candidate testing and
 explicit initial bootstrap copy a generated binding into a disposable checkout.
+The `sync-package` subcommand is the only writer of package sources into the
+test directory; `stage` never silently heals an incomplete checkout.
 
 Swift package integration:
 
@@ -197,52 +200,47 @@ Kotlin package integration:
   expected lane size. `/proc/self/smaps` is not used as page-size proof: Android's
   [x86_64 16 KB simulation](https://source.android.com/docs/core/architecture/16kb-page-size/getting-started-cf-x86-64-pgagnostic)
   can expose 16 KB application pages while mappings still use 4 KB kernel pages.
-* JitPack coordinate: `com.github.tinklehq:tinkle-sdk-kotlin:vX.Y.Z`. JitPack
+* JitPack coordinate: `com.github.tinkle-org:tinkle-sdk-kotlin:vX.Y.Z`. JitPack
   downloads the pinned Rust bundle and packages it; it must never build Rust.
 
 ## Bootstrap and operator handoff
 
 No initial `sdk-artifact.json` or fake release tag is added. Before the first
-core release, SDK CI reports native validation as **not run**. Use SDK
-`workflow_dispatch` with `source_ref` to explicitly select the core revision
+core release, native validation runs against the local `packages/` tree only.
+Use `workflow_dispatch` with `source_ref` to explicitly select the core revision
 containing the matching build/automation changes. The ref is resolved to a SHA
-before building. For the current stacked bootstrap, an operator may choose
-`feat/native-sdk-distribution`; it is not baked into the permanent dependency.
-Once metadata exists, SDK CI exclusively uses its `source_revision`.
+before building. Once metadata exists, downstream release flows exclusively use
+its `source_revision`.
 
-Core PR and validation-only runs default to the full SDK commit SHAs checked in
-at `scripts/sdk-consumers.json`, not the downstream `main` branches. These are
-test dependencies: update them deliberately alongside core/consumer contract
-changes, including after the bootstrap PRs merge. An SDK bootstrap need not be
-merged to validate a core PR. Optional `swift_ref` and `kotlin_ref` dispatch/call
-overrides must be full lowercase commit SHAs; mutable branches/tags are rejected.
-For a manual validation run, use `publish=false` and an exact `source_ref`.
+Core PR and validation-only runs use the `packages/swift` and `packages/kotlin`
+trees at the tested core SHA — the same commit that owns the Rust API,
+generated bindings, and native wrappers. This follows the
+[`packages/`](https://github.com/reallyme/crypto) monorepo pattern and
+[Ferrostar](https://stadiamaps.github.io/ferrostar/dev-env-setup.html): a
+breaking FFI change updates Rust, bindings, wrappers, and tests in one PR, and
+CI validates that exact combination. The legacy `scripts/sdk-consumers.json`
+pins and `swift_ref`/`kotlin_ref` overrides are retained only for the
+downstream promotion path; PR validation no longer checks out external SDK
+repositories. For a manual validation run, use `publish=false` and an exact
+`source_ref`.
 
-The `source` job resolves each consumer commit and inspects its immutable Git
-tree before any native builds. Both the package scaffolding and the build/test
+The `source` job validates the local package catalog (`packages/packages.json`)
+before any native builds. Both the package scaffolding and the build/test
 sources must exist, including the Kotlin `buildSrc` implementation and tests.
-Missing files fail with their SDK/revision and complete missing-file list; no
-placeholder manifests, skipped tests, or `continue-on-error` are used. Candidate
-staging repeats the scaffold check before reading artifacts. Do not use a dirty
-local checkout as proof: untracked/ignored files are absent from CI. In
-particular, Kotlin's package directory `com/tinkle/build` must not be lost to a
-blanket `**/build/` ignore rule.
+Missing files fail with the complete missing-file list; no placeholder
+manifests, skipped tests, or `continue-on-error` are used. `sync-package`
+copies the catalog files into a disposable directory, and candidate staging
+repeats the scaffold check before reading artifacts. Do not use a dirty
+local checkout as proof: `sync-package` prefers committed bytes, and
+untracked/ignored files are absent from CI. In particular, Kotlin's package
+directory `com/tinkle/build` must not be lost to a blanket `**/build/`
+ignore rule.
 
-Publishing does not use these validation pins. It resolves each SDK's `main`
-once to an immutable SHA and requires the same complete scaffold. Release input
-overrides may be empty or `main` only. Before publication, merge the matching
+Publishing snapshots the canonical `packages/` trees at the release SHA into
+the downstream SDK repositories. Before publication, merge the matching
 producer/consumer contracts to main. All PR validation remains read-only, and
 the existing protected-main/tag, artifact checksum, and consumer-test gates
 remain mandatory for publication.
-
-This follows the explicit multi-repository `repository`/`ref` checkout pattern
-in [actions/checkout](https://github.com/actions/checkout#checkout-multiple-repos-side-by-side).
-[Ferrostar](https://stadiamaps.github.io/ferrostar/dev-env-setup.html) avoids
-cross-repository bootstrap ordering by keeping platform packages in its
-monorepo. We retain separate SDK repositories and instead version their CI
-dependency revisions explicitly. GitHub's [inputs context](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#inputs-context)
-exists for manual/reusable workflows, not ordinary PR events; input defaults
-alone cannot configure a PR's downstream dependencies.
 
 PR/validation builds explicitly select Xcode 26.6, present on the
 [hosted image used by the failing runs](https://github.com/actions/runner-images/blob/macos-26-arm64/20261013.0424/images/macos/macos-26-arm64-Readme.md).

@@ -915,7 +915,9 @@ async fn download_cancel_isolation_one_consumer_does_not_cancel_other() {
     // the other manager tests running in parallel (see above).
     c.set_principal_user_id(9002).await;
 
-    let data: Vec<u8> = (0..10_000u32).map(|i| (i % 251) as u8).collect();
+    // Keep the shared download multi-part (13 requests at MAX_DOWNLOAD = 5)
+    // without thousands of sequential RPCs exhausting the CI timeout.
+    let data: Vec<u8> = (0..64u32).map(|i| (i % 251) as u8).collect();
     let file = libtinkle::UploadManager::new(c.clone())
         .upload_bytes(
             libtinkle::UploadParams::new("mgr-cancel-1".into(), data.len()),
@@ -970,6 +972,11 @@ async fn download_cancel_isolation_one_consumer_does_not_cancel_other() {
         .expect("surviving consumer must finish after release")
         .expect("download task panicked");
     assert_eq!(b.unwrap(), data, "surviving consumer must get full bytes");
+    assert_eq!(
+        log.lock().unwrap().downloads.len(),
+        13,
+        "consumers must share one multi-part download"
+    );
     c.close().await;
 }
 
