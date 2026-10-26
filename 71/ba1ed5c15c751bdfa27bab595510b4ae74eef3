@@ -1,0 +1,121 @@
+crates/libtinkle/tests/files_integration.rs
+  s_5ec8b3e1313799::t_e057eae1e71c8a 918-920,975-979
+scripts/sdk-release.py
+  s_2db4628adbc32d::t_4fbcd70d2746f6 503-538,541,544,562-564,567-568,580,582-583,591-595,609-610,780
+  s_2db4628adbc32d::t_1ca039089a36e2 10,26-32,395,406-423,427-461,467-471,473-479,481-492
+tests/test_sdk_packages.py
+  s_53d7e0d3c10224::t_c518f6ad4a0165 1-99
+.github/workflows/SDK-DISTRIBUTION.md
+  s_53d7e0d3c10224::t_bb6ba6cf1fe1a9 203
+  s_53d7e0d3c10224::t_4f486ccc79b579 131-133,136-137
+  s_53d7e0d3c10224::t_74495e8e3a0354 68
+  s_53d7e0d3c10224::t_24be75d6a35901 209-210,212-228,230-240
+  s_53d7e0d3c10224::t_797df6f95ea8bb 71-74
+packages/swift/README.md
+  s_53d7e0d3c10224::t_284d2ea67c1df7 10
+  s_53d7e0d3c10224::t_0f729f6cac7dc5 7-9
+  s_53d7e0d3c10224::t_8415dfdbefb74c 11-13
+tests/test_sdk_consumers.py
+  s_53d7e0d3c10224::t_8b5d4b71672604 86
+  s_53d7e0d3c10224::t_5877de701e4d60 119-121
+  s_53d7e0d3c10224::t_f64a022a52c1c9 29-32,35
+  s_53d7e0d3c10224::t_994e081e512282 127-131
+tests/test_sdk_release.py
+  s_53d7e0d3c10224::t_c7e35a659d6c14 36-44
+  s_53d7e0d3c10224::t_397a5638547cfd 287,292,299
+  s_53d7e0d3c10224::t_b93a16b9db1115 436-440
+  s_53d7e0d3c10224::t_3fa62b9d0f8b21 284-286
+  s_53d7e0d3c10224::t_32042b00fea6c5 97,99
+  s_53d7e0d3c10224::t_99b0517ea502ea 224,231
+  s_53d7e0d3c10224::t_dcedf174207e4b 257-259
+  s_53d7e0d3c10224::t_c694798bd72dab 45-50
+  s_53d7e0d3c10224::t_11e2f63822e5e4 260
+  s_53d7e0d3c10224::t_4c48f30274ff06 205-206
+scripts/sdk-consumer.init.gradle
+  s_53d7e0d3c10224::t_8dd807d0b6d72b 18
+.github/ISSUE_TEMPLATE/config.yml
+  s_53d7e0d3c10224::t_72a1a8de42a6c2 4,7,10
+.gitignore
+  s_53d7e0d3c10224::t_53cfbc38994781 10
+  s_53d7e0d3c10224::t_988d13b8d637c9 9
+scripts/sdk-ci.py
+  s_53d7e0d3c10224::t_20d36540ad8f07 420
+  s_53d7e0d3c10224::t_2ce06e994f9997 515,517
+  s_53d7e0d3c10224::t_c3409b222b4eea 254
+  s_53d7e0d3c10224::t_c0b99440f35884 208-214,222,224,227-228,239,242,244,246-247,252-253,255-257
+  s_53d7e0d3c10224::t_38ee3bfb05df3b 88-114,119-123
+  s_53d7e0d3c10224::t_31f1e5313cfea8 75-82,85
+  s_53d7e0d3c10224::t_d3a9c300320b86 437-438,440,443-445
+  s_53d7e0d3c10224::t_c2f93f1c226111 476
+  s_53d7e0d3c10224::t_832684c468b372 529-532
+  s_53d7e0d3c10224::t_200909de29ea85 565-566
+  s_53d7e0d3c10224::t_2d862b90571991 215-221,223,225-226,229-238,240-241,243,245
+  s_53d7e0d3c10224::t_cc24cc42aab322 439
+  s_53d7e0d3c10224::t_1b0b415c160877 131
+  s_53d7e0d3c10224::t_088100cc7ea980 545-546
+  s_53d7e0d3c10224::t_4f7c75722f96fb 23-29
+  s_53d7e0d3c10224::t_b8564ac6636138 86-87
+packages/swift/Package.swift
+  s_53d7e0d3c10224::t_f955db8c3155cc 38
+  s_53d7e0d3c10224::t_d63f3f05b99b60 35-37
+  s_53d7e0d3c10224::t_eec3d436bcf192 39-41
+scripts/sdk-packages.py
+  s_2db4628adbc32d::t_1ca039089a36e2 1-6,10-17,19-86,88-119,121-128,130-132
+  s_53d7e0d3c10224::t_88d3cbc2a3d8e8 87
+  s_2db4628adbc32d::t_4fbcd70d2746f6 120
+  s_53d7e0d3c10224::t_d11075058542e5 7-9,18
+  s_53d7e0d3c10224::t_80dff6a9b885c9 129
+tests/test_kotlin_sdk_layout.py
+  s_53d7e0d3c10224::t_d40470128f6104 10
+  s_a2a145b0ba511f::t_ea4457413eaf9c 1-9,11-51,53-56,59,61-85
+  s_53d7e0d3c10224::t_c7327303108a4a 52,57-58,60
+.github/workflows/native-sdk.yml
+  s_53d7e0d3c10224::t_bce7067f890e83 78-79
+  s_53d7e0d3c10224::t_045dca7feb93bb 258
+  s_53d7e0d3c10224::t_87e1803cf96b8c 237
+  s_53d7e0d3c10224::t_fd26c8a9c8955f 182-184
+  s_53d7e0d3c10224::t_87b44ab18e3c93 63,69
+  s_53d7e0d3c10224::t_0c19d260d632a3 220-222
+  s_53d7e0d3c10224::t_460fccd9bcb99c 207,223,225,234
+  s_53d7e0d3c10224::t_eb4798b780343d 173,176,181,186
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "71ba1ed5c15c751bdfa27bab595510b4ae74eef3",
+  "prompts": {},
+  "sessions": {
+    "s_2db4628adbc32d": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e85a9a0e1ffeAAUY12cotUBLlq",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_53d7e0d3c10224": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e85c38750ffezkGdroDNx6FPy0",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_5ec8b3e1313799": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e864c1ddaffemfH29ghGFKJ4vZ",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    },
+    "s_a2a145b0ba511f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e85b3b8c6ffer8WLFTEVLe2C4Y",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    }
+  }
+}
