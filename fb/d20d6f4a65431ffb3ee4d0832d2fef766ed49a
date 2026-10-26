@@ -1,0 +1,69 @@
+crates/libtinkle/src/files.rs
+  s_e7ea73717f1217::t_eeff9b542ba9f8 980-1006,1009-1011
+  s_e7ea73717f1217::t_e449d3f1b9f6a9 975-979
+  s_e7ea73717f1217::t_d094cf4ddd93b3 1948-1954
+crates/libtinkle/tests/files_integration.rs
+  s_e7ea73717f1217::t_0d02adbee343be 873-882,887-906,909-910,912-913,917-926,931-937,949,954-962,972-982,986-1017
+  s_e7ea73717f1217::t_60191e8528d2d5 983-985
+  s_e7ea73717f1217::t_0a693debabd467 44-55
+  s_e7ea73717f1217::t_ad006e537b7d20 87-90
+  s_e7ea73717f1217::t_bb872a8dac8849 907-908,911,927-930,938-948,950-953,963,968-971
+  s_e7ea73717f1217::t_b42e0386ee2dbd 508-511,514-516
+  s_e7ea73717f1217::t_0df935d150e9f8 471-474,476-482
+  s_e7ea73717f1217::t_02557aa210435b 9
+  s_e7ea73717f1217::t_d1d83d4dc7493b 42-43
+  s_e7ea73717f1217::t_bc56228c5bcef5 359
+  s_e7ea73717f1217::t_9d6ddae7585bed 883-886
+  s_e7ea73717f1217::t_762d4b997888b7 914-916
+  s_e7ea73717f1217::t_5c9b43e28359d7 964-967
+  s_e7ea73717f1217::t_1bad660fc5cb1e 468-469,475
+crates/libtinkle/src/client.rs
+  s_e7ea73717f1217::t_2399ccb37cb4d6 1121-1125,1128-1133
+  s_e7ea73717f1217::t_51c25140934d16 1033-1036
+  s_e7ea73717f1217::t_4e7bf32143ee4d 1181-1183,1185-1191
+  s_e7ea73717f1217::t_4817c936c965df 417-419,421-429
+  s_e7ea73717f1217::t_bffabc82a20420 1184
+  s_e7ea73717f1217::t_6a44adc23262f5 2254-2260
+  s_e7ea73717f1217::t_b6e2db51577791 1031-1032,1037
+  s_e7ea73717f1217::t_3f6e911836edf3 1126,1134-1140
+  s_e7ea73717f1217::t_5fcb1dd3438cf5 2180-2185
+  s_e7ea73717f1217::t_049674fbab9623 1127
+  s_e7ea73717f1217::t_5cee1ab347d79a 2150-2156
+crates/libtinkle-web/src/lib.rs
+  s_e7ea73717f1217::t_db200534a63b1c 652-655,657-669
+crates/tinkle-ffi/src/sqlite.rs
+  s_e7ea73717f1217::t_c168eff173d522 9
+crates/libtinkle/src/lib.rs
+  s_e7ea73717f1217::t_e6e1304caad56f 50-51
+docs/platform-ios-android-wasm.md
+  s_e7ea73717f1217::t_b7530f31202eb4 78-82
+  s_e7ea73717f1217::t_d60c3f34e07838 52-59
+crates/libtinkle/src/push.rs
+  s_e7ea73717f1217::t_087ae45ad385e7 531-536
+  s_e7ea73717f1217::t_d6dc100cc5ef23 826-840
+  s_e7ea73717f1217::t_ea2e7d6a65655f 521-524
+  s_e7ea73717f1217::t_2ce5c25648182a 825,841-845
+  s_e7ea73717f1217::t_b8eff54da4d01f 525-528
+  s_e7ea73717f1217::t_de043ed24c1a17 529-530
+crates/libtinkle/src/sync.rs
+  s_e7ea73717f1217::t_afbf49cc2b5de2 310-314,317
+  s_e7ea73717f1217::t_425efa1793f6b3 372-375,377-383
+crates/libtinkle/tests/push_integration.rs
+  s_e7ea73717f1217::t_07ba12bd8a0b92 445-474
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fbd20d6f4a65431ffb3ee4d0832d2fef766ed49a",
+  "prompts": {},
+  "sessions": {
+    "s_e7ea73717f1217": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e8b4c73dfffeoq4zw1xrGNSuZs",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    }
+  }
+}
