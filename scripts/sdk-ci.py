@@ -12,6 +12,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 import urllib.request
 import zipfile
 
@@ -20,113 +21,60 @@ assert spec and spec.loader
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
 
+pkg_spec = importlib.util.spec_from_file_location("sdk_packages", Path(__file__).with_name("sdk-packages.py"))
+assert pkg_spec and pkg_spec.loader
+packages = importlib.util.module_from_spec(pkg_spec)
+pkg_spec.loader.exec_module(packages)
 
-CONSUMER_FILES = {
-    "swift": (
-        "Package.swift", "Sources/TinkleSDK/Bootstrap.swift",
-        "Tests/TinkleSDKTests/TinkleSDKTests.swift",
-        "Tests/TinkleSDKTests/LoopbackGateway.swift",
-    ),
-    "kotlin": (
-        "settings.gradle.kts", "build.gradle.kts", "gradle.properties", "gradlew",
-        "gradle/wrapper/gradle-wrapper.jar", "gradle/wrapper/gradle-wrapper.properties",
-        "consumer-rules.pro", "src/main/AndroidManifest.xml",
-        "src/main/kotlin/com/tinkle/sdk/TinkleSdk.kt",
-        "buildSrc/build.gradle", "buildSrc/settings.gradle",
-        "buildSrc/src/main/groovy/com/tinkle/build/PrepareSdkArtifacts.groovy",
-        "buildSrc/src/main/groovy/com/tinkle/build/SdkArtifacts.groovy",
-        "buildSrc/src/test/groovy/com/tinkle/build/PrepareSdkArtifactsTest.groovy",
-        "buildSrc/src/test/groovy/com/tinkle/build/SdkArtifactsTest.groovy",
-        "sample/build.gradle.kts", "sample/smoke-rules.pro",
-        "sample/src/main/AndroidManifest.xml",
-        "sample/src/main/kotlin/com/tinkle/sdk/smoke/SmokeChecks.kt",
-        "sample/src/main/kotlin/com/tinkle/sdk/smoke/LoopbackGateway.kt",
-        "sample/src/androidTest/kotlin/com/tinkle/sdk/smoke/NativeSmokeTest.kt",
-    ),
-}
-
-
-def consumer_refs(pins, publish=False, swift_ref="", kotlin_ref=""):
-    overrides = {"swift": swift_ref, "kotlin": kotlin_ref}
-    if publish:
-        release.require(all(ref in ("", "main") for ref in overrides.values()),
-                        "Release consumers must be main revisions")
-        return dict.fromkeys(CONSUMER_FILES, "main")
-    data = json.loads(Path(pins).read_text(), object_pairs_hook=release.unique_object)
-    release.require(isinstance(data, dict) and set(data) == {"schema_version", *CONSUMER_FILES},
-                    "consumer pins must contain schema_version, swift, and kotlin only")
-    release.require(type(data["schema_version"]) is int and data["schema_version"] == 1,
-                    "unsupported consumer pin schema_version")
-    for sdk in CONSUMER_FILES:
-        for ref in (data[sdk], overrides[sdk] or data[sdk]):
-            release.require(isinstance(ref, str) and re.fullmatch("[0-9a-f]{40}", ref),
-                            f"{sdk} validation consumer must be a full lowercase commit SHA")
-    return {sdk: overrides[sdk] or data[sdk] for sdk in CONSUMER_FILES}
+CORE_ROOT = Path(__file__).resolve().parents[1]
 
 
 def require_consumer_files(sdk, present, revision):
-    missing = sorted(set(CONSUMER_FILES[sdk]) - set(present))
+    expected = set(local_package_files(sdk))
+    missing = sorted(expected - set(present))
     release.require(not missing,
                     f"BLOCKED: {sdk} consumer at {revision} is incomplete; missing files: "
-                    + ", ".join(missing)
-                    + ". Commit the SDK scaffold/build logic, then update scripts/sdk-consumers.json "
-                    "for validation. Publishing requires the complete scaffold on SDK main.")
+                    + ", ".join(missing) + ". Commit the SDK package sources under packages/<sdk>/.")
+
+
+def local_package_files(sdk):
+    """Canonical package sources live in this repo at packages/<sdk>/."""
+    return packages.package_files(CORE_ROOT, sdk)
+
+
+def copy_local_package(sdk, destination):
+    """Copy canonical package sources into a disposable test directory.
+
+    Never mutates the working tree. Preserves git executable bits so the
+    staged copy matches what promotion snapshots.
+    """
+    destination = Path(destination)
+    release.require(not any(p.is_symlink() for p in [destination, *destination.parents]),
+                    "symlink package destination")
+    if destination.exists():
+        release.require(destination.is_dir(), "package destination must be a directory")
+    destination.mkdir(parents=True, exist_ok=True)
+    snapshot = packages.snapshot(CORE_ROOT, release.run("git", "rev-parse", "HEAD", cwd=CORE_ROOT), sdk)
+    for path, content in snapshot.items():
+        target = destination / path
+        release.require(not any(p.is_symlink() for p in [target, *target.parents]),
+                        f"symlink in package destination: {path}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        mode = 0o755 if snapshot.modes.get(path, 0o100644) == 0o100755 else 0o644
+        target.chmod(mode)
+    return snapshot
 
 
 def consumer_checkout(sdk, destination):
     destination = Path(destination)
-    require_consumer_files(sdk, (name for name in CONSUMER_FILES[sdk]
+    expected = local_package_files(sdk)
+    require_consumer_files(sdk, (name for name in expected
                                 if (destination / name).is_file()), destination)
-
-
-def pin_consumers(pins, publish=False, swift_ref="", kotlin_ref=""):
-    refs = consumer_refs(pins, publish, swift_ref, kotlin_ref)
-    resolved = {}
-    for sdk, ref in refs.items():
-        repo = f"tinklehq/tinkle-sdk-{sdk}"
-        commit = json.loads(release.run("gh", "api", f"repos/{repo}/commits/{ref}"))["sha"]
-        release.require(isinstance(commit, str) and re.fullmatch("[0-9a-f]{40}", commit),
-                        f"invalid {sdk} consumer commit")
-        release.require(ref == "main" or commit == ref, f"{sdk} consumer revision mismatch")
-        # Inspect the immutable tree without running consumer build code. A partial
-        # tree must not be accepted as evidence of a missing (or complete) scaffold.
-        tree = json.loads(release.run("gh", "api", f"repos/{repo}/git/trees/{commit}?recursive=1"))
-        release.require(tree.get("truncated") is False, f"truncated {sdk} consumer tree")
-        present = [entry["path"] for entry in tree["tree"]
-                   if entry["type"] == "blob" and entry["mode"] in ("100644", "100755")]
-        require_consumer_files(sdk, present, f"{repo}@{commit}")
-        resolved[sdk] = commit
-        print(f"Validated {repo}@{commit} (requested {ref})", flush=True)
-    # Publish outputs atomically with respect to validation: never export a
-    # partially validated pair or let downstream builds start on missing inputs.
-    if "GITHUB_OUTPUT" in os.environ:
-        with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-            for sdk, commit in resolved.items():
-                output.write(f"{sdk}_sha={commit}\n")
-    return resolved
 
 
 def call(*args, cwd=None, env=None):
     subprocess.run([str(a) for a in args], cwd=cwd, env=env, check=True)
-
-
-def select_xcode(version, applications=Path("/Applications")):
-    candidates = [applications / f"Xcode_{version}.app/Contents/Developer",
-                  applications / "Xcode.app/Contents/Developer"]
-    developer = next((path for path in candidates if path.is_dir()), None)
-    release.require(developer is not None, f"BLOCKED: Xcode {version} is not installed")
-    env = dict(os.environ, DEVELOPER_DIR=str(developer))
-    actual = release.run("xcodebuild", "-version", env=env)
-    release.require(actual.splitlines() and actual.splitlines()[0] == f"Xcode {version}",
-                    f"BLOCKED: expected Xcode {version} at {developer}, got {actual}")
-    # Probe the selected toolchain in this process, not just a GITHUB_ENV value
-    # which only takes effect in later workflow steps. Aliases are accepted only
-    # after the exact version assertion; never silently use the runner default.
-    sdk = release.run("xcrun", "--show-sdk-path", env=env)
-    if "GITHUB_ENV" in os.environ:
-        with open(os.environ["GITHUB_ENV"], "a") as output:
-            output.write(f"DEVELOPER_DIR={developer}\n")
-    print(f"{actual}\nDeveloper directory: {developer}\nSDK: {sdk}", flush=True)
 
 
 def toolchain():
@@ -139,32 +87,56 @@ def toolchain():
         release.require(versions == {"0.32.2"}, f"{name} must resolve only to 0.32.2: {versions}")
 
 
-def android_setup():
-    # Keep this tuple aligned with the native build script, not the host's
-    # preinstalled/default NDK (which changes with runner images).
-    sdk = Path(os.environ.get("ANDROID_HOME", os.environ.get("ANDROID_SDK_ROOT", "")))
-    release.require(sdk.is_dir() and str(sdk) != ".", "ANDROID_HOME must name the installed SDK")
-    # GitHub runners ship sdkmanager under cmdline-tools but not on PATH.
-    # Resolve it explicitly instead of assuming PATH configuration.
-    candidates = [sdk / "cmdline-tools/latest/bin/sdkmanager",
-                  sdk / "cmdline-tools/bin/sdkmanager",
-                  Path(shutil.which("sdkmanager") or "")]
-    manager = next((str(p) for p in candidates if p and Path(p).is_file()), "sdkmanager")
-    subprocess.run([manager, "--licenses"], input="y\n" * 200, text=True, check=True)
-    call(manager, "--install", "ndk;30.0.16248370", "platforms;android-36", "build-tools;36.0.0")
-    ndk = sdk.resolve() / "ndk/30.0.16248370"
-    release.require(ndk.is_dir(), "required NDK r30 was not installed")
-    if "GITHUB_ENV" in os.environ:
-        with open(os.environ["GITHUB_ENV"], "a") as output:
-            output.write(f"ANDROID_NDK_HOME={ndk}\n")
-    print(f"ANDROID_NDK_HOME={ndk}")
+def sync_package(sdk, destination, source=None):
+    """Copy canonical packages/<sdk>/ sources into a disposable directory.
+
+    Used by CI before staging: single checkout at the tested SHA already
+    contains the package sources, so no external SDK repository is involved.
+    Never mutates the working tree.
+    """
+    if source is None:
+        # Default path: committed package bytes with git executable bits, so a
+        # dirty worktree cannot stage uncommitted edits as test evidence.
+        snapshot = copy_local_package(sdk, destination)
+        consumer_checkout(sdk, destination)
+        print(f"Synced packages/{sdk} into disposable {Path(destination).resolve()}", flush=True)
+        return snapshot
+    destination = Path(destination)
+    src = Path(source).resolve()
+    release.require(src.is_dir(), f"package source missing: {src}")
+    release.require(not any(p.is_symlink() for p in [src, *src.parents]),
+                    "symlink package source")
+    expected = local_package_files(sdk)
+    for name in expected:
+        src_file = src / name
+        release.require(not any(p.is_symlink() for p in [src_file, *src_file.parents]),
+                        f"symlink package source: {name}")
+        release.require(src_file.is_file(), f"package source missing: {name}")
+    release.require(not any(p.is_symlink() for p in [destination, *destination.parents]),
+                    "symlink package destination")
+    if destination.exists():
+        release.require(destination.is_dir(), "package destination must be a directory")
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in expected:
+        target = destination / name
+        release.require(not any(p.is_symlink() for p in [target, *target.parents]),
+                        f"symlink in package destination: {name}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((src / name).read_bytes())
+    consumer_checkout(sdk, destination)
+    print(f"Synced {src} into disposable {destination.resolve()}", flush=True)
 
 
 def stage(args):
     destination = args.destination.resolve()
     artifacts = args.artifacts.resolve()
     sdk = args.sdk
-    consumer_checkout(sdk, destination)
+    if getattr(args, "source", None):
+        sync_package(sdk, destination, args.source)
+    else:
+        # Same-revision default: stage() does not silently heal an incomplete
+        # checkout. CI explicitly syncs first; see sync-package.
+        consumer_checkout(sdk, destination)
     native = "ios" if sdk == "swift" else "android"
     bindings, source, target = release.BINDINGS[sdk]
     if args.bootstrap:
@@ -231,6 +203,7 @@ def android_build(destination, artifacts):
     gradlew = destination / "gradlew"
     release.require(gradlew.is_file(),
                     "BLOCKED: Kotlin consumer checkout has no gradlew.")
+    call("bash", gradlew, "--no-daemon", "-p", "fixture-tests", "test", cwd=destination, env=env)
     call("bash", gradlew, "-p", "buildSrc", "test", cwd=destination, env=env)
     call("bash", gradlew, "--no-daemon", "assembleRelease", "testReleaseUnitTest",
          cwd=destination, env=env)
@@ -276,6 +249,37 @@ def android_runtime_page_size():
     return android_auxv_page_size(result.stdout), "AT_PAGESZ"
 
 
+def android_diagnostics(destination):
+    """Best-effort fixture evidence while the emulator is still alive.
+
+    Never let reporting replace a failing instrumentation command. Only test
+    exception tags and named test-result directories are collected, not the
+    runner environment, Gradle caches, or credential-bearing configuration.
+    """
+    try:
+        result = subprocess.run(
+            ["adb", "logcat", "-d", "-v", "threadtime", "-t", "2000",
+             "System.err:W", "AndroidRuntime:E", "*:S"],
+            capture_output=True, timeout=20, check=False)
+        release.write_scoped(destination, "build/diagnostics/logcat.txt", result.stdout)
+        if result.returncode:
+            print("Warning: device exception logcat collection failed", flush=True)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        print("Warning: device exception logcat unavailable", flush=True)
+    results = destination / "sample/build/outputs/androidTest-results/connected"
+    try:
+        for path in sorted(results.rglob("*.xml")):
+            if path.is_symlink() or path.stat().st_size > 4 * 1024 * 1024:
+                continue
+            for case in ET.parse(path).iter("testcase"):
+                for failure in (*case.findall("failure"), *case.findall("error")):
+                    print(f"Instrumentation failure: {case.get('classname')}.{case.get('name')}", flush=True)
+                    print(failure.get("message", ""), flush=True)
+                    print(failure.text or "", flush=True)
+    except (OSError, ET.ParseError):
+        print("Warning: instrumentation XML report unavailable", flush=True)
+
+
 def android_test(destination, artifacts, page_size, api_level):
     # A wrong API or ABI must fail before probing or executing the consumer.
     actual_api = release.run("adb", "shell", "getprop", "ro.build.version.sdk").strip()
@@ -295,8 +299,11 @@ def android_test(destination, artifacts, page_size, api_level):
     release.require(gradlew.is_file(),
                     "BLOCKED: Kotlin consumer checkout has no gradlew.")
     # The sample's CI mode consumes this file AAR, never project(':') or jniLibs.
-    call("bash", gradlew, "--no-daemon", ":sample:connectedDebugAndroidTest",
-         "-PtinkleSdkTestAar=" + proof["path"], cwd=destination, env=env)
+    try:
+        call("bash", gradlew, "--no-daemon", ":sample:connectedDebugAndroidTest",
+             "-PtinkleSdkTestAar=" + proof["path"], cwd=destination, env=env)
+    finally:
+        android_diagnostics(destination)
     release.require(release.digest(proof["path"]) == proof["sha256"], "AAR changed during consumer test")
     apks = list((destination / "sample/build/outputs/apk/debug").glob("*.apk"))
     release.require(bool(apks), "missing final consumer APK for ELF/ZIP verification")
@@ -323,36 +330,54 @@ def published_manifest(manifest):
 
 def sdk_tag(destination, sdk, create):
     """Authorize v tags solely through a merged, same-repository scoped release PR."""
+    repo = f"tinkle-org/tinkle-sdk-{sdk}"
+    release.require(os.environ.get("GITHUB_REPOSITORY") == repo, "wrong SDK repository")
+    release.require(os.environ.get("GITHUB_EVENT_NAME") == "push", "SDK tags require push validation")
+    ref = os.environ.get("GITHUB_REF", "")
+    release.require(ref == "refs/heads/main" if create else ref.startswith("refs/tags/v"),
+                    "SDK tag creation requires main; verification requires a version tag")
+    sha = release.run("git", "rev-parse", "HEAD", cwd=destination)
+    release.require(sha == os.environ.get("GITHUB_SHA"), "SDK checkout differs from the validated event SHA")
     manifest = release.load(destination / "sdk-artifact.json")
     published_manifest(manifest)
     release.require(release.remote_tag_revision(manifest["source_tag"]) == manifest["source_revision"],
                     "published core tag differs from SDK source provenance")
-    repo = f"tinklehq/tinkle-sdk-{sdk}"
-    release.require(os.environ["GITHUB_REPOSITORY"] == repo, "wrong SDK repository")
-    sha = release.run("git", "rev-parse", "HEAD", cwd=destination)
-    event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
-    if "pull_request" in event:
-        number = event["pull_request"]["number"]
-        prs = [json.loads(release.run("gh", "api", f"repos/{repo}/pulls/{number}"))]
-    else:
-        prs = json.loads(release.run("gh", "api", f"repos/{repo}/commits/{sha}/pulls"))
-    eligible = [pr for pr in prs if pr["merged_at"] and pr["merge_commit_sha"] == sha
+    prs = json.loads(release.run("gh", "api", f"repos/{repo}/commits/{sha}/pulls"))
+    def is_release_pr(pr):
+        return (pr["merged_at"] and pr["merge_commit_sha"] == sha
                 and pr["base"]["ref"] == "main" and pr["head"]["repo"]
                 and pr["head"]["repo"]["full_name"] == repo
                 and pr["head"]["ref"] == "sdk-release/" + manifest["version"]
-                and pr["title"] == "chore: release SDK v" + manifest["version"]]
+                and pr["title"] == "chore: release SDK v" + manifest["version"])
+    eligible = [pr for pr in prs if is_release_pr(pr)]
     release.require(len(eligible) == 1, "tag requires a merged same-repository SDK release PR")
-    pr = eligible[0]
+    number = eligible[0]["number"]
+    # The association endpoint omits changed_files; get authoritative PR detail
+    # and recheck eligibility before trusting its count or fetching its file list.
+    pr = json.loads(release.run("gh", "api", f"repos/{repo}/pulls/{number}"))
+    release.require(pr["number"] == number and is_release_pr(pr), "release PR changed during authorization")
     files = json.loads(release.run("gh", "api", f"repos/{repo}/pulls/{pr['number']}/files?per_page=100"))
-    release.require(pr["changed_files"] == len(files)
+    # Full snapshot scope: package sources + generated binding + inventory +
+    # provenance. Reuse the canonical expected mapping without needing artifacts.
+    # Authorized deletions come from the immutable promotion contract, never from
+    # an ad-hoc allowlist: only paths removed by promotion from the merge's first
+    # parent may disappear, and only with a removed file status proven absent.
+    snapshot = release.package_snapshot(manifest, sdk)
+    allowed = {*snapshot, release.BINDINGS[sdk][2], release.INVENTORY, "sdk-artifact.json"}
+    base = release.run("git", "rev-parse", sha + "^1", cwd=destination)
+    removed = set(release.promotion_deletions(destination, base, manifest, sdk))
+    release.require(type(pr.get("changed_files")) is int and pr["changed_files"] == len(files)
                     and "sdk-artifact.json" in {f["filename"] for f in files}
-                    and {f["filename"] for f in files} <= {"sdk-artifact.json", release.BINDINGS[sdk][2]}
-                    and all(f["status"] in ("added", "modified") for f in files),
-                    "release PR must change only metadata and generated binding")
+                    and {f["filename"] for f in files} <= allowed | removed
+                    and all(f["status"] == "removed" if f["filename"] in removed
+                            else f["status"] in ("added", "modified") for f in files),
+                    "release PR must change only the managed SDK snapshot")
     release.run("git", "merge-base", "--is-ancestor", sha, "origin/main", cwd=destination)
     with tempfile.TemporaryDirectory() as tmp:
         release.verify(manifest, tmp, [release.BINDINGS[sdk][0]], fetch=True)
         release.promote(manifest, tmp, sdk, destination, check=True)
+        expected = release.expected_files(manifest, tmp, sdk)
+        release.verify_snapshot_at(destination, sha, expected, removed)
     tag = "v" + manifest["version"]
     if not create:
         release.require(os.environ["GITHUB_REF"] == "refs/tags/" + tag, "SDK tag/version mismatch")
@@ -379,7 +404,7 @@ def jitpack(tag, destination):
                     "BLOCKED: Kotlin consumer checkout has no gradlew.")
     # Fetching this coordinate triggers the JitPack build. Retry the same immutable
     # version; no Maven Central/signing credentials and no mutable branch versions.
-    base = f"https://jitpack.io/com/github/tinklehq/tinkle-sdk-kotlin/{tag}/tinkle-sdk-kotlin-{tag}"
+    base = f"https://jitpack.io/com/github/tinkle-org/tinkle-sdk-kotlin/{tag}/tinkle-sdk-kotlin-{tag}"
     manifest = release.load(destination / "sdk-artifact.json")
     release.require(tag == "v" + manifest["version"], "JitPack version/provenance mismatch")
     aar = destination / "build/jitpack/tinkle-sdk-kotlin.aar"
@@ -418,20 +443,19 @@ def jitpack(tag, destination):
     call("bash", gradlew, "--no-daemon", "--init-script",
          Path(__file__).with_name("sdk-consumer.init.gradle"),
          ":sample:verifyPublishedSdkCoordinate",
-         "-PtinkleSdkCoordinate=com.github.tinklehq:tinkle-sdk-kotlin:" + tag,
+         "-PtinkleSdkCoordinate=com.github.tinkle-org:tinkle-sdk-kotlin:" + tag,
          cwd=destination, env=env)
-    print(f"Resolved com.github.tinklehq:tinkle-sdk-kotlin:{tag}")
+    print(f"Resolved com.github.tinkle-org:tinkle-sdk-kotlin:{tag}")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("toolchain")
-    sub.add_parser("android-setup")
-    xcode = sub.add_parser("select-xcode")
-    xcode.add_argument("--version", choices=("26.6", "27.1"), required=True)
-    pins = sub.add_parser("pin-consumers")
-    pins.add_argument("--pins", type=Path, default=Path(__file__).with_name("sdk-consumers.json"))
+    sync_cmd = sub.add_parser("sync-package")
+    sync_cmd.add_argument("--sdk", choices=release.BINDINGS, required=True)
+    sync_cmd.add_argument("--destination", type=Path, required=True)
+    sync_cmd.add_argument("--source", type=Path, default=None)
     for name in ("stage", "swift-test", "android-build", "android-test", "sdk-tag"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--destination", type=Path, required=True)
@@ -444,6 +468,8 @@ def main():
             group.add_argument("--candidate", action="store_true")
             group.add_argument("--bootstrap", action="store_true")
             cmd.add_argument("--download", action="store_true")
+            cmd.add_argument("--source", type=Path, default=None,
+                             help="Package source dir; defaults to this checkout's packages/<sdk>")
         if name == "android-test":
             cmd.add_argument("--page-size", type=int, choices=(4096, 16384), required=True)
             cmd.add_argument("--api-level", type=int, choices=(24, 36), required=True)
@@ -455,13 +481,8 @@ def main():
     args = parser.parse_args()
     if args.command == "toolchain":
         toolchain()
-    elif args.command == "android-setup":
-        android_setup()
-    elif args.command == "select-xcode":
-        select_xcode(args.version)
-    elif args.command == "pin-consumers":
-        pin_consumers(args.pins, os.environ.get("PUBLISH") == "true",
-                      os.environ.get("SWIFT_REF", ""), os.environ.get("KOTLIN_REF", ""))
+    elif args.command == "sync-package":
+        sync_package(args.sdk, args.destination.resolve(), args.source)
     elif args.command == "stage":
         stage(args)
     elif args.command == "swift-test":

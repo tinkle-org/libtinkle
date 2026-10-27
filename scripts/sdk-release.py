@@ -7,6 +7,7 @@ explicit subcommands or --open-pr; importing this module has no side effects.
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -22,7 +23,13 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-REPOSITORY = "tinklehq/libtinkle"
+REPOSITORY = "tinkle-org/libtinkle"
+CORE_ROOT = Path(__file__).resolve().parents[1]
+_spec = importlib.util.spec_from_file_location("sdk_packages", Path(__file__).with_name("sdk-packages.py"))
+assert _spec and _spec.loader
+packages = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(packages)
+INVENTORY = "sdk-source-files.json"
 ARTIFACTS = {
     "ios": "TinkleSDKFFI.xcframework.zip",
     "swift_bindings": "swift-bindings.zip",
@@ -385,9 +392,7 @@ def write_scoped(root, relative, content):
     root_path = Path(root)
     require(not any(p.is_symlink() for p in [root_path, *root_path.parents]),
             "symlink promotion root")
-    parts = PurePosixPath(str(relative)).parts
-    require(not PurePosixPath(str(relative)).is_absolute() and ".." not in parts
-            and all(p not in ("", ".") for p in parts), "unsafe promotion target")
+    packages.safe_path(str(relative))
     target = root_path.resolve() / relative
     require(not any(p.is_symlink() for p in [target, *target.parents]),
             f"symlink in promotion target: {relative}")
@@ -398,24 +403,93 @@ def write_scoped(root, relative, content):
     return True
 
 
-def promote(manifest, artifacts, sdk, destination, check=False):
+def package_snapshot(manifest, sdk):
+    """Canonical package bytes/modes from the manifest commit, never the worktree."""
+    validate(manifest)
+    return packages.snapshot(CORE_ROOT, manifest["source_revision"], sdk)
+
+
+def inventory(sdk, paths):
+    return encoded_debug({"schema_version": 1, "sdk": sdk, "files": sorted(paths)})
+
+
+def expected_files(manifest, artifacts, sdk):
+    """Complete distribution mapping; .modes retains canonical git file modes.
+
+    artifacts is a local directory containing the checksum-verified binding ZIP.
+    Inventory lists only package sources and binding (not itself or provenance).
+    """
+    sources = package_snapshot(manifest, sdk)
+    result = packages.Snapshot(sources, getattr(sources, "modes", {}))
     key, source, target = BINDINGS[sdk]
     verify(manifest, artifacts, [key])
     with zipfile.ZipFile(Path(artifacts) / ARTIFACTS[key]) as archive:
-        binding = archive.read(source)
-    metadata = Path(destination) / "sdk-artifact.json"
-    if metadata.exists():
-        previous = load(metadata)
+        result[target] = archive.read(source)
+    result[INVENTORY] = inventory(sdk, result)
+    result["sdk-artifact.json"] = encoded(manifest)
+    return result
+
+
+def previous_managed(manifest, sdk, content):
+    """Validate an old inventory against its immutable core catalog before deletion.
+
+    No inventory means a legacy binding-only release; unrelated files stay intact.
+    The caller must load/validate the previous sdk-artifact.json first.
+    """
+    if content is None:
+        return {BINDINGS[sdk][2]} if manifest is not None else set()
+    require(manifest is not None, "managed inventory without source provenance")
+    sources = package_snapshot(manifest, sdk)
+    paths = {*sources, BINDINGS[sdk][2]}
+    require(content == inventory(sdk, paths), "managed inventory differs from canonical source")
+    return paths
+
+
+def scoped_target(root, relative):
+    packages.safe_path(relative)
+    target = Path(root).absolute() / relative
+    require(not any(p.is_symlink() for p in [target, *target.parents]),
+            "symlink in promotion target: " + relative)
+    require(not target.exists() or target.is_file(), "non-file promotion target: " + relative)
+    return target
+
+
+def promote(manifest, artifacts, sdk, destination, check=False):
+    expected = expected_files(manifest, artifacts, sdk)
+    metadata = scoped_target(destination, "sdk-artifact.json")
+    previous = load(metadata) if metadata.exists() else None
+    if previous is not None:
         if previous["version"] == manifest["version"]:
             require(previous == manifest, "refusing to rewrite an existing version's provenance")
         else:
             require(version_order(manifest["version"]) > version_order(previous["version"]),
                     f"refusing downgrade from {previous['version']} to {manifest['version']}")
+    managed = scoped_target(destination, INVENTORY)
+    old = previous_managed(previous, sdk, managed.read_bytes() if managed.exists() else None)
+    removed = old - set(expected)
+    # Preflight the entire scope before the first write/unlink, including stale paths.
+    targets = {path: scoped_target(destination, path) for path in set(expected) | removed}
     if check:
-        require((Path(destination) / target).read_bytes() == binding, "generated binding drift")
+        for path, content in expected.items():
+            target = targets[path]
+            require(target.is_file() and target.read_bytes() == content,
+                    ("generated binding drift: " if path == BINDINGS[sdk][2] else "SDK snapshot drift: ") + path)
+            require(bool(target.stat().st_mode & 0o111) ==
+                    (expected.modes.get(path, 0o100644) == 0o100755), "SDK snapshot mode drift: " + path)
+        require(not any(targets[path].exists() for path in removed), "removed SDK source still present")
         return False
-    changed = write_scoped(destination, target, binding)
-    return write_scoped(destination, "sdk-artifact.json", encoded(manifest)) or changed
+    changed = False
+    for path in removed:
+        if targets[path].exists():
+            targets[path].unlink()
+            changed = True
+    for path, content in expected.items():
+        changed = write_scoped(destination, path, content) or changed
+        mode = 0o755 if expected.modes.get(path, 0o100644) == 0o100755 else 0o644
+        if stat.S_IMODE(targets[path].stat().st_mode) != mode:
+            targets[path].chmod(mode)
+            changed = True
+    return changed
 
 
 def same_repository_prs(prs, repo):
@@ -426,11 +500,48 @@ def same_repository_prs(prs, repo):
             and (pr.get("headRepository") or {}).get("name") == name]
 
 
+def managed_deletions(manifest, sdk, previous_manifest, previous_inventory):
+    """Paths authorized for removal; inventory alone never authorizes deletion."""
+    return previous_managed(previous_manifest, sdk, previous_inventory) - {
+        *package_snapshot(manifest, sdk), BINDINGS[sdk][2]}
+
+
+def promotion_deletions(checkout, base, manifest, sdk):
+    """Resolve authorized deletions from an immutable downstream base commit."""
+    tree = packages.git_tree(checkout, base)
+    for path in ("sdk-artifact.json", INVENTORY):
+        require(path not in tree or tree[path][:2] == (0o100644, "blob"),
+                "non-regular promotion provenance: " + path)
+    previous = validate(json.loads(git_file(checkout, base, "sdk-artifact.json"),
+                                  object_pairs_hook=unique_object)) if "sdk-artifact.json" in tree else None
+    content = git_file(checkout, base, INVENTORY) if INVENTORY in tree else None
+    return managed_deletions(manifest, sdk, previous, content)
+
+
+def verify_snapshot_at(checkout, revision, expected, removed=()):
+    """Verify complete expected bytes, git modes and managed absences at a commit."""
+    tree = packages.git_tree(checkout, revision)
+    modes = getattr(expected, "modes", {})
+    for path, content in expected.items():
+        require(path in tree and tree[path][:2] == (modes.get(path, 0o100644), "blob")
+                and git_file(checkout, revision, path) == content,
+                "promotion snapshot differs: " + path)
+    require(not set(removed) & set(tree), "promotion retains removed SDK sources")
+
+
+def verify_branch_scope(checkout, base, revision, expected, removed):
+    changes = set(filter(None, run("git", "diff", "--name-only", "--no-renames", "-z",
+                                   base, revision, cwd=checkout).split("\0")))
+    require(changes <= set(expected) | set(removed), "promotion branch has unrelated edits")
+    verify_snapshot_at(checkout, revision, expected, removed)
+
+
 def open_pr(manifest, artifacts, sdk, repo):
     verify(manifest, artifacts, [BINDINGS[sdk][0]])
-    require(repo == f"tinklehq/tinkle-sdk-{sdk}", "unexpected downstream repository")
+    require(repo == f"tinkle-org/tinkle-sdk-{sdk}", "unexpected downstream repository")
     require(os.environ.get("SDK_DISTRIBUTION_TOKEN"),
             "BLOCKED: SDK_DISTRIBUTION_TOKEN is required for downstream promotion")
+    expected = expected_files(manifest, artifacts, sdk)
     env = dict(os.environ, GH_TOKEN=os.environ["SDK_DISTRIBUTION_TOKEN"])
     branch = f"sdk-release/{manifest['version']}"
     pr_args = ("gh", "pr", "list", "--repo", repo, "--head", branch, "--base", "main",
@@ -444,20 +555,17 @@ def open_pr(manifest, artifacts, sdk, repo):
         checkout = Path(tmp).resolve() / "sdk"
         retry(lambda: run("gh", "repo", "clone", repo, checkout, "--", "--branch", "main", env=env))
         # Never run downstream build scripts with the distribution credential.
-        _, _, target = BINDINGS[sdk]
         for pr in prs:
             if pr["state"] == "MERGED":
                 revision = (pr.get("mergeCommit") or {}).get("oid", "")
                 require(SHA.fullmatch(revision), "merged promotion PR has no immutable merge commit")
-                metadata = json.loads(run("git", "show", revision + ":sdk-artifact.json", cwd=checkout),
-                                      object_pairs_hook=unique_object)
-                require(validate(metadata) == manifest, "merged promotion has different source provenance")
-                with zipfile.ZipFile(Path(artifacts) / ARTIFACTS[BINDINGS[sdk][0]]) as archive:
-                    binding = archive.read(BINDINGS[sdk][1])
-                require(git_file(checkout, revision, target) == binding,
-                        "merged promotion has different generated bindings")
+                base = run("git", "rev-parse", revision + "^1", cwd=checkout)
+                removed = promotion_deletions(checkout, base, manifest, sdk)
+                verify_branch_scope(checkout, base, revision, expected, removed)
                 print(pr["url"])
                 return
+        base = run("git", "rev-parse", "HEAD", cwd=checkout)
+        removed = promotion_deletions(checkout, base, manifest, sdk)
         run("git", "checkout", "-b", branch, cwd=checkout)
         changed = promote(manifest, artifacts, sdk, checkout)
         if not changed:
@@ -469,13 +577,10 @@ def open_pr(manifest, artifacts, sdk, repo):
                        GIT_CONFIG_VALUE_1="!gh auth git-credential")
         def check_existing_branch():
             run("git", "fetch", "origin", f"refs/heads/{branch}", cwd=checkout, env=git_env)
-            for path in (target, "sdk-artifact.json"):
-                remote = git_file(checkout, "FETCH_HEAD", path)
-                require(remote == (checkout / path).read_bytes(),
-                        "existing promotion branch differs; refusing force push")
+            revision = run("git", "rev-parse", "FETCH_HEAD", cwd=checkout)
             base = run("git", "merge-base", "FETCH_HEAD", "origin/main", cwd=checkout)
-            changes = set(run("git", "diff", "--name-only", base, "FETCH_HEAD", cwd=checkout).splitlines())
-            require(changes <= {target, "sdk-artifact.json"}, "promotion branch has unrelated edits")
+            branch_removed = promotion_deletions(checkout, base, manifest, sdk)
+            verify_branch_scope(checkout, base, revision, expected, removed | branch_removed)
         # Inspect immutable proposals before any push. In particular, an old
         # merged/closed branch must never be fast-forwarded by a later replay.
         existing = retry(lambda: run("git", "ls-remote", "--heads", "origin", f"refs/heads/{branch}",
@@ -483,7 +588,11 @@ def open_pr(manifest, artifacts, sdk, repo):
         if existing:
             check_existing_branch()
         else:
-            run("git", "add", "--", target, "sdk-artifact.json", cwd=checkout)
+            # Exact, catalog-authorized paths only. Generated binding and provenance
+            # are intentionally ignored by canonical packages but must ship here.
+            run("git", "add", "-f", "--", *sorted(expected), cwd=checkout)
+            if removed:
+                run("git", "add", "-u", "--", *sorted(removed), cwd=checkout)
             run("git", "-c", "user.name=SDK Distribution", "-c",
                 "user.email=sdk-distribution@users.noreply.github.com", "commit", "-m",
                 f"chore: release SDK v{manifest['version']}", cwd=checkout)
@@ -497,7 +606,8 @@ def open_pr(manifest, artifacts, sdk, repo):
         if not prs:
             body = (f"Promote {REPOSITORY}@{manifest['source_revision']}\n\n"
                     f"Source tag: `{manifest['source_tag']}`\n\n"
-                    "Includes only generated bindings and checksum-pinned sdk-artifact.json.\n"
+                    "Includes the complete canonical SDK source snapshot, generated binding, "
+                    "managed inventory and checksum-pinned sdk-artifact.json.\n"
                     "Merge after SDK CI passes; merging authorizes the SDK v tag. No auto-merge.")
             def ensure_pr():
                 existing = same_repository_prs(json.loads(run(*pr_args, env=env)), repo)
@@ -667,7 +777,7 @@ def main():
             if args.open_pr:
                 require(not args.check and args.destination is None,
                         "--open-pr cannot be combined with --check/--destination")
-                open_pr(manifest, args.artifacts, args.sdk, f"tinklehq/tinkle-sdk-{args.sdk}")
+                open_pr(manifest, args.artifacts, args.sdk, f"tinkle-org/tinkle-sdk-{args.sdk}")
             else:
                 require(args.destination is not None, "--destination or --open-pr required")
                 promote(manifest, args.artifacts, args.sdk, args.destination, args.check)

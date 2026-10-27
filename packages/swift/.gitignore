@@ -1,0 +1,10 @@
+.DS_Store
+.build/
+.swiftpm/
+Artifacts/
+build/
+DerivedData/
+*.xcresult/
+# Staged from the canonical bindings/swift source; never a second source of truth.
+/Sources/TinkleSDK/TinkleSDK.swift
+/sdk-artifact.json

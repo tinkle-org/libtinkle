@@ -1,7 +1,7 @@
 //! `tinkle-ffi`: UniFFI facade over `libtinkle` for iOS (Swift) and Android (Kotlin).
 //!
 //! This crate is a thin boundary adapter. It owns no protocol behavior:
-//! framing, handshake, RPC correlation, realtime validation, cursors, and
+//! framing, handshake, RPC correlation, sync validation, cursors, and
 //! reconnect all live in `libtinkle` (and below). The facade only maps
 //! between FFI-safe types (owned `String`/`Vec`/records/enums) and the
 //! async `libtinkle::Client` API.
@@ -22,11 +22,20 @@ uniffi::setup_scaffolding!();
 pub mod client;
 pub mod config;
 pub mod error;
+pub mod push;
 pub mod runtime;
+pub mod sqlite;
 pub mod store;
 
-pub use client::{FfiRealtimeEvent, FfiSubscribeResponse, RoomSub, TinkleClient};
+pub use client::{
+    FfiDialogsRequest, FfiHistoryRequest, FfiLoadPolicy, FfiReconcileStatus, FfiSubscribeResponse,
+    FfiSyncEvent, TargetSub, TinkleClient,
+};
 pub use config::ClientConfigFfi;
 pub use error::FfiError;
+pub use push::{
+    parse_push_payload, push_recover_stale_jobs, push_target_key, FfiPushEnvelope, FfiPushOutcome,
+};
 pub use runtime::tinkle_ffi_init;
+pub use sqlite::{FfiDialog, FfiMessage, SqliteStorage};
 pub use store::{FfiCursorStore, InMemoryFfiStore};

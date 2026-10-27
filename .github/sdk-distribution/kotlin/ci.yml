@@ -1,0 +1,218 @@
+# Inactive source template; installation and release blockers: ../README.md.
+name: Kotlin SDK CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Bootstrap only: libtinkle branch/tag/SHA; empty uses sdk-artifact.json'
+        type: string
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  group: kotlin-sdk-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  build-logic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: true
+      - name: Verify build logic is present in a fresh checkout
+        run: |
+          test -f buildSrc/src/main/groovy/com/tinkle/build/PrepareSdkArtifacts.groovy
+          test -f buildSrc/src/main/groovy/com/tinkle/build/SdkArtifacts.groovy
+          test -f buildSrc/src/test/groovy/com/tinkle/build/PrepareSdkArtifactsTest.groovy
+          test -f buildSrc/src/test/groovy/com/tinkle/build/SdkArtifactsTest.groovy
+      - name: Test build logic without native release artifacts
+        run: ./gradlew --no-daemon -p buildSrc test
+      - name: Test SDK Python checks
+        run: python3 -B -m unittest discover -s tests -v
+      - name: Test gateway wire fixture without Android or native artifacts
+        run: ./gradlew --no-daemon -p fixture-tests test
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: kotlin-build-logic-results
+          path: |
+            buildSrc/build/reports/tests
+            buildSrc/build/test-results
+            fixture-tests/build/reports/tests
+            fixture-tests/build/test-results
+          retention-days: 14
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ready: ${{ steps.source.outputs.ready }}
+      core_sha: ${{ steps.source.outputs.core_sha }}
+      bootstrap: ${{ steps.source.outputs.bootstrap }}
+      sdk_sha: ${{ steps.source.outputs.sdk_sha }}
+      release: ${{ steps.source.outputs.release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - id: source
+        name: Select published provenance or explicit bootstrap source
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, re, subprocess, urllib.parse
+          sdk_sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          release = False
+          if os.environ['GITHUB_EVENT_NAME'] == 'push':
+              if os.environ['GITHUB_REF'].startswith('refs/tags/v'):
+                  release = True
+              elif os.environ['GITHUB_REF'] == 'refs/heads/main':
+                  # Read actual commit parents, not shallow-history boundaries. A merge
+                  # is compared only with its first parent, including conflict resolutions.
+                  commit = subprocess.check_output(['git', 'cat-file', '-p', sdk_sha], text=True)
+                  parents = [line.split()[1] for line in commit.split('\n\n', 1)[0].splitlines()
+                             if line.startswith('parent ')]
+                  if parents:
+                      diff = ['git', 'diff', '--name-only', parents[0], sdk_sha]
+                  else:
+                      diff = ['git', 'diff-tree', '--root', '--no-commit-id', '--name-only', '-r', sdk_sha]
+                  changed = subprocess.check_output(diff + ['--', 'sdk-artifact.json'], text=True)
+                  release = 'sdk-artifact.json' in changed.splitlines()
+          metadata = pathlib.Path('sdk-artifact.json')
+          assert not release or metadata.is_file(), 'Release push requires SDK provenance'
+          ref = os.environ.get('SOURCE_REF', '')
+          if metadata.exists():
+              assert not ref, 'Published SDK CI must use its manifest SHA'
+              data = json.loads(metadata.read_text())
+              assert data['source_repository'] == 'tinkle-org/libtinkle'
+              ref = data['source_revision']
+              assert re.fullmatch('[0-9a-f]{40}', ref), 'Expected exact source revision'
+              bootstrap = False
+          else:
+              bootstrap = bool(ref)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('ready=' + str(bool(ref)).lower() + '\n')
+              output.write('bootstrap=' + str(bootstrap).lower() + '\n')
+              output.write('sdk_sha=' + sdk_sha + '\n')
+              output.write('release=' + str(release).lower() + '\n')
+              if ref:
+                  data = json.loads(subprocess.check_output(['gh', 'api', 'repos/tinkle-org/libtinkle/commits/' + urllib.parse.quote(ref, safe='')]))
+                  assert re.fullmatch('[0-9a-f]{40}', data['sha'])
+                  assert bootstrap or data['sha'] == ref, 'Published source revision changed'
+                  output.write('core_sha=' + data['sha'] + '\n')
+              else:
+                  with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+                      summary.write('Native consumer validation is **not run**: awaiting the first core release. Dispatch with explicit source_ref for bootstrap proof. This is not release evidence.\n')
+          PY
+  consumer:
+    needs: source
+    if: needs.source.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: 24
+            target: default
+            pages: 4096
+          - api: 36
+            target: google_apis
+            pages: 4096
+          - api: 36
+            target: google_apis_ps16k
+            pages: 16384
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.1
+      BOOTSTRAP: ${{ needs.source.outputs.bootstrap }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sdk_sha }}
+          path: sdk
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tinkle-org/libtinkle
+          ref: ${{ needs.source.outputs.core_sha }}
+          fetch-depth: 0
+          path: core
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: true
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4 (Node 24)
+        with:
+          packages: 'platform-tools ndk;30.0.16248370 platforms;android-36 build-tools;36.0.0'
+      - name: Pin the NDK used by build and verification tools
+        run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/30.0.16248370" >> "$GITHUB_ENV"
+      - name: Bootstrap native artifact (test only)
+        if: env.BOOTSTRAP == 'true'
+        working-directory: core
+        env:
+          SDK_OUTPUT_DIR: ${{ github.workspace }}/artifacts
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --target aarch64-linux-android --target armv7-linux-androideabi --target i686-linux-android --target x86_64-linux-android
+          python3 scripts/sdk-ci.py toolchain
+          bash scripts/build-android.sh
+      - name: Verify checksums and generated binding parity
+        run: |
+          if [[ "$BOOTSTRAP" == true ]]; then
+            python3 core/scripts/sdk-ci.py stage --sdk kotlin --destination sdk --artifacts artifacts --bootstrap
+          else
+            python3 core/scripts/sdk-ci.py stage --sdk kotlin --destination sdk --artifacts artifacts --download
+          fi
+      - run: python3 core/scripts/sdk-ci.py android-build --destination sdk --artifacts artifacts
+      - name: Enable KVM
+        run: sudo chmod 666 /dev/kvm
+      - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: ${{ matrix.api }}
+          target: ${{ matrix.target }}
+          arch: x86_64
+          disable-animations: true
+          script: python3 core/scripts/sdk-ci.py android-test --destination sdk --artifacts artifacts --api-level ${{ matrix.api }} --page-size ${{ matrix.pages }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: android-consumer-${{ matrix.api }}-${{ matrix.pages }}
+          path: |
+            sdk/build/outputs/aar/*-release.aar
+            sdk/build/sdk-ci-aar.json
+            sdk/build/diagnostics
+            sdk/sample/build/outputs/mapping
+            sdk/sample/build/outputs/apk
+            sdk/build/reports/tests
+            sdk/build/test-results
+            sdk/sample/build/reports/androidTests
+            sdk/sample/build/outputs/androidTest-results
+          retention-days: 14
+  release:
+    needs: [source, consumer, build-logic]
+    if: github.repository == 'tinkle-org/tinkle-sdk-kotlin' && github.event_name == 'push' && needs.source.outputs.bootstrap == 'false' && needs.source.outputs.ready == 'true' && needs.source.outputs.release == 'true' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    permissions:
+      contents: write
+      pull-requests: read
+    # Direct dependency: GITHUB_TOKEN-created tags do not trigger another push run.
+    uses: ./.github/workflows/release.yml
+    with:
+      source_sha: ${{ needs.source.outputs.core_sha }}
+      sdk_sha: ${{ needs.source.outputs.sdk_sha }}

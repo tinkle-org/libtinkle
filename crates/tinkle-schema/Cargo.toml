@@ -3,7 +3,7 @@ name = "tinkle-schema"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Tinkle v1 schema bindings + realtime batch/cursor validation (above Syntra)."
+description = "Tinkle v1 schema bindings + sync validation (above Syntra)."
 rust-version.workspace = true
 publish = false
 
@@ -12,4 +12,7 @@ prost.workspace = true
 prost-types.workspace = true
 bytes.workspace = true
 thiserror.workspace = true
-tinklecorp_tinkle-proto_community_neoeinstein-prost.workspace = true
+tinkle-org_schema_community_neoeinstein-prost.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tinkle-org_schema_community_neoeinstein-tonic.workspace = true

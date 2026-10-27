@@ -487,6 +487,22 @@ fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterInt32: FfiConverterPrimitive {
+    typealias FfiType = Int32
+    typealias SwiftType = Int32
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Int32, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
     typealias FfiType = UInt64
     typealias SwiftType = UInt64
@@ -586,33 +602,71 @@ fileprivate struct FfiConverterString: FfiConverter {
     }
 }
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
+    }
+}
+
 
 
 
 /**
- * Foreign-implemented durable cursor store.
+ * Foreign-implemented durable journal store.
  *
- * All params are owned (`String`/`u64`); references are unsupported in
+ * All params are owned (`String`/`i64`); references are unsupported in
  * foreign trait methods. Every method returns `Result` so foreign
  * failures convert into [`crate::FfiError`] instead of panicking.
+ *
+ * Ordering: persist `accept_seq` via `save_journal` only after the page's
+ * effects commit (SQLite does both atomically via
+ * `apply_journal_page_fenced`; checkpoint-only stores persist after the
+ * host applies the page). Never advance the cursor before the bodies it
+ * covers are durable.
+ *
+ * Scope: `clear_principal` removes all state owned by `principal` — journal
+ * cursors plus, where applicable, cached messages/dialogs/users/chats — so
+ * logout leaves no offline bodies behind.
  */
 public protocol FfiCursorStore: AnyObject, Sendable {
 
-    func load(principal: String, stream: String) async throws  -> UInt64?
+    func loadJournal(principal: String, targetKey: String) async throws  -> Int64?
 
-    func save(principal: String, stream: String, cursor: UInt64) async throws
+    func saveJournal(principal: String, targetKey: String, acceptSeq: Int64) async throws
 
-    func removeStream(principal: String, stream: String) async throws
+    func removeTarget(principal: String, targetKey: String) async throws
 
     func clearPrincipal(principal: String) async throws
 
 }
 /**
- * Foreign-implemented durable cursor store.
+ * Foreign-implemented durable journal store.
  *
- * All params are owned (`String`/`u64`); references are unsupported in
+ * All params are owned (`String`/`i64`); references are unsupported in
  * foreign trait methods. Every method returns `Result` so foreign
  * failures convert into [`crate::FfiError`] instead of panicking.
+ *
+ * Ordering: persist `accept_seq` via `save_journal` only after the page's
+ * effects commit (SQLite does both atomically via
+ * `apply_journal_page_fenced`; checkpoint-only stores persist after the
+ * host applies the page). Never advance the cursor before the bodies it
+ * covers are durable.
+ *
+ * Scope: `clear_principal` removes all state owned by `principal` — journal
+ * cursors plus, where applicable, cached messages/dialogs/users/chats — so
+ * logout leaves no offline bodies behind.
  */
 open class FfiCursorStoreImpl: FfiCursorStore, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -667,28 +721,28 @@ open class FfiCursorStoreImpl: FfiCursorStore, @unchecked Sendable {
 
 
 
-open func load(principal: String, stream: String)async throws  -> UInt64?  {
+open func loadJournal(principal: String, targetKey: String)async throws  -> Int64?  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
-                uniffi_tinkle_ffi_fn_method_fficursorstore_load(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterString.lower(stream)
+                uniffi_tinkle_ffi_fn_method_fficursorstore_load_journal(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterString.lower(targetKey)
                 )
             },
             pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
             completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
-            liftFunc: FfiConverterOptionUInt64.lift,
+            liftFunc: FfiConverterOptionInt64.lift,
             errorHandler: FfiConverterTypeFfiError_lift
         )
 }
 
-open func save(principal: String, stream: String, cursor: UInt64)async throws   {
+open func saveJournal(principal: String, targetKey: String, acceptSeq: Int64)async throws   {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
-                uniffi_tinkle_ffi_fn_method_fficursorstore_save(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterString.lower(stream),FfiConverterUInt64.lower(cursor)
+                uniffi_tinkle_ffi_fn_method_fficursorstore_save_journal(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterString.lower(targetKey),FfiConverterInt64.lower(acceptSeq)
                 )
             },
             pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
@@ -699,12 +753,12 @@ open func save(principal: String, stream: String, cursor: UInt64)async throws   
         )
 }
 
-open func removeStream(principal: String, stream: String)async throws   {
+open func removeTarget(principal: String, targetKey: String)async throws   {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
-                uniffi_tinkle_ffi_fn_method_fficursorstore_remove_stream(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterString.lower(stream)
+                uniffi_tinkle_ffi_fn_method_fficursorstore_remove_target(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterString.lower(targetKey)
                 )
             },
             pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
@@ -759,30 +813,30 @@ fileprivate struct UniffiCallbackInterfaceFfiCursorStore {
                 fatalError("Uniffi callback interface FfiCursorStore: handle missing in uniffiClone")
             }
         },
-        load: { (
+        loadJournal: { (
             uniffiHandle: UInt64,
             principal: RustBuffer,
-            stream: RustBuffer,
+            targetKey: RustBuffer,
             uniffiFutureCallback: @escaping UniffiForeignFutureCompleteRustBuffer,
             uniffiCallbackData: UInt64,
             uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
         ) in
             let makeCall = {
-                () async throws -> UInt64? in
+                () async throws -> Int64? in
                 guard let uniffiObj = try? FfiConverterTypeFfiCursorStore.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
-                return try await uniffiObj.load(
+                return try await uniffiObj.loadJournal(
                      principal: try FfiConverterString.lift(principal),
-                     stream: try FfiConverterString.lift(stream)
+                     targetKey: try FfiConverterString.lift(targetKey)
                 )
             }
 
-            let uniffiHandleSuccess = { (returnValue: UInt64?) in
+            let uniffiHandleSuccess = { (returnValue: Int64?) in
                 uniffiFutureCallback(
                     uniffiCallbackData,
                     UniffiForeignFutureResultRustBuffer(
-                        returnValue: FfiConverterOptionUInt64.lower(returnValue),
+                        returnValue: FfiConverterOptionInt64.lower(returnValue),
                         callStatus: RustCallStatus()
                     )
                 )
@@ -804,11 +858,11 @@ fileprivate struct UniffiCallbackInterfaceFfiCursorStore {
                 droppedCallback: uniffiOutDroppedCallback
             )
         },
-        save: { (
+        saveJournal: { (
             uniffiHandle: UInt64,
             principal: RustBuffer,
-            stream: RustBuffer,
-            cursor: UInt64,
+            targetKey: RustBuffer,
+            acceptSeq: Int64,
             uniffiFutureCallback: @escaping UniffiForeignFutureCompleteVoid,
             uniffiCallbackData: UInt64,
             uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
@@ -818,10 +872,10 @@ fileprivate struct UniffiCallbackInterfaceFfiCursorStore {
                 guard let uniffiObj = try? FfiConverterTypeFfiCursorStore.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
-                return try await uniffiObj.save(
+                return try await uniffiObj.saveJournal(
                      principal: try FfiConverterString.lift(principal),
-                     stream: try FfiConverterString.lift(stream),
-                     cursor: try FfiConverterUInt64.lift(cursor)
+                     targetKey: try FfiConverterString.lift(targetKey),
+                     acceptSeq: try FfiConverterInt64.lift(acceptSeq)
                 )
             }
 
@@ -849,10 +903,10 @@ fileprivate struct UniffiCallbackInterfaceFfiCursorStore {
                 droppedCallback: uniffiOutDroppedCallback
             )
         },
-        removeStream: { (
+        removeTarget: { (
             uniffiHandle: UInt64,
             principal: RustBuffer,
-            stream: RustBuffer,
+            targetKey: RustBuffer,
             uniffiFutureCallback: @escaping UniffiForeignFutureCompleteVoid,
             uniffiCallbackData: UInt64,
             uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
@@ -862,9 +916,9 @@ fileprivate struct UniffiCallbackInterfaceFfiCursorStore {
                 guard let uniffiObj = try? FfiConverterTypeFfiCursorStore.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
-                return try await uniffiObj.removeStream(
+                return try await uniffiObj.removeTarget(
                      principal: try FfiConverterString.lift(principal),
-                     stream: try FfiConverterString.lift(stream)
+                     targetKey: try FfiConverterString.lift(targetKey)
                 )
             }
 
@@ -1137,47 +1191,710 @@ public func FfiConverterTypeInMemoryFfiStore_lower(_ value: InMemoryFfiStore) ->
 
 
 /**
+ * Rust-owned SQLite database shared by iOS and Android.
+ */
+public protocol SqliteStorageProtocol: AnyObject, Sendable {
+
+    /**
+     * Delete all rows for `principal`, including journal cursors.
+     *
+     * Coordination required: [`TinkleClient`] holds in-memory accept
+     * positions. If the client is still running, the next journal commit
+     * fails the SQLite scope fence because memory expects the deleted
+     * cursor, breaking sync until reconciliation. Callers must
+     * `shutdown()`/`suspend()` the client first and only reconnect (fresh
+     * `subscribe`, reconciling from position 0) after clearing. A full fix
+     * would reset the live reconcile positions atomically with this
+     * delete; that cross-object coordination is out of scope, so this doc
+     * is the guard.
+     */
+    func clearPrincipal(principal: String) async throws
+
+    func getChatProto(principal: String, chatId: Int64) async throws  -> Data?
+
+    func getMessages(principal: String, conversationKey: String, limit: UInt32, beforeId: Int64?) async throws  -> [FfiMessage]
+
+    func getUserProto(principal: String, userId: Int64) async throws  -> Data?
+
+    func listDialogs(principal: String, limit: UInt32) async throws  -> [FfiDialog]
+
+    /**
+     * Durable journal cursor for one conversation: the last applied
+     * `GetTargetChanges.last_accept_seq` (`None` when nothing applied yet).
+     * `target_key` is `target:user:<id>` / `target:room:<id>`.
+     */
+    func loadJournal(principal: String, targetKey: String) async throws  -> Int64?
+
+    /**
+     * Write plumbing for [`Self::get_chat_proto`]: see [`Self::save_user_proto`].
+     *
+     * Validates by decoding the protobuf and checking the embedded
+     * `chat_id` matches: mismatches are codec errors, never silent
+     * cache poison.
+     */
+    func saveChatProto(principal: String, chatId: Int64, chatProto: Data) async throws
+
+    /**
+     * Write plumbing for [`Self::get_user_proto`]: the sync projector never
+     * emits user rows, so without an explicit save (e.g. from a
+     * UsersService refresh) the getter stays `None`. Hosts should call this
+     * after fetching user objects via RPC.
+     *
+     * Validates by decoding the protobuf and checking the embedded id
+     * matches `user_id`: a mismatched or missing id is a codec error,
+     * never a silent cache poison.
+     */
+    func saveUserProto(principal: String, userId: Int64, userProto: Data) async throws
+
+}
+/**
+ * Rust-owned SQLite database shared by iOS and Android.
+ */
+open class SqliteStorage: SqliteStorageProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tinkle_ffi_fn_clone_sqlitestorage(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tinkle_ffi_fn_free_sqlitestorage(handle, $0) }
+    }
+
+
+    /**
+     * Blocking open: does FS I/O + PRAGMAs + schema sync on the calling
+     * thread. Do NOT call on the UI/main thread; call from a background
+     * queue, or prefer [`Self::open_async`] which moves the work to
+     * `spawn_blocking`. A full async refactor (async constructor as the
+     * only open path) is out of scope to avoid breaking existing
+     * Swift/Kotlin call sites; this doc + the async alternative is the
+     * interim guard.
+     */
+public static func `open`(path: String)throws  -> SqliteStorage  {
+    return try  FfiConverterTypeSqliteStorage_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_constructor_sqlitestorage_open(
+        FfiConverterString.lower(path),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * Non-blocking open for UI callers: runs [`tinkle_storage::Storage::open`]
+     * on Tokio's blocking pool.
+     */
+public static func openAsync(path: String)async throws  -> SqliteStorage  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_constructor_sqlitestorage_open_async(FfiConverterString.lower(path)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeSqliteStorage_lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+public static func openInMemory()throws  -> SqliteStorage  {
+    return try  FfiConverterTypeSqliteStorage_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_constructor_sqlitestorage_open_in_memory(uniffiCallStatus
+    )
+})
+}
+
+
+
+    /**
+     * Delete all rows for `principal`, including journal cursors.
+     *
+     * Coordination required: [`TinkleClient`] holds in-memory accept
+     * positions. If the client is still running, the next journal commit
+     * fails the SQLite scope fence because memory expects the deleted
+     * cursor, breaking sync until reconciliation. Callers must
+     * `shutdown()`/`suspend()` the client first and only reconnect (fresh
+     * `subscribe`, reconciling from position 0) after clearing. A full fix
+     * would reset the live reconcile positions atomically with this
+     * delete; that cross-object coordination is out of scope, so this doc
+     * is the guard.
+     */
+open func clearPrincipal(principal: String)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_sqlitestorage_clear_principal(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(principal)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_void,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+open func getChatProto(principal: String, chatId: Int64)async throws  -> Data?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_sqlitestorage_get_chat_proto(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterInt64.lower(chatId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+open func getMessages(principal: String, conversationKey: String, limit: UInt32, beforeId: Int64?)async throws  -> [FfiMessage]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_sqlitestorage_get_messages(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterString.lower(conversationKey),FfiConverterUInt32.lower(limit),FfiConverterOptionInt64.lower(beforeId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiMessage.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+open func getUserProto(principal: String, userId: Int64)async throws  -> Data?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_sqlitestorage_get_user_proto(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterInt64.lower(userId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+open func listDialogs(principal: String, limit: UInt32)async throws  -> [FfiDialog]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_sqlitestorage_list_dialogs(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterUInt32.lower(limit)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiDialog.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Durable journal cursor for one conversation: the last applied
+     * `GetTargetChanges.last_accept_seq` (`None` when nothing applied yet).
+     * `target_key` is `target:user:<id>` / `target:room:<id>`.
+     */
+open func loadJournal(principal: String, targetKey: String)async throws  -> Int64?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_sqlitestorage_load_journal(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterString.lower(targetKey)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionInt64.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Write plumbing for [`Self::get_chat_proto`]: see [`Self::save_user_proto`].
+     *
+     * Validates by decoding the protobuf and checking the embedded
+     * `chat_id` matches: mismatches are codec errors, never silent
+     * cache poison.
+     */
+open func saveChatProto(principal: String, chatId: Int64, chatProto: Data)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_sqlitestorage_save_chat_proto(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterInt64.lower(chatId),FfiConverterData.lower(chatProto)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_void,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Write plumbing for [`Self::get_user_proto`]: the sync projector never
+     * emits user rows, so without an explicit save (e.g. from a
+     * UsersService refresh) the getter stays `None`. Hosts should call this
+     * after fetching user objects via RPC.
+     *
+     * Validates by decoding the protobuf and checking the embedded id
+     * matches `user_id`: a mismatched or missing id is a codec error,
+     * never a silent cache poison.
+     */
+open func saveUserProto(principal: String, userId: Int64, userProto: Data)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_sqlitestorage_save_user_proto(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(principal),FfiConverterInt64.lower(userId),FfiConverterData.lower(userProto)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_void,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSqliteStorage: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = SqliteStorage
+
+    public static func lift(_ handle: UInt64) throws -> SqliteStorage {
+        return SqliteStorage(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: SqliteStorage) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SqliteStorage {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: SqliteStorage, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSqliteStorage_lift(_ handle: UInt64) throws -> SqliteStorage {
+    return try FfiConverterTypeSqliteStorage.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSqliteStorage_lower(_ value: SqliteStorage) -> UInt64 {
+    return FfiConverterTypeSqliteStorage.lower(value)
+}
+
+
+
+
+
+
+/**
  * UniFFI client object.
  */
 public protocol TinkleClientProtocol: AnyObject, Sendable {
 
     /**
      * Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
+     * Reissues the retained watch set on the fresh connection, so presence
+     * observations survive reconnects.
      */
     func connect() async throws
 
     /**
-     * Next realtime app event. `None` when the client is closed.
+     * Files upload: `AbortUpload` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `AbortUploadRequest`/`AbortUploadResponse` bytes.
      */
-    func nextEvent() async  -> FfiRealtimeEvent?
+    func filesAbortUpload(request: Data) async throws  -> Data
 
     /**
-     * Reconnect + re-handshake + explicit resubscribe from persisted
-     * cursors (network change / wake from push).
+     * Files upload session: `BeginUpload` (Syntra primary, gRPC fallback).
+     *
+     * `request`/`response` are the encoded `BeginUploadRequest`/
+     * `BeginUploadResponse` protobuf bytes; hosts decode with their own
+     * generated bindings. Local validation failures surface as
+     * [`FfiError::Codec`].
+     */
+    func filesBeginUpload(request: Data) async throws  -> Data
+
+    /**
+     * Files upload: `CompleteUpload` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `CompleteUploadRequest`/`CompleteUploadResponse` bytes.
+     */
+    func filesCompleteUpload(request: Data) async throws  -> Data
+
+    /**
+     * Rust-owned download (file id in, bytes out).
+     *
+     * Minimal pass-through over [`libtinkle::DownloadManager`]: verifies
+     * size + SHA-256 and joins in-flight downloads. Per-consumer cancel is
+     * cooperative via dropping the foreign future (no token crosses FFI);
+     * cancelling one consumer never cancels the shared download.
+     */
+    func filesDownloadBytes(fileId: Int64) async throws  -> Data
+
+    /**
+     * Files download: `DownloadPart` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `DownloadPartRequest`/`DownloadPartResponse` bytes.
+     */
+    func filesDownloadPart(request: Data) async throws  -> Data
+
+    /**
+     * Files download: `GetFileInfo` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `GetFileInfoRequest`/`GetFileInfoResponse` bytes.
+     */
+    func filesGetFileInfo(request: Data) async throws  -> Data
+
+    /**
+     * Files upload: `GetUploadStatus` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `GetUploadStatusRequest`/`GetUploadStatusResponse` bytes.
+     */
+    func filesGetUploadStatus(request: Data) async throws  -> Data
+
+    /**
+     * Rust-owned upload (bytes in, `FileInfo` bytes out).
+     *
+     * Minimal pass-through over [`libtinkle::UploadManager`]: preserves the
+     * EXACT `BeginUploadRequest` (incl. `Option` presence) across idempotency
+     * retries, decides SOLELY on `BeginUploadResponse.status`, and verifies
+     * the commit. `sha256` is the optional client declaration (32 bytes);
+     * `None` preserves absence for idempotency. Returns the encoded
+     * `FileInfo` protobuf bytes; hosts decode with their own bindings.
+     */
+    func filesUploadBytes(idempotencyKey: String, data: Data, fileName: String?, mimeType: String?, sha256: Data?, encrypted: Bool) async throws  -> Data
+
+    /**
+     * Files upload: `UploadPart` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `UploadPartRequest`/`UploadPartResponse` protobuf bytes.
+     */
+    func filesUploadPart(request: Data) async throws  -> Data
+
+    /**
+     * Fetch specific messages in one conversation (`GetMessages`).
+     *
+     * `target_kind` is `"user"`/`"room"`/`"chat"`; `message_ids` must be
+     * non-empty positive ids in the same conversation. Large batches are
+     * chunked to the protocol bound (`MAX_MESSAGE_IDS_PER_REQUEST`) and
+     * merged; messages the server cannot disclose are omitted, never
+     * errors. Bodies share the message's stable `accept_seq` token: when
+     * two copies disagree, keep the fresher by later `edit_date`.
+     *
+     * Returns the encoded `GetMessagesResponse` protobuf bytes; hosts
+     * decode with their own generated bindings.
+     */
+    func getMessages(targetKind: String, targetId: Int64, messageIds: [Int64]) async throws  -> Data
+
+    /**
+     * List retained conversation mutations strictly after one accept
+     * position (`GetTargetChanges`).
+     *
+     * `after_accept_seq` is the exclusive lower bound (zero requests
+     * everything retained); `limit` bounds one page (`0` selects the
+     * deployment default, `1..=500` otherwise). Changes ascend strictly by
+     * `accept_seq`; edited changes carry the current body while
+     * deleted/revoked changes carry identity and kind only.
+     * `more_available` reports continuation: `Some(true)` means request the
+     * next page from `last_accept_seq`; `Some(false)` confirms caught up;
+     * absent is unknown, never caught up.
+     *
+     * Returns the encoded `GetTargetChangesResponse` protobuf bytes; hosts
+     * decode with their own generated bindings.
+     */
+    func getTargetChanges(targetKind: String, targetId: Int64, afterAcceptSeq: Int64, limit: Int32) async throws  -> Data
+
+    /**
+     * True while the transport is live (connection exists and its
+     * notification pump has not exited).
+     */
+    func isConnected() async  -> Bool
+
+    /**
+     * True while [`Self::suspend`] is in effect.
+     */
+    func isSuspended() async  -> Bool
+
+    /**
+     * Fetch dialogs. Like [`Self::load_history`], the fetch never touches
+     * accept positions.
+     *
+     * Returns the encoded `GetDialogsResponse` protobuf bytes.
+     * `HydrateCache` also upserts authoritative users/chats plus
+     * authoritative dialog rows.
+     */
+    func loadDialogs(request: FfiDialogsRequest, policy: FfiLoadPolicy) async throws  -> Data
+
+    /**
+     * Fetch message history. History lives outside the reconciliation
+     * journal: the fetch never advances or resets any accept position.
+     * Message bodies ARE cached: `HydrateCache` upserts authoritative
+     * users/chats into the shared SQLite cache and projects message
+     * bodies into message rows committed at the current journal cursor
+     * (the cursor itself is unchanged — history heals the cache without
+     * moving the journal).
+     *
+     * Returns the encoded `GetHistoryResponse` protobuf bytes; hosts
+     * decode with their own generated bindings. `NetworkOnly` returns
+     * bodies without touching the cache.
+     */
+    func loadHistory(request: FfiHistoryRequest, policy: FfiLoadPolicy) async throws  -> Data
+
+    /**
+     * Next sync app event. `None` when the client is closed.
+     *
+     * Reconciliation contract: `ConversationChanged`/`MessagesChanged`
+     * tell the host what to refresh (cache reads or `get_messages`
+     * hydration); `ReconcileFailed`/`CheckpointFailed` are per-target and
+     * recoverable via `reconcile_now` (target status stays `Failed` until
+     * then). There is nothing to acknowledge: positions advance inside the
+     * SDK as journals reconcile.
+     */
+    func nextEvent() async  -> FfiSyncEvent?
+
+    /**
+     * Number of outstanding RPCs on the live connection (zero offline).
+     * Send-state query: a nonzero value after reconnect means results
+     * reported `UNAVAILABLE` with unknown outcome — retry only with the
+     * same `random_id` and fresh correlation.
+     */
+    func pendingLen() async  -> UInt64
+
+    /**
+     * Trigger a reconciliation pass over the tracked conversations now
+     * (journal pages + hydration for anything behind). Notification hints
+     * and reconnects trigger this automatically; call it after the app
+     * returns to the foreground or after handling `ReconcileFailed`.
+     */
+    func reconcileNow() async throws
+
+    /**
+     * Reconnect + re-handshake + explicit resubscribe from tracked targets
+     * (network change / wake from push). Reissues the retained watch set on
+     * the fresh connection, so presence observations survive reconnects.
      */
     func reconnect() async throws
 
     /**
-     * Minimal write path end-to-end: send a text message to a room.
-     * Returns the server-assigned message id.
+     * Clear suspension set by [`Self::suspend`]. The supervisor resumes
+     * reconnecting on its next tick; callers needing immediacy can
+     * `reconnect` directly.
      */
-    func sendMessage(roomId: Int64, text: String, randomId: UInt64) async throws  -> UInt64
+    func resume() async
 
     /**
-     * Graceful shutdown: stop RPCs, tear down transport.
+     * Minimal write path end-to-end: send a text message to a conversation.
+     * Returns the server-assigned message id.
+     *
+     * `target_id` must be positive; `target_kind` is `"user"` for direct
+     * messages, `"room"`/`"chat"` for groups. `random_id` must be nonzero
+     * (and fit in `i64` — the application operation key for idempotent
+     * retry). The server response must carry a message with a positive id;
+     * a missing or non-positive id is a codec error, never zero.
+     */
+    func sendMessage(targetKind: String, targetId: Int64, text: String, randomId: UInt64) async throws  -> UInt64
+
+    /**
+     * Set the authenticated principal from a known user id.
+     */
+    func setPrincipalUserId(userId: Int64) async throws
+
+    /**
+     * Graceful shutdown: stop RPCs, tear down transport. Equivalent to
+     * [`Self::stop`].
      */
     func shutdown() async
 
     /**
-     * Subscribe with durable cursor recovery. Returns the confirmation
-     * (interests registered, not replay completion).
+     * Supervised lifecycle: connect (if needed), subscribe, and start the
+     * reconciliation supervisor, which owns automatic re-reconciliation
+     * and reconnection from here on. The host only consumes `next_event()`;
+     * hints, dead transports, and per-target failures are handled inside
+     * the SDK and reported as events + target status.
+     *
+     * `watch` is retained and reissued on every new connection (reconnect/
+     * supervisor reestablish), so presence observations survive reconnects.
+     *
+     * Idempotent: concurrent callers share the single supervisor and get
+     * the initial establishment result. Call `stop()` (or `shutdown()`)
+     * to shut down; `connect`/`subscribe`/`reconnect` remain as
+     * low-level primitives for manual control.
      */
-    func subscribe(rooms: [RoomSub], watch: [Int64]) async throws  -> FfiSubscribeResponse
+    func start(targets: [TargetSub], watch: [Int64]) async throws  -> FfiSubscribeResponse
 
     /**
-     * Background suspension: graceful close, durable cursors kept.
+     * Stop the sync supervisor (if running) and tear down the connection.
+     * Idempotent. Supervised apps call this instead of `shutdown`;
+     * both tear down the transport, `stop` names the supervisor path.
+     */
+    func stop() async
+
+    /**
+     * Subscribe with durable per-target reconciliation. Returns the
+     * confirmation (tracked conversation keys, not reconciliation
+     * completion: journals reconcile in the background and report via
+     * `next_event` + target status).
+     *
+     * `watch` is retained and reissued on every new connection, so presence
+     * observations survive reconnects.
+     */
+    func subscribe(targets: [TargetSub], watch: [Int64]) async throws  -> FfiSubscribeResponse
+
+    /**
+     * Background suspension: graceful close, durable positions kept.
      */
     func suspend() async
+
+    /**
+     * Last applied accept position for a tracked conversation
+     * (`target:user:<id>` / `target:room:<id>`). `None` when untracked.
+     * Authoritative for UI progress: informational events may drop under
+     * pressure, positions do not.
+     */
+    func targetCursor(targetKey: String) async  -> Int64?
+
+    /**
+     * Per-target reconciliation status. `None` when untracked (never
+     * subscribed or since removed). Poll this instead of inferring demand
+     * from events: `Reconciling` means a journal page run is in flight or
+     * demanded, `Failed` is parked until `reconcile_now`.
+     */
+    func targetStatus(targetKey: String) async  -> FfiReconcileStatus?
+
+    /**
+     * Canonical keys of the tracked conversations.
+     */
+    func trackedTargets() async  -> [String]
+
+    /**
+     * Bounded push wake: parse-then-commit without the foreground
+     * supervisor or socket.
+     *
+     * Drives `libtinkle::PushManager` on this client's shared SQLite file
+     * with a bounded executor (`timeout_secs`, `0` selects the 25s
+     * default; capped at 120s): ensures a connection independent of any
+     * foreground supervisor, fetches authoritative bodies via
+     * `get_messages`, commits through the shared ingest, reconciles
+     * mutations within the remaining budget, and completes the durable
+     * job exactly once.
+     *
+     * Cancellation-safe: dropping the foreign future leaves the durable
+     * job `claimed`; the next wake requeues stale claims and retries.
+     */
+    func handlePushWake(envelope: FfiPushEnvelope, timeoutSecs: UInt64) async throws  -> FfiPushOutcome
+
+    /**
+     * Logout + local cleanup: best-effort `AccountService/Logout`, then
+     * wipes the principal's SQLite rows, drops catch-up demand, and
+     * resets the session so in-flight push/reconcile work fences out.
+     * Returns the server's `logged_out` flag (`false` when the RPC was
+     * skipped or failed; the local wipe still happened).
+     */
+    func logout() async throws  -> Bool
+
+    /**
+     * Foreground open-event hook: navigate to the envelope's target and
+     * refresh it. Returns the canonical target key when the envelope
+     * routes, after running a bounded reconcile pass for that
+     * conversation (`None` when the envelope carries no routing — show
+     * the conversation list instead).
+     *
+     * The reconcile is best-effort and bounded by
+     * [`libtinkle::PUSH_DEFAULT_BUDGET_SECS`]: failures and deadline expiry
+     * are logged and still return the key for navigation.
+     */
+    func openPushNotification(envelope: FfiPushEnvelope) async throws  -> String?
+
+    /**
+     * Register a push token (`AccountService/RegisterPush`).
+     *
+     * `token_type` is `"apns"`, `"apns_voip"`, or `"fcm"` (unknown
+     * strings are codec errors, never guessed). Call after sign-in and
+     * on every rotation; the server keeps the latest token per device.
+     */
+    func registerPush(token: String, tokenType: String, langCode: String) async throws
+
+    /**
+     * Unregister a push token (`AccountService/UnregisterPush`).
+     * Returns the server's `removed` flag. Call BEFORE `logout`.
+     */
+    func unregisterPush(token: String) async throws  -> Bool
 
 }
 /**
@@ -1225,10 +1942,15 @@ open class TinkleClient: TinkleClientProtocol, @unchecked Sendable {
     /**
      * Create a client. `credential` is the opaque session token;
      * `store` is the foreign (or in-memory) durable cursor store.
+     *
+     * Fails fast with [`FfiError::Internal`] on an invalid non-blank
+     * `grpc_endpoint` (missing scheme, non-`https` without
+     * `allow_insecure`) instead of surfacing a retried network failure
+     * at reconciliation time.
      */
-public convenience init(config: ClientConfigFfi, credential: String, store: FfiCursorStore) {
+public convenience init(config: ClientConfigFfi, credential: String, store: FfiCursorStore)throws  {
     let handle =
-        try! rustCall() {
+        try rustCallWithError(FfiConverterTypeFfiError_lift) {
         uniffiCallStatus in
     uniffi_tinkle_ffi_fn_constructor_tinkleclient_new(
         FfiConverterTypeClientConfigFfi_lower(config),
@@ -1249,10 +1971,30 @@ public convenience init(config: ClientConfigFfi, credential: String, store: FfiC
     }
 
 
+    /**
+     * Create a client sharing one native SQLite file. Rust reconciles
+     * journals and commits cache + accept positions atomically, then emits
+     * `ConversationChanged`/`MessagesChanged`; UI reads the shared cache.
+     *
+     * Fails fast on invalid `grpc_endpoint` like [`Self::new`].
+     */
+public static func newSqlite(config: ClientConfigFfi, credential: String, storage: SqliteStorage)throws  -> TinkleClient  {
+    return try  FfiConverterTypeTinkleClient_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_constructor_tinkleclient_new_sqlite(
+        FfiConverterTypeClientConfigFfi_lower(config),
+        FfiConverterString.lower(credential),
+        FfiConverterTypeSqliteStorage_lower(storage),uniffiCallStatus
+    )
+})
+}
+
 
 
     /**
      * Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
+     * Reissues the retained watch set on the fresh connection, so presence
+     * observations survive reconnects.
      */
 open func connect()async throws   {
     return
@@ -1271,9 +2013,371 @@ open func connect()async throws   {
 }
 
     /**
-     * Next realtime app event. `None` when the client is closed.
+     * Files upload: `AbortUpload` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `AbortUploadRequest`/`AbortUploadResponse` bytes.
      */
-open func nextEvent()async  -> FfiRealtimeEvent?  {
+open func filesAbortUpload(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_files_abort_upload(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Files upload session: `BeginUpload` (Syntra primary, gRPC fallback).
+     *
+     * `request`/`response` are the encoded `BeginUploadRequest`/
+     * `BeginUploadResponse` protobuf bytes; hosts decode with their own
+     * generated bindings. Local validation failures surface as
+     * [`FfiError::Codec`].
+     */
+open func filesBeginUpload(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_files_begin_upload(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Files upload: `CompleteUpload` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `CompleteUploadRequest`/`CompleteUploadResponse` bytes.
+     */
+open func filesCompleteUpload(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_files_complete_upload(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Rust-owned download (file id in, bytes out).
+     *
+     * Minimal pass-through over [`libtinkle::DownloadManager`]: verifies
+     * size + SHA-256 and joins in-flight downloads. Per-consumer cancel is
+     * cooperative via dropping the foreign future (no token crosses FFI);
+     * cancelling one consumer never cancels the shared download.
+     */
+open func filesDownloadBytes(fileId: Int64)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_files_download_bytes(
+                        self.uniffiCloneHandle(),FfiConverterInt64.lower(fileId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Files download: `DownloadPart` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `DownloadPartRequest`/`DownloadPartResponse` bytes.
+     */
+open func filesDownloadPart(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_files_download_part(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Files download: `GetFileInfo` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `GetFileInfoRequest`/`GetFileInfoResponse` bytes.
+     */
+open func filesGetFileInfo(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_files_get_file_info(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Files upload: `GetUploadStatus` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `GetUploadStatusRequest`/`GetUploadStatusResponse` bytes.
+     */
+open func filesGetUploadStatus(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_files_get_upload_status(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Rust-owned upload (bytes in, `FileInfo` bytes out).
+     *
+     * Minimal pass-through over [`libtinkle::UploadManager`]: preserves the
+     * EXACT `BeginUploadRequest` (incl. `Option` presence) across idempotency
+     * retries, decides SOLELY on `BeginUploadResponse.status`, and verifies
+     * the commit. `sha256` is the optional client declaration (32 bytes);
+     * `None` preserves absence for idempotency. Returns the encoded
+     * `FileInfo` protobuf bytes; hosts decode with their own bindings.
+     */
+open func filesUploadBytes(idempotencyKey: String, data: Data, fileName: String?, mimeType: String?, sha256: Data?, encrypted: Bool)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_files_upload_bytes(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(idempotencyKey),FfiConverterData.lower(data),FfiConverterOptionString.lower(fileName),FfiConverterOptionString.lower(mimeType),FfiConverterOptionData.lower(sha256),FfiConverterBool.lower(encrypted)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Files upload: `UploadPart` (Syntra primary, gRPC fallback).
+     *
+     * Encoded `UploadPartRequest`/`UploadPartResponse` protobuf bytes.
+     */
+open func filesUploadPart(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_files_upload_part(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Fetch specific messages in one conversation (`GetMessages`).
+     *
+     * `target_kind` is `"user"`/`"room"`/`"chat"`; `message_ids` must be
+     * non-empty positive ids in the same conversation. Large batches are
+     * chunked to the protocol bound (`MAX_MESSAGE_IDS_PER_REQUEST`) and
+     * merged; messages the server cannot disclose are omitted, never
+     * errors. Bodies share the message's stable `accept_seq` token: when
+     * two copies disagree, keep the fresher by later `edit_date`.
+     *
+     * Returns the encoded `GetMessagesResponse` protobuf bytes; hosts
+     * decode with their own generated bindings.
+     */
+open func getMessages(targetKind: String, targetId: Int64, messageIds: [Int64])async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_get_messages(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(targetKind),FfiConverterInt64.lower(targetId),FfiConverterSequenceInt64.lower(messageIds)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * List retained conversation mutations strictly after one accept
+     * position (`GetTargetChanges`).
+     *
+     * `after_accept_seq` is the exclusive lower bound (zero requests
+     * everything retained); `limit` bounds one page (`0` selects the
+     * deployment default, `1..=500` otherwise). Changes ascend strictly by
+     * `accept_seq`; edited changes carry the current body while
+     * deleted/revoked changes carry identity and kind only.
+     * `more_available` reports continuation: `Some(true)` means request the
+     * next page from `last_accept_seq`; `Some(false)` confirms caught up;
+     * absent is unknown, never caught up.
+     *
+     * Returns the encoded `GetTargetChangesResponse` protobuf bytes; hosts
+     * decode with their own generated bindings.
+     */
+open func getTargetChanges(targetKind: String, targetId: Int64, afterAcceptSeq: Int64, limit: Int32)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_get_target_changes(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(targetKind),FfiConverterInt64.lower(targetId),FfiConverterInt64.lower(afterAcceptSeq),FfiConverterInt32.lower(limit)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * True while the transport is live (connection exists and its
+     * notification pump has not exited).
+     */
+open func isConnected()async  -> Bool  {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_is_connected(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_i8,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_i8,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: nil
+
+        )
+}
+
+    /**
+     * True while [`Self::suspend`] is in effect.
+     */
+open func isSuspended()async  -> Bool  {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_is_suspended(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_i8,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_i8,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: nil
+
+        )
+}
+
+    /**
+     * Fetch dialogs. Like [`Self::load_history`], the fetch never touches
+     * accept positions.
+     *
+     * Returns the encoded `GetDialogsResponse` protobuf bytes.
+     * `HydrateCache` also upserts authoritative users/chats plus
+     * authoritative dialog rows.
+     */
+open func loadDialogs(request: FfiDialogsRequest, policy: FfiLoadPolicy)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_load_dialogs(
+                        self.uniffiCloneHandle(),FfiConverterTypeFfiDialogsRequest_lower(request),FfiConverterTypeFfiLoadPolicy_lower(policy)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Fetch message history. History lives outside the reconciliation
+     * journal: the fetch never advances or resets any accept position.
+     * Message bodies ARE cached: `HydrateCache` upserts authoritative
+     * users/chats into the shared SQLite cache and projects message
+     * bodies into message rows committed at the current journal cursor
+     * (the cursor itself is unchanged — history heals the cache without
+     * moving the journal).
+     *
+     * Returns the encoded `GetHistoryResponse` protobuf bytes; hosts
+     * decode with their own generated bindings. `NetworkOnly` returns
+     * bodies without touching the cache.
+     */
+open func loadHistory(request: FfiHistoryRequest, policy: FfiLoadPolicy)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_load_history(
+                        self.uniffiCloneHandle(),FfiConverterTypeFfiHistoryRequest_lower(request),FfiConverterTypeFfiLoadPolicy_lower(policy)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Next sync app event. `None` when the client is closed.
+     *
+     * Reconciliation contract: `ConversationChanged`/`MessagesChanged`
+     * tell the host what to refresh (cache reads or `get_messages`
+     * hydration); `ReconcileFailed`/`CheckpointFailed` are per-target and
+     * recoverable via `reconcile_now` (target status stays `Failed` until
+     * then). There is nothing to acknowledge: positions advance inside the
+     * SDK as journals reconcile.
+     */
+open func nextEvent()async  -> FfiSyncEvent?  {
     return
         try!  await uniffiRustCallAsync(
             rustFutureFunc: {
@@ -1284,15 +2388,61 @@ open func nextEvent()async  -> FfiRealtimeEvent?  {
             pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
             completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
-            liftFunc: FfiConverterOptionTypeFfiRealtimeEvent.lift,
+            liftFunc: FfiConverterOptionTypeFfiSyncEvent.lift,
             errorHandler: nil
 
         )
 }
 
     /**
-     * Reconnect + re-handshake + explicit resubscribe from persisted
-     * cursors (network change / wake from push).
+     * Number of outstanding RPCs on the live connection (zero offline).
+     * Send-state query: a nonzero value after reconnect means results
+     * reported `UNAVAILABLE` with unknown outcome — retry only with the
+     * same `random_id` and fresh correlation.
+     */
+open func pendingLen()async  -> UInt64  {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_pending_len(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterUInt64.lift,
+            errorHandler: nil
+
+        )
+}
+
+    /**
+     * Trigger a reconciliation pass over the tracked conversations now
+     * (journal pages + hydration for anything behind). Notification hints
+     * and reconnects trigger this automatically; call it after the app
+     * returns to the foreground or after handling `ReconcileFailed`.
+     */
+open func reconcileNow()async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_reconcile_now(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_void,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Reconnect + re-handshake + explicit resubscribe from tracked targets
+     * (network change / wake from push). Reissues the retained watch set on
+     * the fresh connection, so presence observations survive reconnects.
      */
 open func reconnect()async throws   {
     return
@@ -1311,15 +2461,43 @@ open func reconnect()async throws   {
 }
 
     /**
-     * Minimal write path end-to-end: send a text message to a room.
-     * Returns the server-assigned message id.
+     * Clear suspension set by [`Self::suspend`]. The supervisor resumes
+     * reconnecting on its next tick; callers needing immediacy can
+     * `reconnect` directly.
      */
-open func sendMessage(roomId: Int64, text: String, randomId: UInt64)async throws  -> UInt64  {
+open func resume()async   {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_resume(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_void,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: nil
+
+        )
+}
+
+    /**
+     * Minimal write path end-to-end: send a text message to a conversation.
+     * Returns the server-assigned message id.
+     *
+     * `target_id` must be positive; `target_kind` is `"user"` for direct
+     * messages, `"room"`/`"chat"` for groups. `random_id` must be nonzero
+     * (and fit in `i64` — the application operation key for idempotent
+     * retry). The server response must carry a message with a positive id;
+     * a missing or non-positive id is a codec error, never zero.
+     */
+open func sendMessage(targetKind: String, targetId: Int64, text: String, randomId: UInt64)async throws  -> UInt64  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tinkle_ffi_fn_method_tinkleclient_send_message(
-                        self.uniffiCloneHandle(),FfiConverterInt64.lower(roomId),FfiConverterString.lower(text),FfiConverterUInt64.lower(randomId)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(targetKind),FfiConverterInt64.lower(targetId),FfiConverterString.lower(text),FfiConverterUInt64.lower(randomId)
                 )
             },
             pollFunc: ffi_tinkle_ffi_rust_future_poll_u64,
@@ -1331,7 +2509,27 @@ open func sendMessage(roomId: Int64, text: String, randomId: UInt64)async throws
 }
 
     /**
-     * Graceful shutdown: stop RPCs, tear down transport.
+     * Set the authenticated principal from a known user id.
+     */
+open func setPrincipalUserId(userId: Int64)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_set_principal_user_id(
+                        self.uniffiCloneHandle(),FfiConverterInt64.lower(userId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_void,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Graceful shutdown: stop RPCs, tear down transport. Equivalent to
+     * [`Self::stop`].
      */
 open func shutdown()async   {
     return
@@ -1351,15 +2549,26 @@ open func shutdown()async   {
 }
 
     /**
-     * Subscribe with durable cursor recovery. Returns the confirmation
-     * (interests registered, not replay completion).
+     * Supervised lifecycle: connect (if needed), subscribe, and start the
+     * reconciliation supervisor, which owns automatic re-reconciliation
+     * and reconnection from here on. The host only consumes `next_event()`;
+     * hints, dead transports, and per-target failures are handled inside
+     * the SDK and reported as events + target status.
+     *
+     * `watch` is retained and reissued on every new connection (reconnect/
+     * supervisor reestablish), so presence observations survive reconnects.
+     *
+     * Idempotent: concurrent callers share the single supervisor and get
+     * the initial establishment result. Call `stop()` (or `shutdown()`)
+     * to shut down; `connect`/`subscribe`/`reconnect` remain as
+     * low-level primitives for manual control.
      */
-open func subscribe(rooms: [RoomSub], watch: [Int64])async throws  -> FfiSubscribeResponse  {
+open func start(targets: [TargetSub], watch: [Int64])async throws  -> FfiSubscribeResponse  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
-                uniffi_tinkle_ffi_fn_method_tinkleclient_subscribe(
-                        self.uniffiCloneHandle(),FfiConverterSequenceTypeRoomSub.lower(rooms),FfiConverterSequenceInt64.lower(watch)
+                uniffi_tinkle_ffi_fn_method_tinkleclient_start(
+                        self.uniffiCloneHandle(),FfiConverterSequenceTypeTargetSub.lower(targets),FfiConverterSequenceInt64.lower(watch)
                 )
             },
             pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
@@ -1371,7 +2580,54 @@ open func subscribe(rooms: [RoomSub], watch: [Int64])async throws  -> FfiSubscri
 }
 
     /**
-     * Background suspension: graceful close, durable cursors kept.
+     * Stop the sync supervisor (if running) and tear down the connection.
+     * Idempotent. Supervised apps call this instead of `shutdown`;
+     * both tear down the transport, `stop` names the supervisor path.
+     */
+open func stop()async   {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stop(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_void,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: nil
+
+        )
+}
+
+    /**
+     * Subscribe with durable per-target reconciliation. Returns the
+     * confirmation (tracked conversation keys, not reconciliation
+     * completion: journals reconcile in the background and report via
+     * `next_event` + target status).
+     *
+     * `watch` is retained and reissued on every new connection, so presence
+     * observations survive reconnects.
+     */
+open func subscribe(targets: [TargetSub], watch: [Int64])async throws  -> FfiSubscribeResponse  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_subscribe(
+                        self.uniffiCloneHandle(),FfiConverterSequenceTypeTargetSub.lower(targets),FfiConverterSequenceInt64.lower(watch)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFfiSubscribeResponse_lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Background suspension: graceful close, durable positions kept.
      */
 open func suspend()async   {
     return
@@ -1387,6 +2643,196 @@ open func suspend()async   {
             liftFunc: { $0 },
             errorHandler: nil
 
+        )
+}
+
+    /**
+     * Last applied accept position for a tracked conversation
+     * (`target:user:<id>` / `target:room:<id>`). `None` when untracked.
+     * Authoritative for UI progress: informational events may drop under
+     * pressure, positions do not.
+     */
+open func targetCursor(targetKey: String)async  -> Int64?  {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_target_cursor(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(targetKey)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionInt64.lift,
+            errorHandler: nil
+
+        )
+}
+
+    /**
+     * Per-target reconciliation status. `None` when untracked (never
+     * subscribed or since removed). Poll this instead of inferring demand
+     * from events: `Reconciling` means a journal page run is in flight or
+     * demanded, `Failed` is parked until `reconcile_now`.
+     */
+open func targetStatus(targetKey: String)async  -> FfiReconcileStatus?  {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_target_status(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(targetKey)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionTypeFfiReconcileStatus.lift,
+            errorHandler: nil
+
+        )
+}
+
+    /**
+     * Canonical keys of the tracked conversations.
+     */
+open func trackedTargets()async  -> [String]  {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_tracked_targets(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceString.lift,
+            errorHandler: nil
+
+        )
+}
+
+    /**
+     * Bounded push wake: parse-then-commit without the foreground
+     * supervisor or socket.
+     *
+     * Drives `libtinkle::PushManager` on this client's shared SQLite file
+     * with a bounded executor (`timeout_secs`, `0` selects the 25s
+     * default; capped at 120s): ensures a connection independent of any
+     * foreground supervisor, fetches authoritative bodies via
+     * `get_messages`, commits through the shared ingest, reconciles
+     * mutations within the remaining budget, and completes the durable
+     * job exactly once.
+     *
+     * Cancellation-safe: dropping the foreign future leaves the durable
+     * job `claimed`; the next wake requeues stale claims and retries.
+     */
+open func handlePushWake(envelope: FfiPushEnvelope, timeoutSecs: UInt64)async throws  -> FfiPushOutcome  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_handle_push_wake(
+                        self.uniffiCloneHandle(),FfiConverterTypeFfiPushEnvelope_lower(envelope),FfiConverterUInt64.lower(timeoutSecs)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFfiPushOutcome_lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Logout + local cleanup: best-effort `AccountService/Logout`, then
+     * wipes the principal's SQLite rows, drops catch-up demand, and
+     * resets the session so in-flight push/reconcile work fences out.
+     * Returns the server's `logged_out` flag (`false` when the RPC was
+     * skipped or failed; the local wipe still happened).
+     */
+open func logout()async throws  -> Bool  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_logout(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_i8,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_i8,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Foreground open-event hook: navigate to the envelope's target and
+     * refresh it. Returns the canonical target key when the envelope
+     * routes, after running a bounded reconcile pass for that
+     * conversation (`None` when the envelope carries no routing — show
+     * the conversation list instead).
+     *
+     * The reconcile is best-effort and bounded by
+     * [`libtinkle::PUSH_DEFAULT_BUDGET_SECS`]: failures and deadline expiry
+     * are logged and still return the key for navigation.
+     */
+open func openPushNotification(envelope: FfiPushEnvelope)async throws  -> String?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_open_push_notification(
+                        self.uniffiCloneHandle(),FfiConverterTypeFfiPushEnvelope_lower(envelope)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionString.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Register a push token (`AccountService/RegisterPush`).
+     *
+     * `token_type` is `"apns"`, `"apns_voip"`, or `"fcm"` (unknown
+     * strings are codec errors, never guessed). Call after sign-in and
+     * on every rotation; the server keeps the latest token per device.
+     */
+open func registerPush(token: String, tokenType: String, langCode: String)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_register_push(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(token),FfiConverterString.lower(tokenType),FfiConverterString.lower(langCode)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_void,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Unregister a push token (`AccountService/UnregisterPush`).
+     * Returns the server's `removed` flag. Call BEFORE `logout`.
+     */
+open func unregisterPush(token: String)async throws  -> Bool  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_unregister_push(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(token)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_i8,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_i8,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
         )
 }
 
@@ -1440,6 +2886,16 @@ public func FfiConverterTypeTinkleClient_lower(_ value: TinkleClient) -> UInt64 
 
 /**
  * Record mirrored into [`libtinkle::ClientConfig`]. All fields owned.
+ *
+ * `grpc_endpoint` enables the direct-unary gRPC fallback for reconciliation
+ * RPCs (`GetMessages`/`GetTargetChanges`). Syntra stays primary on the live
+ * connection; when set, retryable Syntra failures fall back to this endpoint
+ * automatically. It is validated fail-fast by [`TinkleClient::new`] and
+ * [`TinkleClient::new_sqlite`]: a non-blank-but-invalid endpoint (missing
+ * scheme, non-`https` without `allow_insecure`) returns
+ * [`FfiError::Internal`] at construction instead of surfacing as a retried
+ * network failure at reconciliation time. `None` (or blank, treated as
+ * unset for backward compatibility) keeps Syntra-only reconciliation.
  */
 public struct ClientConfigFfi: Equatable, Hashable {
     /**
@@ -1454,6 +2910,10 @@ public struct ClientConfigFfi: Equatable, Hashable {
      * Optional user-agent string.
      */
     public var userAgent: String?
+    /**
+     * Direct-unary gRPC base endpoint for reconciliation RPCs.
+     */
+    public var grpcEndpoint: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -1466,10 +2926,14 @@ public struct ClientConfigFfi: Equatable, Hashable {
          */allowInsecure: Bool,
         /**
          * Optional user-agent string.
-         */userAgent: String?) {
+         */userAgent: String?,
+        /**
+         * Direct-unary gRPC base endpoint for reconciliation RPCs.
+         */grpcEndpoint: String?) {
         self.url = url
         self.allowInsecure = allowInsecure
         self.userAgent = userAgent
+        self.grpcEndpoint = grpcEndpoint
     }
 
 
@@ -1490,7 +2954,8 @@ public struct FfiConverterTypeClientConfigFfi: FfiConverterRustBuffer {
             try ClientConfigFfi(
                 url: FfiConverterString.read(from: &buf),
                 allowInsecure: FfiConverterBool.read(from: &buf),
-                userAgent: FfiConverterOptionString.read(from: &buf)
+                userAgent: FfiConverterOptionString.read(from: &buf),
+                grpcEndpoint: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -1498,6 +2963,7 @@ public struct FfiConverterTypeClientConfigFfi: FfiConverterRustBuffer {
         FfiConverterString.write(value.url, into: &buf)
         FfiConverterBool.write(value.allowInsecure, into: &buf)
         FfiConverterOptionString.write(value.userAgent, into: &buf)
+        FfiConverterOptionString.write(value.grpcEndpoint, into: &buf)
     }
 }
 
@@ -1518,19 +2984,434 @@ public func FfiConverterTypeClientConfigFfi_lower(_ value: ClientConfigFfi) -> R
 
 
 /**
- * Subscribe confirmation (FFI-safe mirror of the proto response).
+ * FFI-safe cached dialog.
  */
-public struct FfiSubscribeResponse: Equatable, Hashable {
-    public var stream: String
-    public var afterCursor: UInt64
-    public var head: UInt64?
+public struct FfiDialog: Equatable, Hashable {
+    public var peerKind: String
+    public var peerId: Int64
+    public var topMessage: Int64
+    public var unreadCount: Int32
+    public var readInboxMaxId: Int64
+    public var readOutboxMaxId: Int64
+    public var pinned: Bool
+    public var dialogProto: Data
+    /**
+     * True when an invalidation committed with the checkpoint and no
+     * authoritative refresh has cleared it yet; the host should refresh.
+     */
+    public var readStatePending: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(stream: String, afterCursor: UInt64, head: UInt64?) {
-        self.stream = stream
-        self.afterCursor = afterCursor
-        self.head = head
+    public init(peerKind: String, peerId: Int64, topMessage: Int64, unreadCount: Int32, readInboxMaxId: Int64, readOutboxMaxId: Int64, pinned: Bool, dialogProto: Data,
+        /**
+         * True when an invalidation committed with the checkpoint and no
+         * authoritative refresh has cleared it yet; the host should refresh.
+         */readStatePending: Bool) {
+        self.peerKind = peerKind
+        self.peerId = peerId
+        self.topMessage = topMessage
+        self.unreadCount = unreadCount
+        self.readInboxMaxId = readInboxMaxId
+        self.readOutboxMaxId = readOutboxMaxId
+        self.pinned = pinned
+        self.dialogProto = dialogProto
+        self.readStatePending = readStatePending
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiDialog: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiDialog: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiDialog {
+        return
+            try FfiDialog(
+                peerKind: FfiConverterString.read(from: &buf),
+                peerId: FfiConverterInt64.read(from: &buf),
+                topMessage: FfiConverterInt64.read(from: &buf),
+                unreadCount: FfiConverterInt32.read(from: &buf),
+                readInboxMaxId: FfiConverterInt64.read(from: &buf),
+                readOutboxMaxId: FfiConverterInt64.read(from: &buf),
+                pinned: FfiConverterBool.read(from: &buf),
+                dialogProto: FfiConverterData.read(from: &buf),
+                readStatePending: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiDialog, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.peerKind, into: &buf)
+        FfiConverterInt64.write(value.peerId, into: &buf)
+        FfiConverterInt64.write(value.topMessage, into: &buf)
+        FfiConverterInt32.write(value.unreadCount, into: &buf)
+        FfiConverterInt64.write(value.readInboxMaxId, into: &buf)
+        FfiConverterInt64.write(value.readOutboxMaxId, into: &buf)
+        FfiConverterBool.write(value.pinned, into: &buf)
+        FfiConverterData.write(value.dialogProto, into: &buf)
+        FfiConverterBool.write(value.readStatePending, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDialog_lift(_ buf: RustBuffer) throws -> FfiDialog {
+    return try FfiConverterTypeFfiDialog.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDialog_lower(_ value: FfiDialog) -> RustBuffer {
+    return FfiConverterTypeFfiDialog.lower(value)
+}
+
+
+/**
+ * Dialog list request (mirrors `GetDialogsRequest` without proto types).
+ *
+ * `offset_peer_id` keeps the numeric peer vocabulary: it is a raw target
+ * id used together with `offset_date` for stable cursor pagination, not a
+ * `Target` kind/id pair.
+ */
+public struct FfiDialogsRequest: Equatable, Hashable {
+    public var limit: Int32?
+    public var offsetDate: Int32?
+    public var offsetPeerId: Int64?
+    public var cursor: String?
+    public var spaceId: Int64?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(limit: Int32?, offsetDate: Int32?, offsetPeerId: Int64?, cursor: String?, spaceId: Int64?) {
+        self.limit = limit
+        self.offsetDate = offsetDate
+        self.offsetPeerId = offsetPeerId
+        self.cursor = cursor
+        self.spaceId = spaceId
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiDialogsRequest: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiDialogsRequest: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiDialogsRequest {
+        return
+            try FfiDialogsRequest(
+                limit: FfiConverterOptionInt32.read(from: &buf),
+                offsetDate: FfiConverterOptionInt32.read(from: &buf),
+                offsetPeerId: FfiConverterOptionInt64.read(from: &buf),
+                cursor: FfiConverterOptionString.read(from: &buf),
+                spaceId: FfiConverterOptionInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiDialogsRequest, into buf: inout [UInt8]) {
+        FfiConverterOptionInt32.write(value.limit, into: &buf)
+        FfiConverterOptionInt32.write(value.offsetDate, into: &buf)
+        FfiConverterOptionInt64.write(value.offsetPeerId, into: &buf)
+        FfiConverterOptionString.write(value.cursor, into: &buf)
+        FfiConverterOptionInt64.write(value.spaceId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDialogsRequest_lift(_ buf: RustBuffer) throws -> FfiDialogsRequest {
+    return try FfiConverterTypeFfiDialogsRequest.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDialogsRequest_lower(_ value: FfiDialogsRequest) -> RustBuffer {
+    return FfiConverterTypeFfiDialogsRequest.lower(value)
+}
+
+
+/**
+ * History page request (mirrors `GetHistoryRequest` without proto types).
+ */
+public struct FfiHistoryRequest: Equatable, Hashable {
+    /**
+     * `"user"` for direct messages, `"room"`/`"chat"` for groups.
+     */
+    public var targetKind: String
+    public var targetId: Int64
+    public var limit: Int32
+    public var offsetId: Int64?
+    public var addOffset: Int32
+    public var maxId: Int64?
+    public var minId: Int64?
+    public var offsetDate: Int32?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * `"user"` for direct messages, `"room"`/`"chat"` for groups.
+         */targetKind: String, targetId: Int64, limit: Int32, offsetId: Int64?, addOffset: Int32, maxId: Int64?, minId: Int64?, offsetDate: Int32?) {
+        self.targetKind = targetKind
+        self.targetId = targetId
+        self.limit = limit
+        self.offsetId = offsetId
+        self.addOffset = addOffset
+        self.maxId = maxId
+        self.minId = minId
+        self.offsetDate = offsetDate
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiHistoryRequest: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiHistoryRequest: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiHistoryRequest {
+        return
+            try FfiHistoryRequest(
+                targetKind: FfiConverterString.read(from: &buf),
+                targetId: FfiConverterInt64.read(from: &buf),
+                limit: FfiConverterInt32.read(from: &buf),
+                offsetId: FfiConverterOptionInt64.read(from: &buf),
+                addOffset: FfiConverterInt32.read(from: &buf),
+                maxId: FfiConverterOptionInt64.read(from: &buf),
+                minId: FfiConverterOptionInt64.read(from: &buf),
+                offsetDate: FfiConverterOptionInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiHistoryRequest, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.targetKind, into: &buf)
+        FfiConverterInt64.write(value.targetId, into: &buf)
+        FfiConverterInt32.write(value.limit, into: &buf)
+        FfiConverterOptionInt64.write(value.offsetId, into: &buf)
+        FfiConverterInt32.write(value.addOffset, into: &buf)
+        FfiConverterOptionInt64.write(value.maxId, into: &buf)
+        FfiConverterOptionInt64.write(value.minId, into: &buf)
+        FfiConverterOptionInt32.write(value.offsetDate, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiHistoryRequest_lift(_ buf: RustBuffer) throws -> FfiHistoryRequest {
+    return try FfiConverterTypeFfiHistoryRequest.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiHistoryRequest_lower(_ value: FfiHistoryRequest) -> RustBuffer {
+    return FfiConverterTypeFfiHistoryRequest.lower(value)
+}
+
+
+/**
+ * FFI-safe cached message.
+ */
+public struct FfiMessage: Equatable, Hashable {
+    public var conversationKey: String
+    public var messageId: Int64
+    public var peerKind: String
+    public var peerId: Int64
+    public var fromId: Int64
+    public var body: String
+    public var messageProto: Data
+    /**
+     * The message's own `accept_seq` token (`None` for legacy rows accepted
+     * before the token was introduced; absent tokens never vote on dedup).
+     */
+    public var acceptSeq: Int64?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(conversationKey: String, messageId: Int64, peerKind: String, peerId: Int64, fromId: Int64, body: String, messageProto: Data,
+        /**
+         * The message's own `accept_seq` token (`None` for legacy rows accepted
+         * before the token was introduced; absent tokens never vote on dedup).
+         */acceptSeq: Int64?) {
+        self.conversationKey = conversationKey
+        self.messageId = messageId
+        self.peerKind = peerKind
+        self.peerId = peerId
+        self.fromId = fromId
+        self.body = body
+        self.messageProto = messageProto
+        self.acceptSeq = acceptSeq
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiMessage: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiMessage: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiMessage {
+        return
+            try FfiMessage(
+                conversationKey: FfiConverterString.read(from: &buf),
+                messageId: FfiConverterInt64.read(from: &buf),
+                peerKind: FfiConverterString.read(from: &buf),
+                peerId: FfiConverterInt64.read(from: &buf),
+                fromId: FfiConverterInt64.read(from: &buf),
+                body: FfiConverterString.read(from: &buf),
+                messageProto: FfiConverterData.read(from: &buf),
+                acceptSeq: FfiConverterOptionInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiMessage, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.conversationKey, into: &buf)
+        FfiConverterInt64.write(value.messageId, into: &buf)
+        FfiConverterString.write(value.peerKind, into: &buf)
+        FfiConverterInt64.write(value.peerId, into: &buf)
+        FfiConverterInt64.write(value.fromId, into: &buf)
+        FfiConverterString.write(value.body, into: &buf)
+        FfiConverterData.write(value.messageProto, into: &buf)
+        FfiConverterOptionInt64.write(value.acceptSeq, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMessage_lift(_ buf: RustBuffer) throws -> FfiMessage {
+    return try FfiConverterTypeFfiMessage.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMessage_lower(_ value: FfiMessage) -> RustBuffer {
+    return FfiConverterTypeFfiMessage.lower(value)
+}
+
+
+/**
+ * FFI-safe push envelope (mirrors `libtinkle::PushEnvelope`).
+ *
+ * All ids accept decimal strings on the wire (parsed in
+ * `libtinkle::parse_push_payload`); this record already carries `i64`.
+ */
+public struct FfiPushEnvelope: Equatable, Hashable {
+    public var version: UInt32
+    public var accountUserId: Int64?
+    public var targetKind: String?
+    public var targetId: Int64?
+    public var messageIds: [Int64]
+    public var eventId: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(version: UInt32, accountUserId: Int64?, targetKind: String?, targetId: Int64?, messageIds: [Int64], eventId: String) {
+        self.version = version
+        self.accountUserId = accountUserId
+        self.targetKind = targetKind
+        self.targetId = targetId
+        self.messageIds = messageIds
+        self.eventId = eventId
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiPushEnvelope: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiPushEnvelope: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPushEnvelope {
+        return
+            try FfiPushEnvelope(
+                version: FfiConverterUInt32.read(from: &buf),
+                accountUserId: FfiConverterOptionInt64.read(from: &buf),
+                targetKind: FfiConverterOptionString.read(from: &buf),
+                targetId: FfiConverterOptionInt64.read(from: &buf),
+                messageIds: FfiConverterSequenceInt64.read(from: &buf),
+                eventId: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiPushEnvelope, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.version, into: &buf)
+        FfiConverterOptionInt64.write(value.accountUserId, into: &buf)
+        FfiConverterOptionString.write(value.targetKind, into: &buf)
+        FfiConverterOptionInt64.write(value.targetId, into: &buf)
+        FfiConverterSequenceInt64.write(value.messageIds, into: &buf)
+        FfiConverterString.write(value.eventId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPushEnvelope_lift(_ buf: RustBuffer) throws -> FfiPushEnvelope {
+    return try FfiConverterTypeFfiPushEnvelope.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPushEnvelope_lower(_ value: FfiPushEnvelope) -> RustBuffer {
+    return FfiConverterTypeFfiPushEnvelope.lower(value)
+}
+
+
+/**
+ * Subscribe confirmation: the canonical keys of the tracked
+ * conversations (`target:user:<id>` / `target:room:<id>`).
+ */
+public struct FfiSubscribeResponse: Equatable, Hashable {
+    public var targets: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(targets: [String]) {
+        self.targets = targets
     }
 
 
@@ -1549,16 +3430,12 @@ public struct FfiConverterTypeFfiSubscribeResponse: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSubscribeResponse {
         return
             try FfiSubscribeResponse(
-                stream: FfiConverterString.read(from: &buf),
-                afterCursor: FfiConverterUInt64.read(from: &buf),
-                head: FfiConverterOptionUInt64.read(from: &buf)
+                targets: FfiConverterSequenceString.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiSubscribeResponse, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.stream, into: &buf)
-        FfiConverterUInt64.write(value.afterCursor, into: &buf)
-        FfiConverterOptionUInt64.write(value.head, into: &buf)
+        FfiConverterSequenceString.write(value.targets, into: &buf)
     }
 }
 
@@ -1579,19 +3456,22 @@ public func FfiConverterTypeFfiSubscribeResponse_lower(_ value: FfiSubscribeResp
 
 
 /**
- * One room interest for [`TinkleClient::subscribe`].
+ * One conversation interest for [`TinkleClient::subscribe`] /
+ * [`TinkleClient::start`].
  *
- * A record (not a `(i64, u64)` tuple) because UniFFI has no tuple type.
+ * A record (not a tuple) because UniFFI has no tuple type.
+ * `target_kind` is `"user"` for direct messages, `"room"`/`"chat"` for
+ * group conversations; `target_id` must be positive.
  */
-public struct RoomSub: Equatable, Hashable {
-    public var roomId: Int64
-    public var afterCursor: UInt64
+public struct TargetSub: Equatable, Hashable {
+    public var targetKind: String
+    public var targetId: Int64
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(roomId: Int64, afterCursor: UInt64) {
-        self.roomId = roomId
-        self.afterCursor = afterCursor
+    public init(targetKind: String, targetId: Int64) {
+        self.targetKind = targetKind
+        self.targetId = targetId
     }
 
 
@@ -1600,24 +3480,24 @@ public struct RoomSub: Equatable, Hashable {
 }
 
 #if compiler(>=6)
-extension RoomSub: Sendable {}
+extension TargetSub: Sendable {}
 #endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public struct FfiConverterTypeRoomSub: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RoomSub {
+public struct FfiConverterTypeTargetSub: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TargetSub {
         return
-            try RoomSub(
-                roomId: FfiConverterInt64.read(from: &buf),
-                afterCursor: FfiConverterUInt64.read(from: &buf)
+            try TargetSub(
+                targetKind: FfiConverterString.read(from: &buf),
+                targetId: FfiConverterInt64.read(from: &buf)
         )
     }
 
-    public static func write(_ value: RoomSub, into buf: inout [UInt8]) {
-        FfiConverterInt64.write(value.roomId, into: &buf)
-        FfiConverterUInt64.write(value.afterCursor, into: &buf)
+    public static func write(_ value: TargetSub, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.targetKind, into: &buf)
+        FfiConverterInt64.write(value.targetId, into: &buf)
     }
 }
 
@@ -1625,15 +3505,15 @@ public struct FfiConverterTypeRoomSub: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeRoomSub_lift(_ buf: RustBuffer) throws -> RoomSub {
-    return try FfiConverterTypeRoomSub.lift(buf)
+public func FfiConverterTypeTargetSub_lift(_ buf: RustBuffer) throws -> TargetSub {
+    return try FfiConverterTypeTargetSub.lift(buf)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeRoomSub_lower(_ value: RoomSub) -> RustBuffer {
-    return FfiConverterTypeRoomSub.lower(value)
+public func FfiConverterTypeTargetSub_lower(_ value: TargetSub) -> RustBuffer {
+    return FfiConverterTypeTargetSub.lower(value)
 }
 
 
@@ -1655,7 +3535,7 @@ enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
     case NotConnected
     case Timeout
     case Cancelled
-    case Realtime(String
+    case Sync(String
     )
     case Codec(String
     )
@@ -1663,6 +3543,18 @@ enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
     )
     case ReconnectExhausted
     case Internal(String
+    )
+    /**
+     * Authentication/authorization failure. Re-authenticate (or rotate the
+     * credential); never retry the same bytes in a tight loop.
+     */
+    case Auth(String
+    )
+    /**
+     * Transient failure: bounded retry with backoff is safe. Reconciliation
+     * reads are idempotent; sends still require their `random_id` policy.
+     */
+    case Retryable(String
     )
 
 
@@ -1699,7 +3591,7 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
         case 2: return .NotConnected
         case 3: return .Timeout
         case 4: return .Cancelled
-        case 5: return .Realtime(
+        case 5: return .Sync(
             try FfiConverterString.read(from: &buf)
             )
         case 6: return .Codec(
@@ -1710,6 +3602,12 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
             )
         case 8: return .ReconnectExhausted
         case 9: return .Internal(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 10: return .Auth(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 11: return .Retryable(
             try FfiConverterString.read(from: &buf)
             )
 
@@ -1741,7 +3639,7 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(4))
 
 
-        case let .Realtime(v1):
+        case let .Sync(v1):
             writeInt(&buf, Int32(5))
             FfiConverterString.write(v1, into: &buf)
 
@@ -1762,6 +3660,16 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
 
         case let .Internal(v1):
             writeInt(&buf, Int32(9))
+            FfiConverterString.write(v1, into: &buf)
+
+
+        case let .Auth(v1):
+            writeInt(&buf, Int32(10))
+            FfiConverterString.write(v1, into: &buf)
+
+
+        case let .Retryable(v1):
+            writeInt(&buf, Int32(11))
             FfiConverterString.write(v1, into: &buf)
 
         }
@@ -1785,25 +3693,101 @@ public func FfiConverterTypeFfiError_lower(_ value: FfiError) -> RustBuffer {
 
 
 /**
- * App-visible realtime events. Owned primitives only; the underlying
- * proto batch is summarized as an event count, never exposed.
+ * Cache/network policy for [`TinkleClient::load_history`] and
+ * [`TinkleClient::load_dialogs`].
+ *
+ * History and dialogs live outside the reconciliation journal: neither
+ * policy advances or resets any accept-seq position. `HydrateCache`
+ * additionally upserts the authoritative snapshot into the shared
+ * SQLite cache (users/chats, plus authoritative dialogs); `NetworkOnly`
+ * returns the snapshot without touching the cache.
  */
 
-public enum FfiRealtimeEvent: Equatable, Hashable {
+public enum FfiLoadPolicy: Equatable, Hashable {
 
-    case batchApplied(stream: String, finalCursor: UInt64, eventCount: UInt32
+    case networkOnly
+    case hydrateCache
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiLoadPolicy: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiLoadPolicy: FfiConverterRustBuffer {
+    typealias SwiftType = FfiLoadPolicy
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiLoadPolicy {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .networkOnly
+
+        case 2: return .hydrateCache
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiLoadPolicy, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .networkOnly:
+            writeInt(&buf, Int32(1))
+
+
+        case .hydrateCache:
+            writeInt(&buf, Int32(2))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiLoadPolicy_lift(_ buf: RustBuffer) throws -> FfiLoadPolicy {
+    return try FfiConverterTypeFfiLoadPolicy.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiLoadPolicy_lower(_ value: FfiLoadPolicy) -> RustBuffer {
+    return FfiConverterTypeFfiLoadPolicy.lower(value)
+}
+
+
+
+/**
+ * FFI-safe push wake outcome (mirrors `libtinkle::PushOutcome`).
+ */
+
+public enum FfiPushOutcome: Equatable, Hashable {
+
+    /**
+     * Bodies are durable in SQLite (plus best-effort reconcile).
+     */
+    case committed(targetKey: String, messageIds: [Int64]
     )
-    case duplicate(stream: String, cursor: UInt64
+    /**
+     * Not yet committed; the durable job is (re)queued for retry.
+     */
+    case deferred(reason: String
     )
-    case gap(stream: String, expected: UInt64, got: UInt64
-    )
-    case stale(stream: String, applied: UInt64, got: UInt64
-    )
-    case presence(userId: Int64, online: Bool, known: Bool
-    )
-    case resetRequired(stream: String, head: UInt64?
-    )
-    case checkpointFailed(stream: String, cursor: UInt64, error: String
+    /**
+     * Terminal for this wake (never retries with the same inputs).
+     */
+    case failed(reason: String
     )
 
 
@@ -1813,92 +3797,272 @@ public enum FfiRealtimeEvent: Equatable, Hashable {
 }
 
 #if compiler(>=6)
-extension FfiRealtimeEvent: Sendable {}
+extension FfiPushOutcome: Sendable {}
 #endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public struct FfiConverterTypeFfiRealtimeEvent: FfiConverterRustBuffer {
-    typealias SwiftType = FfiRealtimeEvent
+public struct FfiConverterTypeFfiPushOutcome: FfiConverterRustBuffer {
+    typealias SwiftType = FfiPushOutcome
 
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiRealtimeEvent {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPushOutcome {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
-        case 1: return .batchApplied(stream: try FfiConverterString.read(from: &buf), finalCursor: try FfiConverterUInt64.read(from: &buf), eventCount: try FfiConverterUInt32.read(from: &buf)
+        case 1: return .committed(targetKey: try FfiConverterString.read(from: &buf), messageIds: try FfiConverterSequenceInt64.read(from: &buf)
         )
 
-        case 2: return .duplicate(stream: try FfiConverterString.read(from: &buf), cursor: try FfiConverterUInt64.read(from: &buf)
+        case 2: return .deferred(reason: try FfiConverterString.read(from: &buf)
         )
 
-        case 3: return .gap(stream: try FfiConverterString.read(from: &buf), expected: try FfiConverterUInt64.read(from: &buf), got: try FfiConverterUInt64.read(from: &buf)
-        )
-
-        case 4: return .stale(stream: try FfiConverterString.read(from: &buf), applied: try FfiConverterUInt64.read(from: &buf), got: try FfiConverterUInt64.read(from: &buf)
-        )
-
-        case 5: return .presence(userId: try FfiConverterInt64.read(from: &buf), online: try FfiConverterBool.read(from: &buf), known: try FfiConverterBool.read(from: &buf)
-        )
-
-        case 6: return .resetRequired(stream: try FfiConverterString.read(from: &buf), head: try FfiConverterOptionUInt64.read(from: &buf)
-        )
-
-        case 7: return .checkpointFailed(stream: try FfiConverterString.read(from: &buf), cursor: try FfiConverterUInt64.read(from: &buf), error: try FfiConverterString.read(from: &buf)
+        case 3: return .failed(reason: try FfiConverterString.read(from: &buf)
         )
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
-    public static func write(_ value: FfiRealtimeEvent, into buf: inout [UInt8]) {
+    public static func write(_ value: FfiPushOutcome, into buf: inout [UInt8]) {
         switch value {
 
 
-        case let .batchApplied(stream,finalCursor,eventCount):
+        case let .committed(targetKey,messageIds):
             writeInt(&buf, Int32(1))
-            FfiConverterString.write(stream, into: &buf)
-            FfiConverterUInt64.write(finalCursor, into: &buf)
-            FfiConverterUInt32.write(eventCount, into: &buf)
+            FfiConverterString.write(targetKey, into: &buf)
+            FfiConverterSequenceInt64.write(messageIds, into: &buf)
 
 
-        case let .duplicate(stream,cursor):
+        case let .deferred(reason):
             writeInt(&buf, Int32(2))
-            FfiConverterString.write(stream, into: &buf)
-            FfiConverterUInt64.write(cursor, into: &buf)
+            FfiConverterString.write(reason, into: &buf)
 
 
-        case let .gap(stream,expected,got):
+        case let .failed(reason):
             writeInt(&buf, Int32(3))
-            FfiConverterString.write(stream, into: &buf)
-            FfiConverterUInt64.write(expected, into: &buf)
-            FfiConverterUInt64.write(got, into: &buf)
+            FfiConverterString.write(reason, into: &buf)
+
+        }
+    }
+}
 
 
-        case let .stale(stream,applied,got):
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPushOutcome_lift(_ buf: RustBuffer) throws -> FfiPushOutcome {
+    return try FfiConverterTypeFfiPushOutcome.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPushOutcome_lower(_ value: FfiPushOutcome) -> RustBuffer {
+    return FfiConverterTypeFfiPushOutcome.lower(value)
+}
+
+
+
+/**
+ * Per-target reconciliation status (see `libtinkle::ReconcileStatus`).
+ *
+ * `None` from [`TinkleClient::target_status`] means untracked (never
+ * subscribed or since removed); any returned variant is the live
+ * per-target state.
+ */
+
+public enum FfiReconcileStatus: Equatable, Hashable {
+
+    case idle
+    case reconciling
+    case failed
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiReconcileStatus: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiReconcileStatus: FfiConverterRustBuffer {
+    typealias SwiftType = FfiReconcileStatus
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiReconcileStatus {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .idle
+
+        case 2: return .reconciling
+
+        case 3: return .failed
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiReconcileStatus, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .idle:
+            writeInt(&buf, Int32(1))
+
+
+        case .reconciling:
+            writeInt(&buf, Int32(2))
+
+
+        case .failed:
+            writeInt(&buf, Int32(3))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiReconcileStatus_lift(_ buf: RustBuffer) throws -> FfiReconcileStatus {
+    return try FfiConverterTypeFfiReconcileStatus.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiReconcileStatus_lower(_ value: FfiReconcileStatus) -> RustBuffer {
+    return FfiConverterTypeFfiReconcileStatus.lower(value)
+}
+
+
+
+/**
+ * App-visible sync events.
+ *
+ * Journal payloads cross as protobuf bytes where noted; hosts decode with
+ * their own generated bindings. Reconciliation progress is queryable via
+ * `target_cursor`/`target_status` instead of inferring it from events.
+ */
+
+public enum FfiSyncEvent: Equatable, Hashable {
+
+    /**
+     * One conversation reconciled forward: `applied_accept_seq` is the new
+     * per-target accept position. Refresh the conversation from the cache
+     * (or hydrate via `get_messages`).
+     */
+    case conversationChanged(targetKey: String, appliedAcceptSeq: Int64
+    )
+    /**
+     * Fresh bodies arrived for these message ids in one conversation
+     * (send reconciliation / hydration). Fetch via `get_messages` or read
+     * the cache.
+     */
+    case messagesChanged(targetKey: String, messageIds: [Int64]
+    )
+    /**
+     * The conversation is gone (deleted/revoked scope). Drop cached rows.
+     */
+    case conversationRemoved(targetKey: String
+    )
+    /**
+     * Reconciliation for one conversation failed and is parked in `Failed`
+     * status; `error` is diagnostic. Retry via `reconcile_now`.
+     */
+    case reconcileFailed(targetKey: String, error: String
+    )
+    case connectivity(userId: Int64, online: Bool, known: Bool
+    )
+    case checkpointFailed(targetKey: String, acceptSeq: Int64, error: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiSyncEvent: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiSyncEvent: FfiConverterRustBuffer {
+    typealias SwiftType = FfiSyncEvent
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSyncEvent {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .conversationChanged(targetKey: try FfiConverterString.read(from: &buf), appliedAcceptSeq: try FfiConverterInt64.read(from: &buf)
+        )
+
+        case 2: return .messagesChanged(targetKey: try FfiConverterString.read(from: &buf), messageIds: try FfiConverterSequenceInt64.read(from: &buf)
+        )
+
+        case 3: return .conversationRemoved(targetKey: try FfiConverterString.read(from: &buf)
+        )
+
+        case 4: return .reconcileFailed(targetKey: try FfiConverterString.read(from: &buf), error: try FfiConverterString.read(from: &buf)
+        )
+
+        case 5: return .connectivity(userId: try FfiConverterInt64.read(from: &buf), online: try FfiConverterBool.read(from: &buf), known: try FfiConverterBool.read(from: &buf)
+        )
+
+        case 6: return .checkpointFailed(targetKey: try FfiConverterString.read(from: &buf), acceptSeq: try FfiConverterInt64.read(from: &buf), error: try FfiConverterString.read(from: &buf)
+        )
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiSyncEvent, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case let .conversationChanged(targetKey,appliedAcceptSeq):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(targetKey, into: &buf)
+            FfiConverterInt64.write(appliedAcceptSeq, into: &buf)
+
+
+        case let .messagesChanged(targetKey,messageIds):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(targetKey, into: &buf)
+            FfiConverterSequenceInt64.write(messageIds, into: &buf)
+
+
+        case let .conversationRemoved(targetKey):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(targetKey, into: &buf)
+
+
+        case let .reconcileFailed(targetKey,error):
             writeInt(&buf, Int32(4))
-            FfiConverterString.write(stream, into: &buf)
-            FfiConverterUInt64.write(applied, into: &buf)
-            FfiConverterUInt64.write(got, into: &buf)
+            FfiConverterString.write(targetKey, into: &buf)
+            FfiConverterString.write(error, into: &buf)
 
 
-        case let .presence(userId,online,known):
+        case let .connectivity(userId,online,known):
             writeInt(&buf, Int32(5))
             FfiConverterInt64.write(userId, into: &buf)
             FfiConverterBool.write(online, into: &buf)
             FfiConverterBool.write(known, into: &buf)
 
 
-        case let .resetRequired(stream,head):
+        case let .checkpointFailed(targetKey,acceptSeq,error):
             writeInt(&buf, Int32(6))
-            FfiConverterString.write(stream, into: &buf)
-            FfiConverterOptionUInt64.write(head, into: &buf)
-
-
-        case let .checkpointFailed(stream,cursor,error):
-            writeInt(&buf, Int32(7))
-            FfiConverterString.write(stream, into: &buf)
-            FfiConverterUInt64.write(cursor, into: &buf)
+            FfiConverterString.write(targetKey, into: &buf)
+            FfiConverterInt64.write(acceptSeq, into: &buf)
             FfiConverterString.write(error, into: &buf)
 
         }
@@ -1909,23 +4073,23 @@ public struct FfiConverterTypeFfiRealtimeEvent: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeFfiRealtimeEvent_lift(_ buf: RustBuffer) throws -> FfiRealtimeEvent {
-    return try FfiConverterTypeFfiRealtimeEvent.lift(buf)
+public func FfiConverterTypeFfiSyncEvent_lift(_ buf: RustBuffer) throws -> FfiSyncEvent {
+    return try FfiConverterTypeFfiSyncEvent.lift(buf)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeFfiRealtimeEvent_lower(_ value: FfiRealtimeEvent) -> RustBuffer {
-    return FfiConverterTypeFfiRealtimeEvent.lower(value)
+public func FfiConverterTypeFfiSyncEvent_lower(_ value: FfiSyncEvent) -> RustBuffer {
+    return FfiConverterTypeFfiSyncEvent.lower(value)
 }
 
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
-    typealias SwiftType = UInt64?
+fileprivate struct FfiConverterOptionInt32: FfiConverterRustBuffer {
+    typealias SwiftType = Int32?
 
     public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
         guard let value = value else {
@@ -1933,13 +4097,37 @@ fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
             return
         }
         writeInt(&buf, Int8(1))
-        FfiConverterUInt64.write(value, into: &buf)
+        FfiConverterInt32.write(value, into: &buf)
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
-        case 1: return try FfiConverterUInt64.read(from: &buf)
+        case 1: return try FfiConverterInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionInt64: FfiConverterRustBuffer {
+    typealias SwiftType = Int64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterInt64.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -1972,8 +4160,8 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterOptionTypeFfiRealtimeEvent: FfiConverterRustBuffer {
-    typealias SwiftType = FfiRealtimeEvent?
+fileprivate struct FfiConverterOptionData: FfiConverterRustBuffer {
+    typealias SwiftType = Data?
 
     public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
         guard let value = value else {
@@ -1981,13 +4169,61 @@ fileprivate struct FfiConverterOptionTypeFfiRealtimeEvent: FfiConverterRustBuffe
             return
         }
         writeInt(&buf, Int8(1))
-        FfiConverterTypeFfiRealtimeEvent.write(value, into: &buf)
+        FfiConverterData.write(value, into: &buf)
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
-        case 1: return try FfiConverterTypeFfiRealtimeEvent.read(from: &buf)
+        case 1: return try FfiConverterData.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiReconcileStatus: FfiConverterRustBuffer {
+    typealias SwiftType = FfiReconcileStatus?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiReconcileStatus.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiReconcileStatus.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiSyncEvent: FfiConverterRustBuffer {
+    typealias SwiftType = FfiSyncEvent?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiSyncEvent.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiSyncEvent.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -2021,23 +4257,98 @@ fileprivate struct FfiConverterSequenceInt64: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterSequenceTypeRoomSub: FfiConverterRustBuffer {
-    typealias SwiftType = [RoomSub]
+fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
+    typealias SwiftType = [String]
 
-    public static func write(_ value: [RoomSub], into buf: inout [UInt8]) {
+    public static func write(_ value: [String], into buf: inout [UInt8]) {
         let len = Int32(value.count)
         writeInt(&buf, len)
         for item in value {
-            FfiConverterTypeRoomSub.write(item, into: &buf)
+            FfiConverterString.write(item, into: &buf)
         }
     }
 
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [RoomSub] {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String] {
         let len: Int32 = try readInt(&buf)
-        var seq = [RoomSub]()
+        var seq = [String]()
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeRoomSub.read(from: &buf))
+            seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiDialog: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiDialog]
+
+    public static func write(_ value: [FfiDialog], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiDialog.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiDialog] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiDialog]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiDialog.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiMessage: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiMessage]
+
+    public static func write(_ value: [FfiMessage], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiMessage.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiMessage] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiMessage]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiMessage.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeTargetSub: FfiConverterRustBuffer {
+    typealias SwiftType = [TargetSub]
+
+    public static func write(_ value: [TargetSub], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeTargetSub.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [TargetSub] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [TargetSub]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeTargetSub.read(from: &buf))
         }
         return seq
     }
@@ -2181,6 +4492,59 @@ public func uniffiForeignFutureHandleCountTinkleFfi() -> Int {
     UNIFFI_FOREIGN_FUTURE_HANDLE_MAP.count
 }
 /**
+ * Parse a provider push payload into an envelope.
+ *
+ * `payload` is the raw JSON bytes: the full APNs `userInfo` dictionary
+ * (iOS, including OneSignal `custom.a`), the `additionalData` JSONObject
+ * string (Android/OneSignal), or the backend handoff object directly.
+ * Display text (`aps.alert`, titles, bodies) is ignored by construction
+ * and must NEVER be persisted as a message row.
+ */
+public func parsePushPayload(payload: Data)throws  -> FfiPushEnvelope  {
+    return try  FfiConverterTypeFfiPushEnvelope_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_func_parse_push_payload(
+        FfiConverterData.lower(payload),uniffiCallStatus
+    )
+})
+}
+/**
+ * Cold-start recovery: requeue stale `claimed` push jobs whose lease
+ * expired (e.g. an extension killed mid-wake) so the next wake retries
+ * them. Call once at app/extension startup after opening the shared
+ * database. Returns the number of jobs requeued.
+ */
+public func pushRecoverStaleJobs(storage: SqliteStorage, principal: String, leaseSecs: Int64)async throws  -> UInt64  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_func_push_recover_stale_jobs(FfiConverterTypeSqliteStorage_lower(storage),FfiConverterString.lower(principal),FfiConverterInt64.lower(leaseSecs)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterUInt64.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+/**
+ * Canonical target key for an envelope, if it routes
+ * (`target:user:<id>` / `target:room:<id>`).
+ *
+ * Foreground/open-event hook: when the user taps the notification, pass
+ * the parsed envelope here to learn where to navigate, then call
+ * `reconcileNow()` to refresh that conversation from the durable cache.
+ */
+public func pushTargetKey(envelope: FfiPushEnvelope) -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_func_push_target_key(
+        FfiConverterTypeFfiPushEnvelope_lower(envelope),uniffiCallStatus
+    )
+})
+}
+/**
  * Foreign-callable init. Swift/Kotlin apps call this once at startup.
  */
 public func tinkleFfiInit()  {try! rustCall() {
@@ -2205,43 +4569,175 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_tinkle_ffi_checksum_func_parse_push_payload() != 32116) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_func_push_recover_stale_jobs() != 65220) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_func_push_target_key() != 11122) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tinkle_ffi_checksum_func_tinkle_ffi_init() != 34048) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_connect() != 48303) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_connect() != 57683) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_next_event() != 18345) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_abort_upload() != 34739) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect() != 30012) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_begin_upload() != 17825) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_send_message() != 3916) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_complete_upload() != 56794) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_shutdown() != 52153) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_download_bytes() != 38051) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_subscribe() != 8425) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_download_part() != 105) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_suspend() != 33260) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_get_file_info() != 47087) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_fficursorstore_load() != 11126) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_get_upload_status() != 6124) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_fficursorstore_save() != 7488) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_upload_bytes() != 21989) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_fficursorstore_remove_stream() != 59705) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_upload_part() != 12340) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_get_messages() != 21759) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_get_target_changes() != 2168) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_is_connected() != 22480) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_is_suspended() != 47511) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_load_dialogs() != 19225) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_load_history() != 27532) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_next_event() != 1749) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_pending_len() != 35948) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_reconcile_now() != 51897) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect() != 32861) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_resume() != 27994) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_send_message() != 49929) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_set_principal_user_id() != 61488) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_shutdown() != 59360) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_start() != 18779) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stop() != 14181) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_subscribe() != 15725) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_suspend() != 29619) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_target_cursor() != 64420) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_target_status() != 19735) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_tracked_targets() != 47873) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_handle_push_wake() != 20979) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_logout() != 58830) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_open_push_notification() != 18901) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_register_push() != 39244) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_unregister_push() != 33025) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_clear_principal() != 7934) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_get_chat_proto() != 15884) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_get_messages() != 15860) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_get_user_proto() != 49315) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_list_dialogs() != 28584) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_load_journal() != 29543) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_save_chat_proto() != 43737) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_save_user_proto() != 18563) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_fficursorstore_load_journal() != 41507) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_fficursorstore_save_journal() != 57182) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_fficursorstore_remove_target() != 30104) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_fficursorstore_clear_principal() != 37263) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new() != 22029) {
+    if (uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new() != 37854) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite() != 8694) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open() != 43150) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open_async() != 47630) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open_in_memory() != 8980) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_constructor_inmemoryffistore_new() != 37004) {

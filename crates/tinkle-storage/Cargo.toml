@@ -1,0 +1,15 @@
+[package]
+name = "tinkle-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared native SQLite cache + checkpoints for libtinkle (rusqlite bundled)."
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+rusqlite.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

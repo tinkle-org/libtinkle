@@ -3,7 +3,7 @@ name = "libtinkle"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Tinkle client runtime over Syntra (typed RPCs, realtime sync, reconnect)."
+description = "Tinkle client runtime over Syntra (typed RPCs, sync, reconnect)."
 rust-version.workspace = true
 # Git-only distribution: crates.io rejects crates depending on the
 # buf-registry BSR bindings, so nothing in this workspace is published.
@@ -28,8 +28,11 @@ async-trait.workspace = true
 
 # Native keeps full tokio/tokio-util (unchanged behavior).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+tonic.workspace = true
+tinkle-storage.workspace = true
 
 # WASM: reduced tokio (no mio/net) + minimal tokio-util (CancellationToken
 # needs no features). Required so libtinkle (and libtinkle-web) compile for

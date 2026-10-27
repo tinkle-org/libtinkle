@@ -12,7 +12,7 @@
 //! `allow_insecure` (loopback only, never public traffic).
 
 use libtinkle::{Client, ClientConfig, Credential, InMemoryCursorStore};
-use tinkle_schema::proto::{peer_input::Target, PeerInput, SendMessageRequest};
+use tinkle_schema::proto::{target, SendMessageRequest, Target};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -41,8 +41,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Persist random_id before sending; retry unchanged on unknown outcome.
     let req = SendMessageRequest {
-        peer: Some(PeerInput {
-            target: Some(Target::UserId(peer_id)),
+        target: Some(Target {
+            kind: Some(target::Kind::UserId(peer_id)),
         }),
         message: text,
         random_id: rand::random::<i64>().abs().max(1),

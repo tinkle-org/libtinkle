@@ -1,12 +1,14 @@
 """Application page-size evidence, including API 24 and x86_64 16 KB emulation."""
 
 import importlib.util
+import io
 import json
 from pathlib import Path
 import struct
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 
@@ -137,7 +139,52 @@ class AndroidRuntimeTests(unittest.TestCase):
                 self.assertEqual(command.call_args_list[1].kwargs["env"]["TINKLE_SDK_TEST_AAR"], str(aar))
                 inspect.assert_called_once_with(apk)
                 self.assertEqual(command.call_args_list[-1].args,
-                    (sdk / "build-tools/36.0.0/zipalign", "-c", "-P", "16", "-v", "4", apk))
+                     (sdk / "build-tools/36.0.0/zipalign", "-c", "-P", "16", "-v", "4", apk))
+
+    def test_instrumentation_failure_collects_evidence_before_propagating(self):
+        (self.root / "build").mkdir()
+        (self.root / "gradlew").write_text("wrapper")
+        aar = self.root / "candidate.aar"
+        aar.write_bytes(b"verified candidate")
+        (self.root / "build/sdk-ci-aar.json").write_text(json.dumps({
+            "path": str(aar), "sha256": ci.release.digest(aar)}))
+        failure = subprocess.CalledProcessError(1, ["gradlew", "connectedDebugAndroidTest"])
+        with patch.object(ci.release, "run", side_effect=["36", "x86_64", "4096"]), \
+                patch.object(ci, "android_env", return_value={}), \
+                patch.object(ci, "call", side_effect=[None, failure]), \
+                patch.object(ci, "android_diagnostics") as diagnostics:
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                ci.android_test(self.root, self.root, 4096, 36)
+            self.assertIs(caught.exception, failure)
+            diagnostics.assert_called_once_with(self.root)
+
+    def test_diagnostics_keep_device_causes_and_print_full_xml_failure(self):
+        results = self.root / "sample/build/outputs/androidTest-results/connected/debug"
+        results.mkdir(parents=True)
+        (results / "TEST-smoke.xml").write_text(
+            '<testsuite><testcase classname="NativeSmokeTest" name="smoke">'
+            '<failure message="Loopback gateway failed">Caused by: Unexpected fixture RPC: GetHistory'
+            '\nSuppressed: original assertion</failure></testcase></testsuite>')
+        captured = io.StringIO()
+        with patch.object(ci.subprocess, "run", return_value=subprocess.CompletedProcess(
+                [], 0, b"System.err: Caused by: fixture failure\n")) as command, redirect_stdout(captured):
+            ci.android_diagnostics(self.root)
+        self.assertEqual((self.root / "build/diagnostics/logcat.txt").read_bytes(),
+                         b"System.err: Caused by: fixture failure\n")
+        self.assertIn("NativeSmokeTest.smoke", captured.getvalue())
+        self.assertIn("Caused by: Unexpected fixture RPC: GetHistory", captured.getvalue())
+        self.assertIn("Suppressed: original assertion", captured.getvalue())
+        self.assertEqual(command.call_args.args[0][-3:], ["System.err:W", "AndroidRuntime:E", "*:S"])
+        self.assertEqual(command.call_args.kwargs["timeout"], 20)
+
+    def test_failed_logcat_or_malformed_report_does_not_replace_test_failure(self):
+        results = self.root / "sample/build/outputs/androidTest-results/connected"
+        results.mkdir(parents=True)
+        (results / "broken.xml").write_text("<invalid")
+        for failure in (OSError("no adb"), subprocess.TimeoutExpired("adb", 20)):
+            with self.subTest(failure=failure), \
+                    patch.object(ci.subprocess, "run", side_effect=failure), redirect_stdout(io.StringIO()):
+                ci.android_diagnostics(self.root) # Diagnostics must not raise.
 
 
 if __name__ == "__main__":

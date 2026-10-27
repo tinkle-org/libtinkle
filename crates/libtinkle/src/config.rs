@@ -10,6 +10,8 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use syntra_runtime::ConnectionConfig;
 
+use crate::errors::TinkleError;
+
 /// Opaque credential (e.g. session token bytes). `Debug` is redacted.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct Credential {
@@ -85,6 +87,17 @@ impl ReconnectPolicy {
 /// High-level client configuration.
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
+    /// gRPC base endpoint for direct-unary reconciliation and file RPCs
+    /// (`GetTargetChanges` / `GetMessages`, plus `begin_upload` /
+    /// `upload_part` / `upload_status` / `complete_upload` /
+    /// `abort_upload` / `get_file_info` / `download_part`), e.g.
+    /// `https://gateway.example.com`.
+    /// Syntra is primary; when set (native only), retryable Syntra failures
+    /// fall back to this endpoint automatically.
+    /// Prefer `with_grpc_endpoint` over direct assignment: the builder
+    /// validates scheme/`https` up front, while a directly assigned
+    /// value is only checked when catch-up runs.
+    pub grpc_endpoint: Option<String>,
     /// WSS URL, e.g. `wss://gateway.example.com/syntra/v1/ws`.
     pub url: String,
     /// Allow `ws://` (development loopback/isolated nets only).
@@ -101,12 +114,51 @@ pub struct ClientConfig {
 impl ClientConfig {
     pub fn new(url: impl Into<String>) -> Self {
         Self {
+            grpc_endpoint: None,
             url: url.into(),
             allow_insecure: false,
             connection: ConnectionConfig::default(),
             reconnect: ReconnectPolicy::default(),
             user_agent: None,
         }
+    }
+
+    /// Validate a gRPC catch-up endpoint without storing it. Shared by
+    /// the builder and fallible constructors so misconfig fails fast
+    /// with `GrpcConfig` (FailedPrecondition) instead of surfacing as a
+    /// retried `Grpc` (Unavailable) at reconcile time.
+    pub fn validate_grpc_endpoint(endpoint: &str, allow_insecure: bool) -> Result<(), TinkleError> {
+        if endpoint.trim().is_empty() {
+            return Err(TinkleError::GrpcConfig(
+                "grpc_endpoint must not be blank".into(),
+            ));
+        }
+        let lower = endpoint.to_ascii_lowercase();
+        if allow_insecure {
+            if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+                return Err(TinkleError::GrpcConfig(
+                    "grpc_endpoint must include http:// or https:// scheme".into(),
+                ));
+            }
+        } else if !lower.starts_with("https://") {
+            return Err(TinkleError::GrpcConfig(
+                "grpc_endpoint must use https:// unless allow_insecure".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// gRPC endpoint for direct-unary reconciliation RPCs.
+    ///
+    /// Fails fast: blank endpoints, missing schemes, and non-`https`
+    /// endpoints without `allow_insecure` return `GrpcConfig`
+    /// (FailedPrecondition) here instead of failing at reconcile time.
+    /// Call after `insecure_dev` when a dev `http://` endpoint is intended.
+    pub fn with_grpc_endpoint(mut self, endpoint: impl Into<String>) -> Result<Self, TinkleError> {
+        let endpoint = endpoint.into();
+        Self::validate_grpc_endpoint(&endpoint, self.allow_insecure)?;
+        self.grpc_endpoint = Some(endpoint);
+        Ok(self)
     }
 
     /// Development-only plaintext. Production MUST use `wss://`.

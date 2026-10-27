@@ -1,14 +1,19 @@
 //! `tinkle-schema`: Tinkle v1 schema bindings above Syntra.
 //!
 //! Owns Tinkle semantics only: prost types for `tinkle.v1`, canonical
-//! Syntra method identifiers (`/tinkle.v1.<Service>/<Method>`), realtime
-//! batch/cursor validation (`REALTIME.md`), and checkpoint helpers.
-//! It never owns Syntra framing, handshake, or transport. Ciphertext, if
-//! E2EE is integrated later, is constructed at this layer before entering
-//! Syntra (Syntra carries it opaquely).
+//! method identifiers (`/tinkle.v1.<Service>/<Method>`), and validation
+//! for target-changes sync (per-conversation mutation pages, message
+//! refetch batching, and ephemeral connectivity observations).
+//! It never owns Syntra framing, handshake, or transport.
 
 pub mod methods;
 pub mod proto;
-pub mod realtime;
+pub mod sync;
 
-pub use realtime::{validate_batch, validate_notification, CursorDecision, StreamCursors};
+pub use sync::{
+    accept_seq_decision, chunk_message_ids, fresher_body, target_from_parts, target_key_for,
+    validate_changes_page, validate_connectivity_notification, AcceptSeqDecision, PageMore,
+    SyncError, ValidatedChangesPage, GET_HISTORY_METHOD, GET_MESSAGES_METHOD,
+    GET_TARGET_CHANGES_METHOD, MAX_MESSAGE_IDS_PER_REQUEST, MAX_TARGET_CHANGES_LIMIT,
+    OBSERVE_METHOD,
+};

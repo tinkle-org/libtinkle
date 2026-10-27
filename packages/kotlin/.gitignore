@@ -1,0 +1,15 @@
+.gradle/
+.kotlin/
+**/build/
+# These source packages happen to be named build, too.
+!buildSrc/src/main/groovy/com/tinkle/build/
+!buildSrc/src/test/groovy/com/tinkle/build/
+local.properties
+*.iml
+.idea/
+.DS_Store
+__pycache__/
+*.pyc
+# Generated only in disposable packages by scripts/sdk-ci.py.
+/src/main/kotlin/com/tinkle/sdk/tinkle_ffi.kt
+/sdk-artifact.json

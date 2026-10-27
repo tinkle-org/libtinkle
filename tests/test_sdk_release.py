@@ -33,6 +33,21 @@ class ReleaseTests(unittest.TestCase):
         # Resolve system symlinks (e.g. /var -> /private/var on macOS) so the
         # strict symlink-ancestor checks see canonical paths.
         self.root = Path(self.temp.name).resolve()
+        # Existing promotion tests use a fake source SHA; mock the git-backed
+        # package snapshot so they exercise binding/provenance logic without
+        # requiring a real commit. Real git snapshot coverage lives in
+        # tests/test_sdk_packages.py.
+        snapshot_patcher = patch.object(
+            release, "package_snapshot",
+            return_value=release.packages.Snapshot())
+        snapshot_patcher.start()
+        self.addCleanup(snapshot_patcher.stop)
+        # ci imports its own release module instance; keep both in sync.
+        ci_snapshot_patcher = patch.object(
+            ci.release, "package_snapshot",
+            return_value=release.packages.Snapshot())
+        ci_snapshot_patcher.start()
+        self.addCleanup(ci_snapshot_patcher.stop)
         self.artifacts = self.root / "artifacts"
         self.artifacts.mkdir()
         for key, name in release.ARTIFACTS.items():
@@ -79,9 +94,9 @@ class ReleaseTests(unittest.TestCase):
 
     def test_reject_artifact_urls_and_names(self):
         for field, value in [
-            ("url", "http://github.com/tinklehq/libtinkle/releases/download/x/a.zip"),
+            ("url", "http://github.com/tinkle-org/libtinkle/releases/download/x/a.zip"),
             ("url", self.manifest["artifacts"]["ios"]["url"] + "?token=x"),
-            ("url", self.manifest["artifacts"]["ios"]["url"].replace("tinklehq", "other")),
+            ("url", self.manifest["artifacts"]["ios"]["url"].replace("tinkle-org", "other")),
             ("url", "https://github.com@evil.example/file.zip"),
             ("filename", "../TinkleSDKFFI.xcframework.zip"),
             ("sha256", "A" * 64), ("sha256", "00"),
@@ -187,7 +202,8 @@ class ReleaseTests(unittest.TestCase):
             target = destination / release.BINDINGS[sdk][2]
             self.assertEqual({str(p.relative_to(destination)) for p in destination.rglob("*")
                               if p.is_file()}, {"handwritten.txt", "sdk-artifact.json",
-                                                release.BINDINGS[sdk][2]})
+                                                release.BINDINGS[sdk][2],
+                                                release.INVENTORY})
             release.promote(self.manifest, self.artifacts, sdk, destination, check=True)
             target.write_text("drift")
             with self.assertRaisesRegex(ValueError, "drift"):
@@ -205,14 +221,14 @@ class ReleaseTests(unittest.TestCase):
         with patch.dict(release.os.environ, {"SDK_DISTRIBUTION_TOKEN": ""}), \
                 patch.object(release, "run") as command:
             with self.assertRaisesRegex(ValueError, "BLOCKED"):
-                release.open_pr(self.manifest, self.artifacts, "swift", "tinklehq/tinkle-sdk-swift")
+                release.open_pr(self.manifest, self.artifacts, "swift", "tinkle-org/tinkle-sdk-swift")
             command.assert_not_called()
 
     def test_closed_promotion_is_rejected_before_clone_or_push(self):
         with patch.dict(release.os.environ, {"SDK_DISTRIBUTION_TOKEN": "test-placeholder"}), \
                 patch.object(release, "run", return_value=json.dumps([self.promotion_pr("CLOSED")])) as command:
             with self.assertRaisesRegex(ValueError, "PR was closed"):
-                release.open_pr(self.manifest, self.artifacts, "kotlin", "tinklehq/tinkle-sdk-kotlin")
+                release.open_pr(self.manifest, self.artifacts, "kotlin", "tinkle-org/tinkle-sdk-kotlin")
             self.assertEqual(command.call_count, 1)
             self.assertEqual(command.call_args.args[:3], ("gh", "pr", "list"))
 
@@ -238,8 +254,10 @@ class ReleaseTests(unittest.TestCase):
             return release.encoded(self.manifest) if relative == "sdk-artifact.json" else binding
         with patch.dict(release.os.environ, {"SDK_DISTRIBUTION_TOKEN": "test-placeholder"}), \
                 patch.object(release, "run", side_effect=command), \
-                patch.object(release, "git_file", side_effect=remote_file):
-            release.open_pr(self.manifest, self.artifacts, "kotlin", "tinklehq/tinkle-sdk-kotlin")
+                patch.object(release, "git_file", side_effect=remote_file), \
+                patch.object(release, "promotion_deletions", return_value=set()), \
+                patch.object(release, "verify_branch_scope"):
+            release.open_pr(self.manifest, self.artifacts, "kotlin", "tinkle-org/tinkle-sdk-kotlin")
         self.assertTrue(any(c[:2] == ("git", "fetch") for c in calls))
         self.assertFalse(any("commit" in c or "push" in c or "create" in c for c in calls))
 
@@ -263,20 +281,22 @@ class ReleaseTests(unittest.TestCase):
             return b"generated Kotlin"
         with patch.dict(release.os.environ, {"SDK_DISTRIBUTION_TOKEN": "test-placeholder"}), \
                 patch.object(release, "run", side_effect=command), \
-                patch.object(release, "git_file", side_effect=historical_file):
-            release.open_pr(self.manifest, self.artifacts, "kotlin", "tinklehq/tinkle-sdk-kotlin")
+                patch.object(release, "git_file", side_effect=historical_file), \
+                patch.object(release, "promotion_deletions", return_value=set()), \
+                patch.object(release, "verify_branch_scope"):
+            release.open_pr(self.manifest, self.artifacts, "kotlin", "tinkle-org/tinkle-sdk-kotlin")
         self.assertFalse(any("commit" in c or "push" in c or "checkout" in c or "create" in c for c in calls))
 
     def promotion_pr(self, state, **overrides):
         return dict({"state": state, "url": "existing", "isCrossRepository": False,
-                     "headRepositoryOwner": {"login": "tinklehq"},
+                     "headRepositoryOwner": {"login": "tinkle-org"},
                      "headRepository": {"name": "tinkle-sdk-kotlin"}}, **overrides)
 
     def test_fork_pr_with_same_release_branch_is_not_a_promotion(self):
         own = self.promotion_pr("OPEN")
         fork = self.promotion_pr("CLOSED", isCrossRepository=True,
                                  headRepositoryOwner={"login": "other"})
-        self.assertEqual(release.same_repository_prs([fork, own], "tinklehq/tinkle-sdk-kotlin"), [own])
+        self.assertEqual(release.same_repository_prs([fork, own], "tinkle-org/tinkle-sdk-kotlin"), [own])
 
     def test_release_plz_selects_only_ffi(self):
         self.assertEqual(release.release_output('[{"package_name":"libtinkle"}]'), "")
@@ -402,7 +422,7 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "provenance"):
             release.promote(self.manifest, self.artifacts, "kotlin", destination)
 
-    def test_android_build_runs_buildsrc_tests_separately(self):
+    def test_android_build_runs_fixture_and_buildsrc_tests_before_assembly(self):
         destination = self.root / "android"
         destination.mkdir()
         (destination / "gradlew").write_text("#!/bin/sh\nexit 0\n")
@@ -410,10 +430,15 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "one final release AAR"):
                 ci.android_build(destination, self.artifacts)
             self.assertEqual(command.call_args_list[0].args,
+                             ("bash", destination / "gradlew", "--no-daemon", "-p", "fixture-tests", "test"))
+            self.assertEqual(command.call_args_list[1].args,
                              ("bash", destination / "gradlew", "-p", "buildSrc", "test"))
+            self.assertEqual(command.call_args_list[2].args,
+                             ("bash", destination / "gradlew", "--no-daemon", "assembleRelease", "testReleaseUnitTest"))
 
     def consumer_scaffold(self, sdk, destination):
-        for name in ci.CONSUMER_FILES[sdk]:
+        names = ci.local_package_files(sdk)
+        for name in names:
             path = destination / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("test scaffold\n")

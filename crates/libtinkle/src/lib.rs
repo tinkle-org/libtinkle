@@ -1,4 +1,4 @@
-//! `libtinkle`: Tinkle client runtime over Syntra.
+//! `libtinkle`: Tinkle client runtime over Syntra + gRPC fallback.
 //!
 //! The same logical client runtime is reusable across iOS, Android,
 //! and WebAssembly/browser. Platform adapters (FFI, UniFFI, wasm-bindgen)
@@ -7,37 +7,65 @@
 //! Boundaries:
 //! - `syntra-core` owns framing, handshake, correlation, errors.
 //! - `syntra-ws` owns WSS/WS byte transport.
-//! - `tinkle-schema` owns Tinkle payload schemas + realtime validation.
+//! - `tinkle-schema` owns Tinkle payload schemas + journal validation.
 //! - This crate owns connection lifecycle, typed RPC dispatch,
-//!   subscriptions, cursors, reconnect, and backoff.
+//!   reconcile coordination, journal cursors, reconnect, and backoff.
 //!
-//! No gRPC client is required for standard Syntra application calls.
-//! Ciphertext, if E2EE is integrated later, is constructed at the
-//! application encryption layer before entering Syntra.
+//! Reconciliation model: per-conversation mutation journals
+//! (`MessagesService/GetTargetChanges` pages validated by
+//! `tinkle-schema::sync`, bodies fetched by `GetMessages` in chunks of at
+//! most 100) commit atomically with their journal cursor via
+//! `tinkle-storage::Storage::apply_journal_page_fenced`. Notification frames
+//! are opaque hints that kick per-target reconciles; connectivity
+//! observations (`UpdatesService/ObserveConnectivity`) are ephemeral and
+//! never advance a cursor. History windows (`GetHistory.more_available`:
+//! `Some(true)` more, `Some(false)` done, `None` legacy window-edge
+//! heuristic) heal journal skips without moving the cursor. On `wasm32`
+//! the same entry point uses a checkpoint-only in-memory store and skips
+//! the SQLite history catch-up below, so there are no atomic journal
+//! commits there.
 
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod cache_projector;
 pub(crate) mod client;
 pub(crate) mod config;
 pub(crate) mod cursor;
 pub(crate) mod errors;
+pub(crate) mod files;
+pub(crate) mod grpc;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod push;
 pub(crate) mod reconnect;
 pub(crate) mod services;
-pub(crate) mod subscription;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod sqlite_store;
+pub(crate) mod sync;
 
 pub use client::Client;
 pub use config::{ClientConfig, Credential, ReconnectPolicy};
 pub use cursor::{CursorStore, InMemoryCursorStore};
-pub use errors::TinkleError;
-pub use services::{Auth, Messages, Realtime};
-pub use subscription::RealtimeEvent;
+pub use errors::{RecoveryDecision, TinkleError};
+pub use files::{
+    sha256, DownloadManager, FileManager, UploadManager, UploadParams,
+    FALLBACK_MAX_DOWNLOAD_PART_BYTES, SHARED_FILE_SCOPE,
+};
+#[cfg(not(target_arch = "wasm32"))]
+pub use push::{
+    parse_push_payload, push_envelope_target_key, push_job_id, PushEnvelope, PushManager,
+    PushOutcome, PushTokenKind, PUSH_ACCOUNT_JOB_KIND, PUSH_CLAIM_LEASE_SECS,
+    PUSH_DEFAULT_BUDGET_SECS, PUSH_ENVELOPE_VERSION, PUSH_JOB_KIND, PUSH_MAX_MESSAGE_IDS,
+};
+pub use services::{Auth, Files, Messages, Updates};
+#[cfg(not(target_arch = "wasm32"))]
+pub use sqlite_store::SqliteCursorStore;
+pub use sync::{ReconcileStatus, SyncEvent, SyncManager};
 /// Re-exported error code for [`TinkleError::code`].
-///
-/// `TinkleError::code` returns `syntra_core::error::ErrorCode`; apps can
-/// name the type through this re-export instead of depending on
-/// `syntra-core` directly.
 pub use syntra_core::error::ErrorCode;
-/// Re-exported cancellation token for [`Client::call_raw_cancellable`].
-///
-/// `Client::call_raw_cancellable` takes `&syntra_runtime::CancelToken`;
-/// apps can name the type through this re-export instead of depending on
-/// `syntra-runtime` directly.
+/// Re-exported cancellation token.
 pub use syntra_runtime::CancelToken;
+/// Re-exported native storage so public signatures naming `Storage`
+/// resolve via `libtinkle` without adding a direct `tinkle-storage`
+/// dependency.
+#[cfg(not(target_arch = "wasm32"))]
+pub use tinkle_storage::Storage;

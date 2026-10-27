@@ -1,4 +1,4 @@
-//! Subscribe to realtime batches and print validated events.
+//! Subscribe to conversation journals and print reconcile events.
 //!
 //! ```sh
 //! TINKLE_URL=wss://gateway.test.example.com/syntra/v1/ws \
@@ -7,6 +7,7 @@
 //! ```
 
 use libtinkle::{Client, ClientConfig, Credential, InMemoryCursorStore};
+use tinkle_schema::proto::{target, Target};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -24,16 +25,23 @@ async fn main() -> anyhow::Result<()> {
         InMemoryCursorStore::new(),
     );
     client.connect().await?;
-    let sub = client.subscribe(vec![], vec![]).await?;
-    println!(
-        "subscribed: stream={} after={}",
-        sub.stream, sub.after_cursor
-    );
+    // Example: track room 7. Principal must be set (via sign_in or
+    // set_principal_user_id) before subscribing in real apps.
+    client.set_principal_user_id(42).await;
+    client
+        .subscribe(vec![Target {
+            kind: Some(target::Kind::ChatId(7)),
+        }])
+        .await?;
+    println!("subscribed: {:?}", client.tracked_targets().await);
 
-    // Presence is ephemeral; batches commit cursors atomically.
+    // Connectivity is ephemeral; journal cursors advance atomically with
+    // their page commits inside reconcile.
     for _ in 0..10 {
         match tokio::time::timeout(std::time::Duration::from_secs(30), client.next_event()).await {
-            Ok(Some(ev)) => println!("event: {ev:?}"),
+            Ok(Some(ev)) => {
+                println!("event: {ev:?}");
+            }
             Ok(None) => break,
             Err(_) => {
                 println!("no events within 30s; still subscribed");

@@ -8,10 +8,10 @@ Tinkle application          methods, payload schemas, auth policy,
                             subscription interests, cursors, E2EE (yours)
        ↓
 libtinkle client            typed dispatch, subscriptions, reconnect,
-                            backoff, cursor persistence (this SDK)
+                            backoff, cursor persistence, gRPC catch-up (this SDK)
        ↓
-tinkle-schema                  prost bindings + realtime batch/cursor
-                            validation (no transport)
+tinkle-schema                  prost + tonic bindings + sync
+                             validation (no transport)
        ↓
 Syntra RPC / Events         correlation, deadlines, cancel, notifications
        ↓
@@ -37,20 +37,48 @@ Network                     tokio-tungstenite + rustls (native) /
   message = one `Frame`, no length prefix, binary only, `syntra.v1`
   subprotocol, `/syntra/v1/ws` path, Ping/Pong liveness, close-code
   mapping, TLS 1.3 verification (native) / `ws_stream_wasm` (browser).
-- `tinkle-schema`: `tinkle.v1` prost types, 169 canonical method identifiers
-  (`/tinkle.v1.<Service>/<Method>`), `RealtimeNotification`
-  single-decoder validation, complete-batch grammar, `(stream, cursor)`
-  dedup, gap/stale/reset rules, `position_order`, floor/head checks.
-- `libtinkle`: `Client` (connect/call/subscribe/reconnect/suspend),
-  `Credential` (redacted + zeroized), `CursorStore` injection,
-  backoff policy, typed facades (`messages()`, `auth()` + crate-internal
-  realtime dispatch). This is the ONLY public Rust API; internal modules
-  are `pub(crate)`, `SubscriptionManager` never leaves the crate.
-- `tinkle-ffi` (public FFI): UniFFI `TinkleClient` object + `FfiError` +
-  `FfiCursorStore` foreign trait over a shared process-wide Tokio runtime.
-  Swift/Kotlin implement storage natively; no Syntra type crosses FFI.
-- `libtinkle-web` (public web): `wasm-bindgen` wrapper over `libtinkle`
-  for browsers; transport resolves to the `syntra-ws` wasm adapter.
+- `tinkle-schema`: `tinkle.v1` prost + tonic types, 179 canonical method identifiers
+  (`/tinkle.v1.<Service>/<Method>`), per-target journal validation
+  (`validate_changes_page`: strict `accept_seq` ascent, `last_accept_seq`
+  cursor discipline, edited-carries-body vs deleted/revoked-identity-only),
+  `accept_seq` ranking (`accept_seq_decision`; absent tokens never vote),
+  body freshness (`fresher_body` by `edit_date`), request batching
+  (`chunk_message_ids`, `MAX_MESSAGE_IDS_PER_REQUEST`,
+  `MAX_TARGET_CHANGES_LIMIT`), and canonical target keys/constructors
+  (`target_key_for`, `target_from_parts`). `MessagesService`:
+  `GetTargetChanges` (journal pages) and `GetMessages` (body hydration) as
+  unary RPCs; `UpdatesService`: `ObserveConnectivity` (ephemeral presence).
+- `libtinkle`: `Client` (supervised `start`/`stop` plus manual
+  `connect`/`subscribe`/`reconnect`/`suspend`/`resume`, `next_event`,
+  `get_messages`/`get_target_changes`, `reconcile_now`,
+  `target_cursor`/`target_status`/`tracked_targets`,
+  `load_history`/`load_dialogs`), `Credential` (redacted + zeroized),
+  `CursorStore` injection, backoff policy, typed facades (`messages()`,
+  `auth()`, `updates()`), optional direct-unary `grpc_endpoint`,
+  structured `TinkleError` with code-based mapping. This is the ONLY
+  public Rust API surface (plus `SyncEvent`/`SyncManager`/
+  `ReconcileStatus` for explicit-store apps and `SqliteCursorStore` on
+  native); internal modules are `pub(crate)` with re-exports providing
+  the public paths.
+- `tinkle-ffi` (public FFI): UniFFI `TinkleClient` object (`start`,
+  `subscribe`, `next_event`, `get_messages`/`get_target_changes`,
+  `reconcile_now`, `target_cursor`/`target_status`/`tracked_targets`,
+  `load_history`/`load_dialogs` with `FfiLoadPolicy`, `suspend`/
+  `resume`/`is_suspended`, `is_connected`/`pending_len`, `stop`/`shutdown`)
+  + structured `FfiError` (`Auth`, `Retryable` alongside `Network`/`Sync`/
+  `Codec`/`Storage`/…) + `ClientConfigFfi` (fail-fast `grpc_endpoint`
+  validation for the direct-unary transport) + `FfiCursorStore` foreign
+  trait over a shared process-wide Tokio runtime. Swift/Kotlin implement
+  storage natively (or share native SQLite via `SqliteStorage`); no Syntra
+  type crosses FFI.
+- `libtinkle-web` (public web): `wasm-bindgen` `TinkleWebClient` over
+  `libtinkle` (`connect`/`start`/`subscribe`/`next_event`/
+  `get_messages`/`get_target_changes`/`reconcile_now`/`target_cursor`/
+  `target_status`/`tracked_targets`/`load_history`/`load_dialogs` +
+  lifecycle) with an `IndexedDB CursorStore` stub (in-memory today, TODO
+  real IndexedDB); transport resolves to the `syntra-ws` wasm adapter.
+  Compile-verified; browser runtime smoke awaits the `spawn_local` pump
+  adaptation (documented, not claimed).
 
 ## Visibility (TDLib rule)
 
@@ -85,7 +113,14 @@ host. Receive: WS binary → `Frame` → validate → `result` completes the
 pending RPC by id (notifications interleave without completing) →
 prost-decode typed response or map `RpcError{code,message}`.
 
-Realtime: `SubscribeBatched` confirms interests (not replay) →
-`Notification{payload=RealtimeNotification}` → validate complete batch →
-atomically commit effects + `final_cursor` → persist via `CursorStore`.
-Presence is ephemeral; reset head is diagnostic only.
+Sync: `subscribe(Vec<Target>)` registers interests (not reconciliation) →
+notification hints and reconnects drive per-target `GetTargetChanges`
+journal pages → validate (`validate_changes_page`) → `accept_seq` dedup →
+hydrate via `GetMessages` (chunked, `edit_date` freshness) → commit cache +
+accept positions atomically (native SQLite path) and emit
+`ConversationChanged`/`MessagesChanged`. `more_available` is authoritative
+for page completion; failures park per-target (`ReconcileFailed` +
+`Failed` status, retried via `reconcile_now`). Demand surfaces via
+`target_status`/`target_cursor`/`tracked_targets`, not event inference.
+Connectivity is ephemeral. There are no replay cursors, no
+`max_replay_distance`, and no rebuild path.

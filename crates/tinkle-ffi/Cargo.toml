@@ -21,9 +21,12 @@ required-features = ["cli"]
 
 [dependencies]
 libtinkle = { path = "../libtinkle" }
+tinkle-storage.workspace = true
 syntra-core.workspace = true
 tinkle-schema.workspace = true
 uniffi.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
+prost.workspace = true
+tracing.workspace = true

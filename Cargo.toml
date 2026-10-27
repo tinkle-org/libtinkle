@@ -4,6 +4,7 @@ members = [
   "crates/libtinkle",
   "crates/tinkle-ffi",
   "crates/libtinkle-web",
+  "crates/tinkle-storage",
 ]
 resolver = "2"
 
@@ -31,16 +32,23 @@ tokio-util = { version = "0.7", features = ["full"] }
 zeroize = { version = "1", features = ["derive"] }
 async-trait = "0.1"
 futures-channel = "0.3"
+serde_json = "1"
 uniffi = { version = "=0.32.2", features = ["tokio"] }
 
 syntra-core = { version = "=1.0.0-rc.1" }
 syntra-runtime = { version = "=1.0.0-rc.1" }
 syntra-ws = { version = "=1.0.0-rc.1" }
 tinkle-schema = { path = "crates/tinkle-schema", version = "0.1.0" }
+tinkle-storage = { path = "crates/tinkle-storage", version = "0.1.0" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+tempfile = "3"
 
-# BSR-generated prost bindings (public index, no token).
+# BSR-generated bindings (public index, no token).
 # Versions pinned from `buf registry sdk version` (see PROTO_PINNING.md).
-tinklecorp_tinkle-proto_community_neoeinstein-prost = { version = "0.5.0-20261020173106-64b4706c3194.2", registry = "buf" }
+tinkle-org_schema_community_neoeinstein-prost = { version = "0.5.0-20261026025606-782100705bf9.2", registry = "buf" }
+tinkle-org_schema_community_neoeinstein-tonic = { version = "0.5.0-20261026025606-782100705bf9.4", registry = "buf" }
+tonic = { version = "0.14", features = ["transport", "tls-native-roots"] }
+tonic-prost = { version = "0.14" }
 
 # Native SDKs must retain unwind containment and matching native symbols.
 # Select staticlib/cdylib at packaging time, not for every workspace build.

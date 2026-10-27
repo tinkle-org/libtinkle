@@ -1,0 +1,156 @@
+# Inactive source template; manual installation requirements: ../README.md.
+name: Kotlin SDK release tag and JitPack proof
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      sdk_sha:
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: kotlin-sdk-release-${{ github.ref }}-${{ inputs.sdk_sha }}
+  cancel-in-progress: false
+jobs:
+  authorize:
+    if: github.repository == 'tinkle-org/tinkle-sdk-kotlin' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: read
+    outputs:
+      version: ${{ steps.provenance.outputs.version }}
+      source_sha: ${{ steps.provenance.outputs.sha }}
+      sdk_sha: ${{ steps.provenance.outputs.sdk_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sdk_sha }}
+          fetch-depth: 0
+          path: sdk
+          persist-credentials: false
+      - name: Validate supplied SHAs and protected core provenance
+        id: provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SDK_SHA: ${{ inputs.sdk_sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          with open('sdk/sdk-artifact.json') as manifest:
+              data = json.load(manifest)
+          sha = data['source_revision']
+          assert data['source_repository'] == 'tinkle-org/libtinkle' and re.fullmatch('[0-9a-f]{40}', sha)
+          assert sha == os.environ['SOURCE_SHA'], 'Manifest source revision must match the validated CI source'
+          assert re.fullmatch('[0-9a-f]{40}', os.environ['SDK_SHA']), 'Expected exact SDK revision'
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd='sdk', text=True).strip() == os.environ['SDK_SHA'], 'SDK checkout must match the validated CI commit'
+          branch = json.loads(subprocess.check_output(['gh', 'api', 'repos/tinkle-org/libtinkle/branches/main']))
+          assert branch['protected'], 'Core main must be protected'
+          compare = json.loads(subprocess.check_output(['gh', 'api', 'repos/tinkle-org/libtinkle/compare/' + sha + '...main']))
+          assert compare['merge_base_commit']['sha'] == sha, 'Core automation must be on main'
+          assert re.fullmatch(r'[0-9A-Za-z.+-]+', data['version'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('sha=' + sha + '\nversion=' + data['version'] + '\n')
+              output.write('sdk_sha=' + os.environ['SDK_SHA'] + '\n')
+          PY
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tinkle-org/libtinkle
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          path: core
+          persist-credentials: false
+      - name: Verify merged release PR, published manifest, full snapshot, and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          SDK_REF: ${{ github.ref }}
+        run: |
+          if [[ "$EVENT_NAME" != push ]]; then
+            exit 1
+          fi
+          if [[ "$SDK_REF" == refs/heads/main ]]; then
+            python3 core/scripts/sdk-ci.py sdk-tag --sdk kotlin --destination sdk --create
+          elif [[ "$SDK_REF" == refs/tags/v* ]]; then
+            python3 core/scripts/sdk-ci.py sdk-tag --sdk kotlin --destination sdk
+          else
+            exit 1
+          fi
+  jitpack:
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: 24
+            target: default
+            pages: 4096
+          - api: 36
+            target: google_apis
+            pages: 4096
+          - api: 36
+            target: google_apis_ps16k
+            pages: 16384
+    # Explicit dependency: GITHUB_TOKEN-created tags do not trigger push workflows.
+    # Also verifies externally pushed tags through the same authorization guard.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tinkle-org/libtinkle
+          ref: ${{ needs.authorize.outputs.source_sha }}
+          fetch-depth: 0
+          path: core
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sdk_sha }}
+          fetch-depth: 0
+          path: sdk
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: true
+      - name: Verify core bundle and generated binding
+        run: python3 core/scripts/sdk-ci.py stage --sdk kotlin --destination sdk --artifacts artifacts --download
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4 (Node 24)
+        with:
+          packages: 'platform-tools ndk;30.0.16248370 platforms;android-36 build-tools;36.0.0'
+      - name: Pin the NDK used by build and verification tools
+        run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/30.0.16248370" >> "$GITHUB_ENV"
+      - name: Warm and resolve the immutable JitPack coordinate
+        env:
+          SDK_TAG: v${{ needs.authorize.outputs.version }}
+        run: python3 core/scripts/sdk-ci.py jitpack --tag "$SDK_TAG" --destination sdk
+      - name: Enable KVM
+        run: sudo chmod 666 /dev/kvm
+      - name: Test the downloaded JitPack AAR
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: ${{ matrix.api }}
+          target: ${{ matrix.target }}
+          arch: x86_64
+          disable-animations: true
+          script: python3 core/scripts/sdk-ci.py android-test --destination sdk --artifacts artifacts --api-level ${{ matrix.api }} --page-size ${{ matrix.pages }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: jitpack-consumer-${{ matrix.api }}-${{ matrix.pages }}
+          path: |
+            sdk/build/sdk-ci-aar.json
+            sdk/build/diagnostics
+            sdk/sample/build/outputs/mapping
+            sdk/sample/build/outputs/apk
+            sdk/sample/build/reports/androidTests
+            sdk/sample/build/outputs/androidTest-results
+          retention-days: 14
