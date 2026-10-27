@@ -26,7 +26,7 @@ tungstenite = "0.26"
 thiserror = "2"
 bytes = "1"
 tracing = "0.1"
-rand = "0.8"
+rand = "0.9"
 url = "2"
 tokio-util = { version = "0.7", features = ["full"] }
 zeroize = { version = "1", features = ["derive"] }
