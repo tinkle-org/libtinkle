@@ -1155,15 +1155,13 @@ impl Client {
             }
         }
         if principal != crate::sync::UNKNOWN_PRINCIPAL {
-            if let Some(storage) = self.sqlite_storage() {
-                let p = principal.clone();
-                tokio::task::spawn_blocking(move || storage.clear_principal(&p))
-                    .await
-                    .map_err(|e| TinkleError::CursorStore(format!("logout wipe task failed: {e}")))?
-                    .map_err(|e| TinkleError::CursorStore(e.to_string()))?;
-            }
+            // Wipe + reset under one checkpoint-save hold so an in-flight
+            // ingest cannot commit between them (see logout_wipe_and_reset).
+            self.logout_wipe_and_reset(&principal).await?;
+        } else {
+            // Nothing durable to wipe; still drop interests/watch/demand.
+            self.reset_session_for_logout().await;
         }
-        self.reset_session_for_logout().await;
         Ok(logged_out)
     }
 }

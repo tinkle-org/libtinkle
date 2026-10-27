@@ -33,6 +33,11 @@ struct MockLogInner {
     history: Mutex<Vec<(String, i32)>>,
     observe: Mutex<Vec<Vec<i64>>>,
     kill: Mutex<Vec<oneshot::Sender<()>>>,
+    /// When a target key is present, `GetHistory` with a non-None
+    /// `offset_id` (i.e. the 2nd+ window) fails with an injected error.
+    /// Lets mid-loop failure tests persist demand, then clear it by
+    /// removing the key and re-reconciling.
+    history_fail_second: Mutex<HashSet<String>>,
 }
 
 type MockLog = Arc<MockLogInner>;
@@ -420,6 +425,9 @@ async fn handle_mock_request(id: u64, req: RpcRequest, log: &MockLog) -> Frame {
             });
             let key = target_key_of(&r.target);
             log.history.lock().unwrap().push((key.clone(), r.limit));
+            if r.offset_id.is_some() && log.history_fail_second.lock().unwrap().contains(&key) {
+                return rpc_error(id, 14, "injected history failure");
+            }
             let resp = mock_history(&key, &r);
             let mut b = Vec::new();
             resp.encode(&mut b).unwrap();
@@ -579,6 +587,23 @@ fn mock_target_changes(key: &str, after: i64, limit: i32) -> GetTargetChangesRes
             last_accept_seq: after,
         };
     }
+    if key == "target:room:13"
+        || key == "target:room:14"
+        || key == "target:room:15"
+        || key == "target:room:16"
+        || key == "target:room:17"
+        || key == "target:room:18"
+        || key == "target:room:20"
+    {
+        // Paged catch-up rooms: journal discloses edits/removals only, so
+        // the journal here is empty (cursor 0, no changes). The run
+        // proceeds to history catch-up.
+        return GetTargetChangesResponse {
+            changes: vec![],
+            more_available: Some(false),
+            last_accept_seq: after,
+        };
+    }
     GetTargetChangesResponse {
         changes: vec![],
         more_available: Some(false),
@@ -637,26 +662,27 @@ fn mock_get_messages(key: &str, ids: &[i64]) -> GetMessagesResponse {
                 accept_seq: Some(*id),
                 ..Default::default()
             });
+        } else if key == "target:room:15" {
+            // All-deleted middle window (21..=40): omitted without error.
+            // The run must still page to the final window.
+            if (21..=40).contains(id) {
+                continue;
+            }
+            messages.push(TinkleMessage {
+                message_id: *id,
+                target: Some(Target {
+                    kind: Some(target::Kind::ChatId(15)),
+                }),
+                from_id: 42,
+                message: format!("m{id}"),
+                accept_seq: Some(*id),
+                ..Default::default()
+            });
         } else {
-            let target = if key == "target:room:8" {
+            let target = if let Some(room_str) = key.strip_prefix("target:room:") {
+                let rid: i64 = room_str.parse().unwrap_or(7);
                 Target {
-                    kind: Some(target::Kind::ChatId(8)),
-                }
-            } else if key == "target:room:9" {
-                Target {
-                    kind: Some(target::Kind::ChatId(9)),
-                }
-            } else if key == "target:room:10" {
-                Target {
-                    kind: Some(target::Kind::ChatId(10)),
-                }
-            } else if key == "target:room:11" {
-                Target {
-                    kind: Some(target::Kind::ChatId(11)),
-                }
-            } else if key == "target:room:12" {
-                Target {
-                    kind: Some(target::Kind::ChatId(12)),
+                    kind: Some(target::Kind::ChatId(rid)),
                 }
             } else if key.starts_with("target:user:") {
                 let id_parse: i64 = key
@@ -772,6 +798,378 @@ fn mock_history(key: &str, req: &GetHistoryRequest) -> GetHistoryResponse {
             count: 1,
             offset_id_offset: None,
             more_available: Some(false),
+        };
+    }
+    if key == "target:room:20" {
+        // Inclusive-boundary backlog: the window fetched at the stored edge
+        // (151) carries the boundary message itself, which the seeded cache
+        // deliberately omits. W1 serves 250..=152, W2 serves 151..=52,
+        // W3 serves 51..=1 (all with explicit reports).
+        if req.offset_id.is_none() {
+            let messages: Vec<TinkleMessage> = (152..=250)
+                .rev()
+                .map(|id| TinkleMessage {
+                    message_id: id,
+                    target: req.target,
+                    from_id: 42,
+                    message: format!("m{id}"),
+                    accept_seq: Some(id),
+                    ..Default::default()
+                })
+                .collect();
+            return GetHistoryResponse {
+                messages,
+                users: vec![],
+                chats: vec![],
+                count: 250,
+                offset_id_offset: Some(151),
+                more_available: Some(true),
+            };
+        }
+        if req.offset_id == Some(151) {
+            let messages: Vec<TinkleMessage> = (52..=151)
+                .rev()
+                .map(|id| TinkleMessage {
+                    message_id: id,
+                    target: req.target,
+                    from_id: 42,
+                    message: format!("m{id}"),
+                    accept_seq: Some(id),
+                    ..Default::default()
+                })
+                .collect();
+            return GetHistoryResponse {
+                messages,
+                users: vec![],
+                chats: vec![],
+                count: 250,
+                offset_id_offset: Some(51),
+                more_available: Some(true),
+            };
+        }
+        let messages: Vec<TinkleMessage> = (1..=51)
+            .rev()
+            .map(|id| TinkleMessage {
+                message_id: id,
+                target: req.target,
+                from_id: 42,
+                message: format!("m{id}"),
+                accept_seq: Some(id),
+                ..Default::default()
+            })
+            .collect();
+        return GetHistoryResponse {
+            messages,
+            users: vec![],
+            chats: vec![],
+            count: 250,
+            offset_id_offset: None,
+            more_available: Some(false),
+        };
+    }
+    if key == "target:room:13" {
+        // 250-message backlog: 3 windows newest-first, explicit reports.
+        // Window 1 (no offset): 250..=151 (100) with more=true.
+        // Window 2 (offset 151): 150..=51 (100) with more=true.
+        // Window 3 (offset 51): 50..=1 (50) with more=false (boundary).
+        if req.offset_id.is_none() {
+            let messages: Vec<TinkleMessage> = (151..=250)
+                .rev()
+                .map(|id| TinkleMessage {
+                    message_id: id,
+                    target: req.target,
+                    from_id: 42,
+                    message: format!("m{id}"),
+                    accept_seq: Some(id),
+                    ..Default::default()
+                })
+                .collect();
+            return GetHistoryResponse {
+                messages,
+                users: vec![],
+                chats: vec![],
+                count: 250,
+                offset_id_offset: Some(151),
+                more_available: Some(true),
+            };
+        }
+        if req.offset_id == Some(151) {
+            let messages: Vec<TinkleMessage> = (51..=150)
+                .rev()
+                .map(|id| TinkleMessage {
+                    message_id: id,
+                    target: req.target,
+                    from_id: 42,
+                    message: format!("m{id}"),
+                    accept_seq: Some(id),
+                    ..Default::default()
+                })
+                .collect();
+            return GetHistoryResponse {
+                messages,
+                users: vec![],
+                chats: vec![],
+                count: 250,
+                offset_id_offset: Some(51),
+                more_available: Some(true),
+            };
+        }
+        let messages: Vec<TinkleMessage> = (1..=50)
+            .rev()
+            .map(|id| TinkleMessage {
+                message_id: id,
+                target: req.target,
+                from_id: 42,
+                message: format!("m{id}"),
+                accept_seq: Some(id),
+                ..Default::default()
+            })
+            .collect();
+        return GetHistoryResponse {
+            messages,
+            users: vec![],
+            chats: vec![],
+            count: 250,
+            offset_id_offset: None,
+            more_available: Some(false),
+        };
+    }
+    if key == "target:room:14" {
+        // Boundary-only clearing: 2 windows, newest-100 pre-cached.
+        // Window 1 (no offset): 130..=31 (100) with more=true.
+        // Window 2 (offset 31): 30..=1 (30) with more=false (boundary).
+        if req.offset_id.is_none() {
+            let messages: Vec<TinkleMessage> = (31..=130)
+                .rev()
+                .map(|id| TinkleMessage {
+                    message_id: id,
+                    target: req.target,
+                    from_id: 42,
+                    message: format!("m{id}"),
+                    accept_seq: Some(id),
+                    ..Default::default()
+                })
+                .collect();
+            return GetHistoryResponse {
+                messages,
+                users: vec![],
+                chats: vec![],
+                count: 130,
+                offset_id_offset: Some(31),
+                more_available: Some(true),
+            };
+        }
+        let messages: Vec<TinkleMessage> = (1..=30)
+            .rev()
+            .map(|id| TinkleMessage {
+                message_id: id,
+                target: req.target,
+                from_id: 42,
+                message: format!("m{id}"),
+                accept_seq: Some(id),
+                ..Default::default()
+            })
+            .collect();
+        return GetHistoryResponse {
+            messages,
+            users: vec![],
+            chats: vec![],
+            count: 130,
+            offset_id_offset: None,
+            more_available: Some(false),
+        };
+    }
+    if key == "target:room:15" {
+        // All-deleted middle window: 3 windows, middle (21..=40) omitted
+        // by GetMessages. Paging must continue to the final window.
+        // Window 1 (no offset): 60..=41 (20) with more=true.
+        // Window 2 (offset 41): 40..=21 (20) with more=true.
+        // Window 3 (offset 21): 20..=1 (20) with more=false.
+        if req.offset_id.is_none() {
+            let messages: Vec<TinkleMessage> = (41..=60)
+                .rev()
+                .map(|id| TinkleMessage {
+                    message_id: id,
+                    target: req.target,
+                    from_id: 42,
+                    message: format!("m{id}"),
+                    accept_seq: Some(id),
+                    ..Default::default()
+                })
+                .collect();
+            return GetHistoryResponse {
+                messages,
+                users: vec![],
+                chats: vec![],
+                count: 60,
+                offset_id_offset: Some(41),
+                more_available: Some(true),
+            };
+        }
+        if req.offset_id == Some(41) {
+            let messages: Vec<TinkleMessage> = (21..=40)
+                .rev()
+                .map(|id| TinkleMessage {
+                    message_id: id,
+                    target: req.target,
+                    from_id: 42,
+                    message: format!("m{id}"),
+                    accept_seq: Some(id),
+                    ..Default::default()
+                })
+                .collect();
+            return GetHistoryResponse {
+                messages,
+                users: vec![],
+                chats: vec![],
+                count: 60,
+                offset_id_offset: Some(21),
+                more_available: Some(true),
+            };
+        }
+        let messages: Vec<TinkleMessage> = (1..=20)
+            .rev()
+            .map(|id| TinkleMessage {
+                message_id: id,
+                target: req.target,
+                from_id: 42,
+                message: format!("m{id}"),
+                accept_seq: Some(id),
+                ..Default::default()
+            })
+            .collect();
+        return GetHistoryResponse {
+            messages,
+            users: vec![],
+            chats: vec![],
+            count: 60,
+            offset_id_offset: None,
+            more_available: Some(false),
+        };
+    }
+    if key == "target:room:16" {
+        // Absent-report legacy rule: more_available None throughout.
+        // First window full (100) continues at the edge; short final
+        // window (20) stops. Mirrors load_history legacy expectations.
+        if req.offset_id.is_none() {
+            let messages: Vec<TinkleMessage> = (21..=120)
+                .rev()
+                .map(|id| TinkleMessage {
+                    message_id: id,
+                    target: req.target,
+                    from_id: 42,
+                    message: format!("m{id}"),
+                    accept_seq: Some(id),
+                    ..Default::default()
+                })
+                .collect();
+            return GetHistoryResponse {
+                messages,
+                users: vec![],
+                chats: vec![],
+                count: 120,
+                offset_id_offset: None,
+                more_available: None,
+            };
+        }
+        let messages: Vec<TinkleMessage> = (1..=20)
+            .rev()
+            .map(|id| TinkleMessage {
+                message_id: id,
+                target: req.target,
+                from_id: 42,
+                message: format!("m{id}"),
+                accept_seq: Some(id),
+                ..Default::default()
+            })
+            .collect();
+        return GetHistoryResponse {
+            messages,
+            users: vec![],
+            chats: vec![],
+            count: 120,
+            offset_id_offset: None,
+            more_available: None,
+        };
+    }
+    if key == "target:room:17" {
+        // Mid-loop failure: 2 windows, newest-50 then oldest-30.
+        // Window 1 (no offset): 80..=31 (50) with more=true.
+        // Window 2 (offset 31): 30..=1 (30) with more=false. The mock
+        // gateway injects a failure for window 2 when
+        // `history_fail_second` contains this key (see GetHistory arm).
+        if req.offset_id.is_none() {
+            let messages: Vec<TinkleMessage> = (31..=80)
+                .rev()
+                .map(|id| TinkleMessage {
+                    message_id: id,
+                    target: req.target,
+                    from_id: 42,
+                    message: format!("m{id}"),
+                    accept_seq: Some(id),
+                    ..Default::default()
+                })
+                .collect();
+            return GetHistoryResponse {
+                messages,
+                users: vec![],
+                chats: vec![],
+                count: 80,
+                offset_id_offset: Some(31),
+                more_available: Some(true),
+            };
+        }
+        let messages: Vec<TinkleMessage> = (1..=30)
+            .rev()
+            .map(|id| TinkleMessage {
+                message_id: id,
+                target: req.target,
+                from_id: 42,
+                message: format!("m{id}"),
+                accept_seq: Some(id),
+                ..Default::default()
+            })
+            .collect();
+        return GetHistoryResponse {
+            messages,
+            users: vec![],
+            chats: vec![],
+            count: 80,
+            offset_id_offset: None,
+            more_available: Some(false),
+        };
+    }
+    if key == "target:room:18" {
+        // 1200-message backlog in 12 windows of 100: forces the per-run
+        // window budget (10), so run 1 stops with a persisted resume edge
+        // and run 2 resumes from it. Offset semantics mirror room:13:
+        // offset `o` serves `(o-100)..=(o-1)`; `None` serves the newest.
+        const TOTAL: i64 = 1200;
+        const WIN: i64 = 100;
+        let start = match req.offset_id {
+            None => TOTAL,
+            Some(o) => o - 1,
+        };
+        let lo = (start - WIN + 1).max(1);
+        let messages: Vec<TinkleMessage> = (lo..=start)
+            .rev()
+            .map(|id| TinkleMessage {
+                message_id: id,
+                target: req.target,
+                from_id: 42,
+                message: format!("m{id}"),
+                accept_seq: Some(id),
+                ..Default::default()
+            })
+            .collect();
+        let more = lo > 1;
+        return GetHistoryResponse {
+            messages,
+            users: vec![],
+            chats: vec![],
+            count: 1200,
+            offset_id_offset: if more { Some(lo) } else { None },
+            more_available: Some(more),
         };
     }
     // Paged history for more_available tests: room:history has 3 messages,
@@ -1443,6 +1841,581 @@ async fn history_ingest_does_not_move_cursor() {
     assert!(
         cursor.is_none() || cursor == Some(0),
         "history ingest must not move cursor, got {cursor:?}"
+    );
+    c.close().await;
+}
+
+fn seed_cached_messages(
+    storage: &Arc<tinkle_storage::Storage>,
+    target_key: &str,
+    room_id: i64,
+    ids: impl IntoIterator<Item = i64>,
+) {
+    use prost::Message as _;
+    let mut ops = tinkle_storage::CacheOps::default();
+    for id in ids {
+        let msg = TinkleMessage {
+            message_id: id,
+            target: Some(Target {
+                kind: Some(target::Kind::ChatId(room_id)),
+            }),
+            from_id: 42,
+            message: format!("m{id}"),
+            accept_seq: Some(id),
+            ..Default::default()
+        };
+        let mut proto = Vec::new();
+        msg.encode(&mut proto).unwrap();
+        ops.messages.push(tinkle_storage::MessageRow {
+            conversation_key: target_key.to_string(),
+            message_id: id,
+            peer_kind: "room".to_string(),
+            peer_id: room_id,
+            from_id: 42,
+            body: format!("m{id}"),
+            proto,
+            origin_stream: target_key.to_string(),
+            accept_seq: Some(id),
+            edit_date_secs: None,
+            edit_date_nanos: None,
+        });
+    }
+    let gen = storage
+        .stream_state("user:42", target_key)
+        .unwrap()
+        .generation;
+    storage
+        .apply_journal_page_fenced("user:42", target_key, &ops, 0, gen)
+        .unwrap();
+}
+
+#[tokio::test]
+async fn reconcile_multi_window_backlog_ingests_250_and_clears_demand() {
+    // Room:13 serves a 250-message backlog as 3 explicit windows:
+    // newest-100 (more=true) + next-100 (more=true) + oldest-50
+    // (more=false boundary). Paging drives off `offset_id`.
+    let (addr, log) = start_mock_logged().await;
+    let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
+    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
+    let c = libtinkle::Client::new_sqlite(
+        cfg,
+        libtinkle::Credential::from_session_token("test-token"),
+        storage.clone(),
+    );
+    c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
+    let applied = c.reconcile_target("target:room:13").await.unwrap();
+    assert_eq!(applied, 250, "3 windows must ingest 250 messages");
+    let ids = storage
+        .cached_message_ids("user:42", "target:room:13")
+        .unwrap();
+    assert_eq!(ids.len(), 250, "all 250 must be cached, got {}", ids.len());
+    let id_set: HashSet<i64> = ids.into_iter().collect();
+    for expect in [1, 50, 51, 151, 250] {
+        assert!(id_set.contains(&expect), "missing {expect} in cache");
+    }
+    // Same-cursor commit: journal cursor never advances past the empty head.
+    let cursor = storage.load_journal("user:42", "target:room:13").unwrap();
+    assert!(
+        cursor.is_none() || cursor == Some(0),
+        "catch-up must not move cursor, got {cursor:?}"
+    );
+    // All three windows were paged; demand cleared at the boundary.
+    let history_calls = log
+        .history
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| k == "target:room:13")
+        .count();
+    assert_eq!(history_calls, 3, "must page 3 windows");
+    let jobs = storage.list_background_sync_jobs("user:42", None).unwrap();
+    assert!(
+        !jobs.iter().any(|j| j.target_key == "target:room:13"),
+        "demand must be cleared at boundary, got {jobs:?}"
+    );
+    c.close().await;
+}
+
+#[tokio::test]
+async fn reconcile_boundary_only_clearing_no_premature_clear() {
+    // Room:14 has 2 windows: newest-100 pre-cached, older-30 missing.
+    // Demand must stay until the boundary is reached and everything is
+    // ingested (i.e. no premature clear after the fully-cached window).
+    let (addr, log) = start_mock_logged().await;
+    let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
+    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
+    let c = libtinkle::Client::new_sqlite(
+        cfg,
+        libtinkle::Credential::from_session_token("test-token"),
+        storage.clone(),
+    );
+    c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
+    seed_cached_messages(&storage, "target:room:14", 14, 31..=130);
+    let applied = c.reconcile_target("target:room:14").await.unwrap();
+    assert_eq!(applied, 30, "only the missing older-30 must count");
+    let ids = storage
+        .cached_message_ids("user:42", "target:room:14")
+        .unwrap();
+    assert_eq!(ids.len(), 130, "all 130 must be cached after boundary");
+    let cursor = storage.load_journal("user:42", "target:room:14").unwrap();
+    assert!(
+        cursor.is_none() || cursor == Some(0),
+        "catch-up must not move cursor, got {cursor:?}"
+    );
+    // Both windows paged (proves no early stop after the cached window).
+    let history_calls = log
+        .history
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| k == "target:room:14")
+        .count();
+    assert_eq!(history_calls, 2, "must page newest + older windows");
+    // No re-fetch for already-cached ids: every GetMessages batch stays
+    // within the missing older range.
+    for (k, batch) in log.messages.lock().unwrap().iter() {
+        if k == "target:room:14" {
+            for id in batch {
+                assert!(
+                    (1..=30).contains(id),
+                    "pre-cached id {id} must not be re-fetched"
+                );
+            }
+        }
+    }
+    let jobs = storage.list_background_sync_jobs("user:42", None).unwrap();
+    assert!(
+        !jobs.iter().any(|j| j.target_key == "target:room:14"),
+        "demand must be cleared only at boundary, got {jobs:?}"
+    );
+    c.close().await;
+}
+
+#[tokio::test]
+async fn reconcile_all_deleted_middle_window_continues() {
+    // Room:15 has 3 windows; the middle window (21..=40) is all omitted
+    // by GetMessages. An all-deleted window must not end the loop: paging
+    // continues to the final window and clears demand.
+    let (addr, log) = start_mock_logged().await;
+    let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
+    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
+    let c = libtinkle::Client::new_sqlite(
+        cfg,
+        libtinkle::Credential::from_session_token("test-token"),
+        storage.clone(),
+    );
+    c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
+    let applied = c.reconcile_target("target:room:15").await.unwrap();
+    assert_eq!(applied, 40, "windows 1+3 must ingest 40 (middle omitted)");
+    let rows = storage
+        .get_messages("user:42", "target:room:15", 100, None)
+        .unwrap();
+    let id_set: HashSet<i64> = rows.iter().map(|r| r.message_id).collect();
+    for expect in (1..=20).chain(41..=60) {
+        assert!(id_set.contains(&expect), "missing {expect} in cache");
+    }
+    for missing in 21..=40 {
+        assert!(
+            !id_set.contains(&missing),
+            "omitted middle id {missing} must not be cached"
+        );
+    }
+    let history_calls = log
+        .history
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| k == "target:room:15")
+        .count();
+    assert_eq!(history_calls, 3, "must page through the omitted window");
+    let jobs = storage.list_background_sync_jobs("user:42", None).unwrap();
+    assert!(
+        !jobs.iter().any(|j| j.target_key == "target:room:15"),
+        "demand must be cleared after final window, got {jobs:?}"
+    );
+    c.close().await;
+}
+
+#[tokio::test]
+async fn reconcile_absent_report_legacy_rule_pages_full_window() {
+    // Room:16 returns more_available None throughout. A full 100-window
+    // continues at the edge; the short final window stops (legacy rule,
+    // mirroring load_history expectations).
+    let (addr, log) = start_mock_logged().await;
+    let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
+    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
+    let c = libtinkle::Client::new_sqlite(
+        cfg,
+        libtinkle::Credential::from_session_token("test-token"),
+        storage.clone(),
+    );
+    c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
+    let applied = c.reconcile_target("target:room:16").await.unwrap();
+    assert_eq!(applied, 120, "full + short windows must ingest 120");
+    let ids = storage
+        .cached_message_ids("user:42", "target:room:16")
+        .unwrap();
+    assert_eq!(ids.len(), 120);
+    let history_calls = log
+        .history
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| k == "target:room:16")
+        .count();
+    assert_eq!(
+        history_calls, 2,
+        "None + full must continue, None + short must stop"
+    );
+    let cursor = storage.load_journal("user:42", "target:room:16").unwrap();
+    assert!(
+        cursor.is_none() || cursor == Some(0),
+        "catch-up must not move cursor, got {cursor:?}"
+    );
+    let jobs = storage.list_background_sync_jobs("user:42", None).unwrap();
+    assert!(
+        !jobs.iter().any(|j| j.target_key == "target:room:16"),
+        "demand must be cleared at legacy stop, got {jobs:?}"
+    );
+    c.close().await;
+}
+
+#[tokio::test]
+async fn reconcile_mid_loop_failure_persists_demand() {
+    // Room:17 fails GetHistory on the 2nd window. Reconcile stays Ok
+    // (best-effort) with window-1 count only, persists demand, then
+    // completes and clears once the error arm is removed.
+    let (addr, log) = start_mock_logged().await;
+    let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
+    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
+    let c = libtinkle::Client::new_sqlite(
+        cfg,
+        libtinkle::Credential::from_session_token("test-token"),
+        storage.clone(),
+    );
+    c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
+    log.history_fail_second
+        .lock()
+        .unwrap()
+        .insert("target:room:17".to_string());
+    let first = c.reconcile_target("target:room:17").await.unwrap();
+    assert_eq!(first, 50, "only window 1 ingested before failure");
+    let ids = storage
+        .cached_message_ids("user:42", "target:room:17")
+        .unwrap();
+    assert_eq!(ids.len(), 50);
+    // Demand persists after the mid-loop failure.
+    let jobs = storage.list_background_sync_jobs("user:42", None).unwrap();
+    assert!(
+        jobs.iter().any(|j| j.target_key == "target:room:17"),
+        "failure must persist catch-up demand, got {jobs:?}"
+    );
+    let job = jobs
+        .iter()
+        .find(|j| j.target_key == "target:room:17")
+        .expect("failure must persist catch-up demand");
+    assert_eq!(
+        job.payload,
+        b"resume_offset=31;cover_top=80",
+        "payload must carry the next offset and cover top, got {:?}",
+        String::from_utf8_lossy(&job.payload)
+    );
+    // Remove the error arm and re-reconcile: the run resumes from the
+    // stored edge (quick newest pass + remaining window) and clears.
+    log.history_fail_second
+        .lock()
+        .unwrap()
+        .remove("target:room:17");
+    let logged_before = log.messages.lock().unwrap().len();
+    let second = c.reconcile_target("target:room:17").await.unwrap();
+    assert_eq!(second, 30, "second run ingests the remaining window");
+    let ids = storage
+        .cached_message_ids("user:42", "target:room:17")
+        .unwrap();
+    assert_eq!(ids.len(), 80, "both windows cached after retry");
+    // Resume must not re-page covered windows: 4 history calls total
+    // (W1, failed W2, quick newest W1, W2) and no GetMessages batch may
+    // touch the already-cached 31..=80.
+    let history_calls = log
+        .history
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| k == "target:room:17")
+        .count();
+    assert_eq!(history_calls, 4, "resume must refetch newest once, then W2");
+    // Only the resumed run's batches count here: run 1 legitimately
+    // fetched 31..=80 fresh.
+    for (k, batch) in log.messages.lock().unwrap().iter().skip(logged_before) {
+        if k == "target:room:17" {
+            for id in batch {
+                assert!(
+                    (1..=30).contains(id),
+                    "cached id {id} must not be re-fetched on resume"
+                );
+            }
+        }
+    }
+    let jobs = storage.list_background_sync_jobs("user:42", None).unwrap();
+    assert!(
+        !jobs.iter().any(|j| j.target_key == "target:room:17"),
+        "retry must clear demand, got {jobs:?}"
+    );
+    c.close().await;
+}
+
+#[tokio::test]
+async fn reconcile_window_budget_persists_edge_and_resumes() {
+    // Room:18 serves a 1200-message backlog in 12 windows of 100, forcing
+    // the per-run window budget (10). Run 1 ingests 1000, persists demand
+    // with the resume edge in the job payload; run 2 resumes from the edge
+    // (one quick newest pass, then the remaining windows) and clears.
+    let (addr, log) = start_mock_logged().await;
+    let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
+    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
+    let c = libtinkle::Client::new_sqlite(
+        cfg,
+        libtinkle::Credential::from_session_token("test-token"),
+        storage.clone(),
+    );
+    c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
+    let first = c.reconcile_target("target:room:18").await.unwrap();
+    assert_eq!(first, 1000, "run 1 must stop at the 10-window budget");
+    let ids = storage
+        .cached_message_ids("user:42", "target:room:18")
+        .unwrap();
+    assert_eq!(ids.len(), 1000);
+    let history_calls = log
+        .history
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| k == "target:room:18")
+        .count();
+    assert_eq!(history_calls, 10, "run 1 must fetch exactly 10 windows");
+    // Demand persists with the next offset encoded in the payload.
+    let jobs = storage.list_background_sync_jobs("user:42", None).unwrap();
+    let job = jobs
+        .iter()
+        .find(|j| j.target_key == "target:room:18")
+        .expect("budget-hit must persist catch-up demand");
+    assert_eq!(
+        job.payload,
+        b"resume_offset=201;cover_top=1200",
+        "payload must carry the next offset, got {:?}",
+        String::from_utf8_lossy(&job.payload)
+    );
+    // Run 2 resumes: quick newest pass (all cached) + jump + 2 windows.
+    let logged_before = log.messages.lock().unwrap().len();
+    let second = c.reconcile_target("target:room:18").await.unwrap();
+    assert_eq!(second, 200, "run 2 must ingest only the remaining windows");
+    let ids = storage
+        .cached_message_ids("user:42", "target:room:18")
+        .unwrap();
+    assert_eq!(ids.len(), 1200, "all 1200 must be cached after resume");
+    let history_calls = log
+        .history
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| k == "target:room:18")
+        .count();
+    assert_eq!(
+        history_calls, 13,
+        "run 2 must add exactly 3 calls (quick + 2 windows)"
+    );
+    // Resumed runs must never re-request covered bodies (run 1's fresh
+    // batches are excluded via the skip above).
+    for (k, batch) in log.messages.lock().unwrap().iter().skip(logged_before) {
+        if k == "target:room:18" {
+            for id in batch {
+                assert!(
+                    (1..=200).contains(id),
+                    "cached id {id} must not be re-fetched on resume"
+                );
+            }
+        }
+    }
+    let cursor = storage.load_journal("user:42", "target:room:18").unwrap();
+    assert!(
+        cursor.is_none() || cursor == Some(0),
+        "catch-up must not move cursor, got {cursor:?}"
+    );
+    let jobs = storage.list_background_sync_jobs("user:42", None).unwrap();
+    assert!(
+        !jobs.iter().any(|j| j.target_key == "target:room:18"),
+        "resume to boundary must clear demand, got {jobs:?}"
+    );
+    c.close().await;
+}
+
+#[tokio::test]
+async fn set_principal_hydrates_resume_edge_from_durable_row() {
+    // Restart scenario: an earlier run ingested 151..=250 and persisted
+    // its resume state, then the process died (no in-memory edge). A fresh
+    // client adopts the principal (hydrating the durable row into the map)
+    // and resumes from the stored edge instead of re-paging covered
+    // windows: only the missing 151 ingest.
+    let (addr, log) = start_mock_logged().await;
+    let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
+    // Plant the durable resume row directly (as persist_catchup_demand would).
+    storage
+        .enqueue_background_sync_job(
+            "user:42",
+            &tinkle_storage::BackgroundSyncJob {
+                job_id: "catchup:target:room:20".into(),
+                kind: "new_messages".into(),
+                target_key: "target:room:20".into(),
+                state: "pending".into(),
+                payload: b"resume_offset=151;cover_top=250".to_vec(),
+                attempts: 0,
+                next_due: 0,
+                claimed_by: None,
+                updated_at: 0,
+            },
+        )
+        .unwrap();
+    // Seed the cache as if the earlier run ingested down through 152, leaving the boundary message 151 uncached.
+    seed_cached_messages(&storage, "target:room:20", 20, 152..=250);
+    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
+    let c = libtinkle::Client::new_sqlite(
+        cfg,
+        libtinkle::Credential::from_session_token("test-token"),
+        storage.clone(),
+    );
+    c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
+    let applied = c.reconcile_target("target:room:20").await.unwrap();
+    assert_eq!(
+        applied, 151,
+        "must resume from the hydrated edge, not newest"
+    );
+    let ids = storage
+        .cached_message_ids("user:42", "target:room:20")
+        .unwrap();
+    assert_eq!(ids.len(), 250, "all 250 must be cached after resume");
+    // Quick newest pass (all cached) + jump + remaining 2 windows.
+    let history_calls = log
+        .history
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| k == "target:room:20")
+        .count();
+    assert_eq!(
+        history_calls, 3,
+        "resume must skip re-paging covered windows"
+    );
+    // Only the missing range may be re-fetched by id.
+    for (k, batch) in log.messages.lock().unwrap().iter() {
+        if k == "target:room:20" {
+            for id in batch {
+                assert!(
+                    (1..=151).contains(id),
+                    "hydrated id {id} must not be re-fetched on resume"
+                );
+            }
+        }
+    }
+    let cursor = storage.load_journal("user:42", "target:room:20").unwrap();
+    assert!(
+        cursor.is_none() || cursor == Some(0),
+        "catch-up must not move cursor, got {cursor:?}"
+    );
+    let jobs = storage.list_background_sync_jobs("user:42", None).unwrap();
+    assert!(
+        !jobs.iter().any(|j| j.target_key == "target:room:20"),
+        "resume to boundary must clear demand, got {jobs:?}"
+    );
+    c.close().await;
+}
+
+#[tokio::test]
+async fn legacy_resume_row_keeps_cover_top_empty() {
+    // Legacy row: an edge persisted before cover tops existed. A resumed
+    // run that stalls must retain the edge WITHOUT claiming a top: claiming
+    // the run's top would assert contiguous coverage that was never proven
+    // and let a later resume jump over uncached arrivals.
+    let (addr, log) = start_mock_logged().await;
+    let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
+    storage
+        .enqueue_background_sync_job(
+            "user:42",
+            &tinkle_storage::BackgroundSyncJob {
+                job_id: "catchup:target:room:20".into(),
+                kind: "new_messages".into(),
+                target_key: "target:room:20".into(),
+                state: "pending".into(),
+                payload: b"resume_offset=151".to_vec(),
+                attempts: 0,
+                next_due: 0,
+                claimed_by: None,
+                updated_at: 0,
+            },
+        )
+        .unwrap();
+    // Seed the cache as if the earlier run ingested down through 152, leaving the boundary message 151 uncached.
+    seed_cached_messages(&storage, "target:room:20", 20, 152..=250);
+    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
+    let c = libtinkle::Client::new_sqlite(
+        cfg,
+        libtinkle::Credential::from_session_token("test-token"),
+        storage.clone(),
+    );
+    c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
+    // Fail the second window: quick newest pass succeeds (all cached),
+    // then the fetch at the stored edge fails and persists.
+    log.history_fail_second
+        .lock()
+        .unwrap()
+        .insert("target:room:20".to_string());
+    let first = c.reconcile_target("target:room:20").await.unwrap();
+    assert_eq!(
+        first, 0,
+        "only the cached newest window ran before the failure"
+    );
+    let jobs = storage.list_background_sync_jobs("user:42", None).unwrap();
+    let job = jobs
+        .iter()
+        .find(|j| j.target_key == "target:room:20")
+        .expect("failure must persist catch-up demand");
+    assert_eq!(
+        job.payload,
+        b"resume_offset=151",
+        "legacy row must not gain an unproven top, got {:?}",
+        String::from_utf8_lossy(&job.payload)
+    );
+    // Remove the error arm and re-reconcile: the run resumes from the edge
+    // and clears at the boundary.
+    log.history_fail_second
+        .lock()
+        .unwrap()
+        .remove("target:room:20");
+    let second = c.reconcile_target("target:room:20").await.unwrap();
+    assert_eq!(
+        second, 151,
+        "resume must ingest the remaining windows including the boundary"
+    );
+    // The boundary message rode the resumed window and must be cached now.
+    let ids = storage
+        .cached_message_ids("user:42", "target:room:20")
+        .unwrap();
+    assert_eq!(ids.len(), 250, "all 250 must be cached after resume");
+    assert!(
+        ids.contains(&151),
+        "uncached boundary message 151 must be cached after retry"
+    );
+    let jobs = storage.list_background_sync_jobs("user:42", None).unwrap();
+    assert!(
+        !jobs.iter().any(|j| j.target_key == "target:room:20"),
+        "retry must clear demand, got {jobs:?}"
     );
     c.close().await;
 }
