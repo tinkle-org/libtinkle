@@ -23,6 +23,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 use std::collections::HashSet;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
@@ -87,6 +89,57 @@ struct Interests {
     subscribed: bool,
 }
 
+/// Resume state for one unfinished new-message catch-up: the `GetHistory`
+/// offset the next run continues from plus the top of the contiguous range
+/// covered so far. `edge: None` means start at the newest window.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CatchupResume {
+    edge: Option<i64>,
+    cover_top: Option<i64>,
+    /// In-flight covering descent position: the `GetHistory` offset the
+    /// next covering run continues from. Set only while a covering chain
+    /// is open (budget spent or failure mid-chain); cleared when the chain
+    /// connects to `cover_top`, which widens the top instead.
+    covering: Option<i64>,
+    /// Newest id observed when the covering chain started: the value the
+    /// `cover_top` widens to once the chain connects.
+    covering_top: Option<i64>,
+}
+
+/// Outcome of one fenced catch-up commit that the reconcile loop must
+/// classify: fence loss propagates as scope-changed, anything else persists
+/// demand with the next offset.
+#[cfg(not(target_arch = "wasm32"))]
+enum CatchupCommitError {
+    /// Fence lost under the commit lock: drop the stale page, no effects.
+    FenceLost,
+    /// Commit (or pre-commit read) failed: persist demand and retry later.
+    Failed(TinkleError),
+}
+
+/// Grouped payload refs for one ingest commit (clippy
+/// `too_many_arguments`: commit fields travel together). Native-only:
+/// wasm has no SQLite commit to parameterize.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct IngestBatch<'a> {
+    pub messages: &'a [tinkle_schema::proto::Message],
+    pub users: &'a [tinkle_schema::proto::User],
+    pub chats: &'a [tinkle_schema::proto::Chat],
+    pub exclude: &'a HashSet<i64>,
+}
+
+/// Grouped scope inputs for one fenced catch-up commit (clippy
+/// `too_many_arguments`: fence fields travel together).
+#[cfg(not(target_arch = "wasm32"))]
+struct CatchupCommitCtx<'a> {
+    mgr: &'a SyncManager,
+    fence_principal: &'a str,
+    fence_generation: u64,
+    target_key: &'a str,
+    epoch: u64,
+}
+
 /// Typed Tinkle client over Syntra + gRPC fallback.
 ///
 /// Cheap to clone (shares connection + cursors). The same logical runtime
@@ -117,12 +170,28 @@ pub struct Client {
     start_lock: Arc<tokio::sync::Mutex<()>>,
     drain_mgrs: Arc<tokio::sync::Mutex<Vec<Arc<SyncManager>>>>,
     suspended: Arc<AtomicBool>,
+    /// Client-level commit gate: every native ingest holds this lock
+    /// across its epoch check + write, and logout/principal switches wait
+    /// on it before bumping the epoch — so a wipe can never interleave a
+    /// commit, and pending catch-up/heal runs are invalidated even when no
+    /// live manager exists to fence.
+    #[cfg(not(target_arch = "wasm32"))]
+    checkpoint_save: Arc<tokio::sync::Mutex<()>>,
+    /// Client-level reconcile epoch, shared by every `SyncManager`
+    /// instance (a fresh one is built per connection). Bumped on logout
+    /// and principal change; commits capture it at run start and re-check
+    /// under the checkpoint lock.
+    #[cfg(not(target_arch = "wasm32"))]
+    reconcile_epoch: Arc<AtomicU64>,
     /// In-memory fallback for unfinished new-message catch-ups when the
     /// `background_sync_jobs` table is unavailable (pre-v4 databases).
-    /// Durable jobs win when the table exists; this set keeps demand alive
-    /// either way so the next reconcile retries.
+    /// Durable jobs win when the table exists; this map keeps demand alive
+    /// either way so the next reconcile retries. The value is the resume
+    /// edge: the `GetHistory` offset the next run must continue from
+    /// (`None` = start at the newest window). A stored edge is only ever
+    /// replaced by a deeper one or cleared at the confirmed boundary.
     #[cfg(not(target_arch = "wasm32"))]
-    catchup_pending: Arc<tokio::sync::Mutex<HashSet<String>>>,
+    catchup_pending: Arc<tokio::sync::Mutex<HashMap<String, CatchupResume>>>,
 }
 
 fn target_key_of(target: &tinkle_schema::proto::Target) -> Result<String, TinkleError> {
@@ -180,7 +249,11 @@ impl Client {
             drain_mgrs: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             suspended: Arc::new(AtomicBool::new(false)),
             #[cfg(not(target_arch = "wasm32"))]
-            catchup_pending: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+            checkpoint_save: Arc::new(tokio::sync::Mutex::new(())),
+            #[cfg(not(target_arch = "wasm32"))]
+            reconcile_epoch: Arc::new(AtomicU64::new(0)),
+            #[cfg(not(target_arch = "wasm32"))]
+            catchup_pending: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -209,13 +282,31 @@ impl Client {
             start_lock: Arc::new(tokio::sync::Mutex::new(())),
             drain_mgrs: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             suspended: Arc::new(AtomicBool::new(false)),
-            catchup_pending: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+            #[cfg(not(target_arch = "wasm32"))]
+            checkpoint_save: Arc::new(tokio::sync::Mutex::new(())),
+            #[cfg(not(target_arch = "wasm32"))]
+            reconcile_epoch: Arc::new(AtomicU64::new(0)),
+            catchup_pending: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn sqlite_storage(&self) -> Option<Arc<tinkle_storage::Storage>> {
         self.sqlite.clone()
+    }
+
+    /// Current client-level reconcile epoch (native only).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn reconcile_epoch(&self) -> u64 {
+        self.reconcile_epoch.load(Ordering::SeqCst)
+    }
+
+    /// Wasm stub: no SQLite commit gate exists on wasm, so there is no
+    /// epoch to invalidate; callers only thread the value into native-only
+    /// paths.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn reconcile_epoch(&self) -> u64 {
+        0
     }
 
     pub fn config(&self) -> &ClientConfig {
@@ -235,10 +326,49 @@ impl Client {
             return;
         }
         let p = format!("user:{user_id}");
-        *self.principal.write().await = p.clone();
-        if let Ok(mgr) = self.live_mgr().await {
-            mgr.set_principal(p).await;
+        // Serialize with in-flight commits: hold the checkpoint lock across
+        // the demand reset, both principal updates, and hydration, so an
+        // ingest cannot commit between them under a half-switched scope.
+        // Lock order is checkpoint-then-state everywhere (see the journal
+        // commit path); no path takes them in the reverse order.
+        let mgr = self.live_mgr().await.ok();
+        let _guard = match mgr.as_ref() {
+            Some(m) => Some(m.checkpoint_save_lock().await),
+            None => None,
+        };
+        // Target keys are not principal-scoped, so a stale resume edge from
+        // the previous principal would resume the wrong cache. Clear on
+        // principal change, before hydrating this principal's durable rows.
+        // (Unchanged principal keeps live edges; hydration only fills gaps.)
+        //
+        // The client checkpoint lock is taken on every call — before
+        // reading the current principal — and `changed` is computed under
+        // it, so the check cannot race another principal writer and no
+        // ingest can slip between the check and the epoch invalidation.
+        // From here through both principal writes, an in-flight ingest
+        // either completes before the switch or fails the epoch check: it
+        // can never observe the new epoch with the old principal. The
+        // guard releases after `self.principal` and `set_principal` have
+        // both landed. Epoch bump and demand clear stay changed-only.
+        #[cfg(not(target_arch = "wasm32"))]
+        let _client_guard = self.checkpoint_save.lock().await;
+        #[cfg(not(target_arch = "wasm32"))]
+        let changed = *self.principal.read().await != p;
+        #[cfg(not(target_arch = "wasm32"))]
+        if changed {
+            self.reconcile_epoch.fetch_add(1, Ordering::SeqCst);
+            self.catchup_pending.lock().await.clear();
         }
+        *self.principal.write().await = p.clone();
+        if let Some(m) = mgr.as_deref() {
+            m.set_principal(p.clone()).await;
+        }
+        // Rehydrate resume edges persisted by earlier runs (including
+        // pre-restart runs): durable catch-up rows outlive the in-memory
+        // map. Best-effort; a miss just starts the next run newest.
+        // Native-only (SQLite resume state does not exist on wasm).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.hydrate_catchup_resume_edges(&p).await;
     }
 
     /// Retained connectivity watch set. `ObserveConnectivity` is
@@ -323,17 +453,73 @@ impl Client {
     /// and the live reconcile scope fenced via `set_principal`. Durable rows
     /// are wiped separately via `Storage::clear_principal`. Native-only:
     /// called from the push module's `logout`.
+    ///
+    /// Lock order: the manager checkpoint lock first (when a live scope
+    /// exists), then the client checkpoint lock — the same order every
+    /// commit path uses — both held across the epoch bump and the reset,
+    /// so an ingest can neither commit between the epoch change and the
+    /// cleanup nor after it.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) async fn reset_session_for_logout(&self) {
+        let mgr = self.live_mgr().await.ok();
+        let _guard = match mgr.as_ref() {
+            Some(m) => Some(m.checkpoint_save_lock().await),
+            None => None,
+        };
+        let _client_guard = self.checkpoint_save.lock().await;
+        self.reconcile_epoch.fetch_add(1, Ordering::SeqCst);
+        self.reset_session_locked(mgr.as_deref()).await;
+    }
+
+    /// In-memory logout reset; the caller must hold `checkpoint_save_lock`
+    /// when a live scope exists (see `reset_session_for_logout` and
+    /// `logout_wipe_and_reset`).
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn reset_session_locked(&self, mgr: Option<&SyncManager>) {
         *self.principal.write().await = UNKNOWN_PRINCIPAL.to_string();
         self.interests.lock().await.targets.clear();
         self.interests.lock().await.subscribed = false;
         self.watch.lock().await.clear();
-        #[cfg(not(target_arch = "wasm32"))]
         self.catchup_pending.lock().await.clear();
-        if let Ok(mgr) = self.live_mgr().await {
-            mgr.set_principal(UNKNOWN_PRINCIPAL.to_string()).await;
+        if let Some(m) = mgr {
+            m.set_principal(UNKNOWN_PRINCIPAL.to_string()).await;
         }
+    }
+
+    /// Logout-scoped durable wipe + in-memory reset. Lock order: the
+    /// manager checkpoint lock first (when a live scope exists), then the
+    /// client checkpoint lock — the same order every commit path uses —
+    /// both held across the epoch bump, the `clear_principal` row wipe,
+    /// and the generation-bumping reset, so an in-flight ingest can
+    /// neither commit between them nor land after the wipe under the old
+    /// scope. With no live manager, the client lock alone still drains
+    /// push-path ingests and invalidates their epoch. Native-only:
+    /// called from the push module's `logout` instead of wiping inline.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) async fn logout_wipe_and_reset(&self, principal: &str) -> Result<(), TinkleError> {
+        let mgr = self.live_mgr().await.ok();
+        let _guard = match mgr.as_ref() {
+            Some(m) => Some(m.checkpoint_save_lock().await),
+            None => None,
+        };
+        let _client_guard = self.checkpoint_save.lock().await;
+        self.reconcile_epoch.fetch_add(1, Ordering::SeqCst);
+        // Capture the wipe result but never let it bypass the reset: the
+        // in-memory scope (principal, generation fence, tracked state) must
+        // come down even when the durable wipe fails, or a half-logged-out
+        // client keeps reconciling under a dead principal.
+        let mut wipe_result: Result<(), TinkleError> = Ok(());
+        if principal != UNKNOWN_PRINCIPAL {
+            if let Some(storage) = self.sqlite_storage() {
+                let p = principal.to_string();
+                wipe_result = tokio::task::spawn_blocking(move || storage.clear_principal(&p))
+                    .await
+                    .map_err(|e| TinkleError::CursorStore(format!("logout wipe task failed: {e}")))
+                    .and_then(|r| r.map_err(|e| TinkleError::CursorStore(e.to_string())));
+            }
+        }
+        self.reset_session_locked(mgr.as_deref()).await;
+        wipe_result
     }
 
     pub async fn connect(&self) -> Result<(), TinkleError> {
@@ -896,6 +1082,15 @@ impl Client {
     /// fallback that repopulates the offline cache without moving the
     /// journal cursor; the current page still jumps the cursor forward over
     /// the gap.
+    ///
+    /// Implicit-TooLong mapping: the contract has no explicit "retained
+    /// mutations too old" code, so a journal skip (`first.accept_seq >
+    /// after + 1`) is that signal. History repair is the recovery path: the
+    /// cursor jumps forward over the gap and best-effort paged history
+    /// (`reconcile_new_messages`, plus `heal_via_history` for the skipped
+    /// range) repopulates what the journal can no longer disclose. No
+    /// schema change; cursor-jump plus best-effort paged history is the
+    /// accepted terminal behavior.
     pub async fn reconcile_target(&self, target_key: &str) -> Result<u64, TinkleError> {
         let target = parse_target_key(target_key)?;
         let mgr = self.live_mgr().await?;
@@ -942,6 +1137,7 @@ impl Client {
         target_key: &str,
         target: tinkle_schema::proto::Target,
     ) -> Result<u64, TinkleError> {
+        let run_epoch = self.reconcile_epoch();
         let mut after: i64 = self
             .store
             .load_journal(fence_principal, target_key)
@@ -999,7 +1195,15 @@ impl Client {
             // Journal skip → best-effort history heal (does not move cursor).
             if let Some(first) = page.changes.first() {
                 if first.accept_seq > after.saturating_add(1) {
-                    self.heal_via_history(&target, target_key).await;
+                    self.heal_via_history(
+                        mgr,
+                        fence_principal,
+                        fence_generation,
+                        run_epoch,
+                        &target,
+                        target_key,
+                    )
+                    .await;
                 }
             }
             // Hydrate + project (native SQLite cache). Wasm reconciles
@@ -1057,6 +1261,15 @@ impl Client {
                     if !mgr.check_fence(fence_principal, fence_generation).await {
                         return Err(TinkleError::Sync(format!(
                             "reconcile scope changed for {target_key}; dropping stale pages"
+                        )));
+                    }
+                    // Client-level commit gate (same epoch check as
+                    // ingest_messages): a logout bump waits on this lock,
+                    // so it invalidates the shard before it writes.
+                    let _commit_guard = self.checkpoint_save.lock().await;
+                    if self.reconcile_epoch() != run_epoch {
+                        return Err(TinkleError::Sync(format!(
+                            "reconcile epoch changed for {target_key}; dropping stale pages"
                         )));
                     }
                     let gen = {
@@ -1209,15 +1422,27 @@ impl Client {
             }
         }
         // Journal pages cover edits/removals only, never new messages.
-        // Catch up on bodies the journal cannot disclose: fetch a history
-        // window, diff against the cache, and ingest the missing ids.
-        // Best-effort: failures persist a retry job, never fail the run.
+        // Catch up on bodies the journal cannot disclose: page history
+        // windows backward to the server-confirmed boundary, diff each
+        // window against the cache, and ingest the missing ids.
+        // Best-effort: failures persist a retry job, never fail the run
+        // (fence loss still propagates like the journal loop above).
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.sqlite.is_some() {
                 let caught = self
-                    .reconcile_new_messages(&target, target_key, &run_removals)
-                    .await;
+                    .reconcile_new_messages(
+                        CatchupCommitCtx {
+                            mgr,
+                            fence_principal,
+                            fence_generation,
+                            target_key,
+                            epoch: run_epoch,
+                        },
+                        &target,
+                        &run_removals,
+                    )
+                    .await?;
                 applied += caught;
             }
         }
@@ -1243,11 +1468,15 @@ impl Client {
         &self,
         principal: &str,
         target_key: &str,
-        messages: &[tinkle_schema::proto::Message],
-        users: &[tinkle_schema::proto::User],
-        chats: &[tinkle_schema::proto::Chat],
-        exclude: &HashSet<i64>,
+        batch: IngestBatch<'_>,
+        run_epoch: u64,
     ) -> Result<Vec<i64>, TinkleError> {
+        let IngestBatch {
+            messages,
+            users,
+            chats,
+            exclude,
+        } = batch;
         let storage = match self.sqlite.clone() {
             Some(s) => s,
             None => return Ok(Vec::new()),
@@ -1286,6 +1515,15 @@ impl Client {
         let want_ids: Vec<i64> = ops.messages.iter().map(|m| m.message_id).collect();
         if want_ids.is_empty() && ops.users.is_empty() && ops.chats.is_empty() {
             return Ok(Vec::new());
+        }
+        // Client-level commit gate: serialize ingests process-wide and
+        // reject stale epochs (logout/principal switch) so a commit can
+        // never land during or after a wipe. Check + write share one hold.
+        let _commit_guard = self.checkpoint_save.lock().await;
+        if self.reconcile_epoch() != run_epoch {
+            return Err(TinkleError::Sync(
+                "reconcile epoch changed; dropping stale ingest".into(),
+            ));
         }
         let current: i64 = self
             .store
@@ -1473,176 +1711,576 @@ impl Client {
         Ok((ops, affected))
     }
 
-    /// New-message catch-up for one target.
+    /// New-message catch-up for one target, paged to the server-confirmed
+    /// boundary.
     ///
     /// `GetTargetChanges` discloses edits/removals only, never new
-    /// messages. After journal paging, fetch one history window, diff its
-    /// ids against the offline cache, re-check the missing ids via
+    /// messages. After journal paging, page `GetHistory` windows backward
+    /// (newest first) to the server-confirmed end, diff each window's ids
+    /// against the offline cache, re-check the missing ids via
     /// `GetMessages` (omitted ids carry no information and are treated as
     /// deleted), and ingest the survivors through the shared
     /// `ingest_messages` helper (same-cursor commit, never moving the
     /// journal cursor). Ids in `run_removals` are skipped up front and
-    /// re-checked before commit.
+    /// re-checked before commit. An all-deleted/all-omitted window carries
+    /// no ingestible bodies but must NOT end the loop: paging continues to
+    /// the boundary.
     ///
-    /// Best-effort: returns the ingested count (0 when caught up or when
-    /// the fetch fails). An unfinished catch-up persists a
-    /// `background_sync_jobs` row when the table exists, else an in-memory
-    /// demand entry; neither path fails the reconcile run.
+    /// Paging mirrors `load_history`: `more_available == Some(true)`
+    /// continues at `offset_id_offset` (else the window's smallest
+    /// `message_id`); `Some(false)` stops at the confirmed boundary; `None`
+    /// applies the legacy rule (empty or non-full window stops, else
+    /// continue at the edge). A no-progress guard breaks the loop when the
+    /// window edge fails to move backward while `more` still says
+    /// continue.
+    ///
+    /// Each run fetches a bounded number of windows
+    /// (`MAX_CATCHUP_WINDOWS_PER_RUN`); when the budget is spent with more
+    /// work pending, the next offset is persisted (in-memory resume edge
+    /// plus the durable job payload) so the supervisor sweep and routine
+    /// hints resume from that edge instead of restarting at the newest
+    /// window. Restarting would starve the tail under the bound and re-page
+    /// covered windows every run. A resumed run first covers post-resume
+    /// arrivals with newest-first windows until overlap with cached
+    /// coverage (or the edge), then jumps to the edge.
+    ///
+    /// Every commit goes through `ingest_catchup_window`: the checkpoint
+    /// lock is held, the run fence is re-checked under it, and the commit
+    /// lands under `fence_principal`. Fence loss drops the stale page with
+    /// a scope-changed error; any other failure persists demand with the
+    /// next offset and returns the count so far.
+    ///
+    /// Best-effort: returns the total ingested count (`Ok(0)` when caught
+    /// up). `clear_catchup_demand` runs only on a clean reach of the
+    /// boundary; any `GetHistory`/`GetMessages`/ingest error, no-progress
+    /// break, or spent budget calls `persist_catchup_demand` and returns the
+    /// count so far. Fence loss returns a `TinkleError::Sync`
+    /// scope-changed error like the journal loop (the one failure that
+    /// propagates instead of persisting demand).
     #[cfg(not(target_arch = "wasm32"))]
     async fn reconcile_new_messages(
         &self,
+        ctx: CatchupCommitCtx<'_>,
         target: &tinkle_schema::proto::Target,
-        target_key: &str,
         run_removals: &HashSet<i64>,
-    ) -> u64 {
-        let principal = self.principal().await;
-        if principal == UNKNOWN_PRINCIPAL {
-            return 0;
+    ) -> Result<u64, TinkleError> {
+        let CatchupCommitCtx {
+            mgr,
+            fence_principal,
+            fence_generation,
+            target_key,
+            epoch: run_epoch,
+        } = ctx;
+        // Rebuild the per-run scope: every fenced operation below (commits
+        // and demand bookkeeping) shares this one fence context.
+        let ctx = CatchupCommitCtx {
+            mgr,
+            fence_principal,
+            fence_generation,
+            target_key,
+            epoch: run_epoch,
+        };
+        // History windows cap at 100 (`MAX_TARGET_CHANGES_LIMIT` is for the
+        // journal only).
+        const HISTORY_CATCHUP_LIMIT: i32 = 100;
+        // Windows fetched per run. Exhaustion across runs chains through
+        // persisted demand + resume edge (see below), so one run never
+        // pages forever against a live server; the sweep re-runs while
+        // demand persists. Mirrors `load_history`'s 10-page cap.
+        const MAX_CATCHUP_WINDOWS_PER_RUN: u32 = 10;
+        // The run commits under the reconcile scope it started in; there is
+        // no function-start principal snapshot. A scope change mid-run
+        // fails the loop top (or the under-lock re-check before each
+        // commit) with a scope-changed error instead of ingesting under a
+        // stale scope.
+        if fence_principal == UNKNOWN_PRINCIPAL {
+            return Ok(0);
         }
         let storage = match self.sqlite.clone() {
             Some(s) => s,
-            None => return 0,
+            None => return Ok(0),
         };
-        // One history window to discover candidate new messages.
-        let history_req = tinkle_schema::proto::GetHistoryRequest {
-            target: Some(*target),
-            offset_id: None,
-            offset_date: None,
-            add_offset: 0,
-            limit: 100,
-            max_id: None,
-            min_id: None,
-        };
-        let history = match self.messages().get_history(history_req).await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::debug!(target_key, error = %e, "new-message catch-up history failed");
-                self.persist_catchup_demand(target_key).await;
-                return 0;
-            }
-        };
-        if history.messages.is_empty() {
-            self.clear_catchup_demand(target_key).await;
-            // Still upsert any entities the window carried.
-            if !history.users.is_empty() || !history.chats.is_empty() {
-                let empty: HashSet<i64> = HashSet::new();
-                let _ = self
-                    .ingest_messages(
-                        principal.as_str(),
-                        target_key,
-                        &[],
-                        &history.users,
-                        &history.chats,
-                        &empty,
-                    )
-                    .await;
-            }
-            return 0;
-        }
-        // Computed before `history.messages` is moved below: a full window
-        // with no confirmed end means more history may remain, so a
-        // successful ingest persists catch-up demand instead of clearing it.
-        let window_full = history.messages.len() >= 100 && history.more_available != Some(false);
-        // Diff against the cache.
-        let cached: HashSet<i64> = {
+        // Resume state from an earlier bounded/failed run: the `GetHistory`
+        // offset the next run continues from plus the top of the contiguous
+        // range covered so far. Consulted here so both the supervisor sweep
+        // and routine hints (both funnel into `reconcile_target`) resume
+        // instead of restarting at the newest window.
+        let resume: CatchupResume = self
+            .catchup_pending
+            .lock()
+            .await
+            .get(target_key)
+            .copied()
+            .unwrap_or_default();
+        // While set, the run is covering post-resume arrivals: after each
+        // newest-first window it stops only on proof of connection to the
+        // previously covered range (the window reaches the stored cover top,
+        // or passes the edge) and jumps to the edge instead of re-paging
+        // already-covered windows. Without this, arrivals between runs
+        // newer than the edge would be skipped by the jump.
+        let mut covering_new = resume.edge.is_some() || resume.covering.is_some();
+        // Connection threshold for the covering phase: the top of the
+        // previously covered contiguous range. Falls back to the edge for
+        // rows written before the top was persisted.
+        let cover_top = resume.cover_top.or(resume.edge);
+        // Top of the covering chain (the newest id when it started). A
+        // resumed chain carries it in the stored state; a fresh chain
+        // claims it from the first window's max id below.
+        let mut chain_top: Option<i64> = resume.covering_top;
+        // Diff baseline, loaded once; extended with ingested ids as windows
+        // commit so overlapping windows never re-request the same bodies.
+        let mut cached: HashSet<i64> = {
             let st = storage.clone();
-            let p = principal.clone();
+            let p = fence_principal.to_string();
             let t = target_key.to_string();
             match tokio::task::spawn_blocking(move || st.cached_message_ids(&p, &t)).await {
                 Ok(Ok(ids)) => ids.into_iter().collect(),
                 _ => HashSet::new(),
             }
         };
-        let mut missing: Vec<i64> = history
-            .messages
-            .iter()
-            .map(|m| m.message_id)
-            .filter(|id| *id > 0 && !cached.contains(id) && !run_removals.contains(id))
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-        missing.sort_unstable();
-        if missing.is_empty() {
-            self.clear_catchup_demand(target_key).await;
-            return 0;
-        }
-        // Re-check existence via GetMessages: omitted ids are deleted /
-        // invisible and must not be ingested.
-        let rechecked = match self.get_messages(*target, missing.clone()).await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::debug!(target_key, error = %e, "new-message catch-up fetch failed");
-                self.persist_catchup_demand(target_key).await;
-                return 0;
+        let mut total: u64 = 0;
+        // A stored covering cursor resumes the descent mid-chain instead
+        // of restarting at the newest window (which would starve the tail:
+        // chains longer than the per-run budget would never connect).
+        let mut offset_id: Option<i64> = resume.covering;
+        // Edge of the previous window (smallest message id seen, else the
+        // server offset). Paging moves backward, so each new edge must be
+        // strictly smaller; anything else while `more` says continue is a
+        // stalled server cursor.
+        let mut prev_edge: Option<i64> = None;
+        let mut windows: u32 = 0;
+        let mut run_top: Option<i64> = None;
+        loop {
+            if !mgr.check_fence(fence_principal, fence_generation).await {
+                return Err(TinkleError::Sync(format!(
+                    "reconcile scope changed for {target_key}; dropping stale pages"
+                )));
             }
-        };
-        let live_ids: HashSet<i64> = rechecked.messages.iter().map(|m| m.message_id).collect();
-        // Keep history bodies for ids the server confirmed, so edit_date /
-        // accept_seq from either source survive; prefer the GetMessages
-        // copy when both exist (it is the fresher read).
-        let mut by_id: HashMap<i64, tinkle_schema::proto::Message> = HashMap::new();
-        for m in history.messages {
-            if live_ids.contains(&m.message_id) && !run_removals.contains(&m.message_id) {
-                by_id.insert(m.message_id, m);
+            if windows >= MAX_CATCHUP_WINDOWS_PER_RUN {
+                // Per-run budget spent with more work pending: persist the
+                // next offset so the sweep resumes from this edge.
+                tracing::debug!(
+                    target_key,
+                    windows,
+                    "new-message catch-up window budget spent"
+                );
+                self.persist_catchup_demand(&ctx, offset_id, run_top, covering_new, chain_top)
+                    .await;
+                return Ok(total);
             }
-        }
-        for m in rechecked.messages {
-            if !run_removals.contains(&m.message_id) {
-                by_id.insert(m.message_id, m);
+            let history_req = tinkle_schema::proto::GetHistoryRequest {
+                target: Some(*target),
+                offset_id,
+                offset_date: None,
+                add_offset: 0,
+                limit: HISTORY_CATCHUP_LIMIT,
+                max_id: None,
+                min_id: None,
+            };
+            let history = match self.messages().get_history(history_req).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::debug!(target_key, error = %e, "new-message catch-up history failed");
+                    self.persist_catchup_demand(&ctx, offset_id, run_top, covering_new, chain_top)
+                        .await;
+                    return Ok(total);
+                }
+            };
+            windows += 1;
+            let more = history.more_available;
+            let offset = history.offset_id_offset;
+            let empty = history.messages.is_empty();
+            let full = history.messages.len() as i32 >= HISTORY_CATCHUP_LIMIT;
+            // Edge for the legacy fallback and the no-progress guard:
+            // smallest id in this window.
+            let min_id = history.messages.iter().map(|m| m.message_id).min();
+            // Track the newest id seen: windows page strictly backward, so
+            // the max across fetched windows is this run's coverage top.
+            run_top = std::cmp::max(run_top, history.messages.iter().map(|m| m.message_id).max());
+            // The covering chain's top is claimed from the first window.
+            if covering_new {
+                chain_top = chain_top.or(run_top);
             }
-        }
-        if by_id.is_empty() {
-            self.clear_catchup_demand(target_key).await;
-            return 0;
-        }
-        let bodies: Vec<tinkle_schema::proto::Message> = by_id.into_values().collect();
-        // Merge entity hydration from both reads.
-        let mut users = history.users;
-        users.extend(rechecked.users);
-        let mut chats = history.chats;
-        chats.extend(rechecked.chats);
-        match self
-            .ingest_messages(
-                &principal,
-                target_key,
-                &bodies,
-                &users,
-                &chats,
-                run_removals,
-            )
-            .await
-        {
-            Ok(ids) => {
-                let n = ids.len() as u64;
-                if n > 0 {
-                    if window_full {
-                        self.persist_catchup_demand(target_key).await;
-                    } else {
-                        self.clear_catchup_demand(target_key).await;
+            if empty {
+                // Still upsert any entities the window carried.
+                if !history.users.is_empty() || !history.chats.is_empty() {
+                    let no_exclude: HashSet<i64> = HashSet::new();
+                    match self
+                        .ingest_catchup_window(
+                            &ctx,
+                            &[],
+                            &history.users,
+                            &history.chats,
+                            &no_exclude,
+                        )
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(CatchupCommitError::FenceLost) => {
+                            return Err(TinkleError::Sync(format!(
+                                "reconcile scope changed for {target_key}; dropping stale pages"
+                            )));
+                        }
+                        Err(CatchupCommitError::Failed(e)) => {
+                            tracing::debug!(target_key, error = %e, "new-message catch-up ingest failed");
+                            self.persist_catchup_demand(
+                                &ctx,
+                                offset_id,
+                                run_top,
+                                covering_new,
+                                chain_top,
+                            )
+                            .await;
+                            return Ok(total);
+                        }
                     }
                 }
-                n
+            } else {
+                let mut missing: Vec<i64> = history
+                    .messages
+                    .iter()
+                    .map(|m| m.message_id)
+                    .filter(|id| *id > 0 && !cached.contains(id) && !run_removals.contains(id))
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                missing.sort_unstable();
+                if !missing.is_empty() {
+                    // Re-check existence via GetMessages: omitted ids are
+                    // deleted / invisible and must not be ingested.
+                    let rechecked = match self.get_messages(*target, missing.clone()).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::debug!(target_key, error = %e, "new-message catch-up fetch failed");
+                            self.persist_catchup_demand(
+                                &ctx,
+                                offset_id,
+                                run_top,
+                                covering_new,
+                                chain_top,
+                            )
+                            .await;
+                            return Ok(total);
+                        }
+                    };
+                    let live_ids: HashSet<i64> =
+                        rechecked.messages.iter().map(|m| m.message_id).collect();
+                    // Keep history bodies for ids the server confirmed, so
+                    // edit_date / accept_seq from either source survive;
+                    // prefer the GetMessages copy when both exist (it is
+                    // the fresher read).
+                    let mut by_id: HashMap<i64, tinkle_schema::proto::Message> = HashMap::new();
+                    for m in history.messages {
+                        if live_ids.contains(&m.message_id) && !run_removals.contains(&m.message_id)
+                        {
+                            by_id.insert(m.message_id, m);
+                        }
+                    }
+                    for m in rechecked.messages {
+                        if !run_removals.contains(&m.message_id) {
+                            by_id.insert(m.message_id, m);
+                        }
+                    }
+                    // An all-deleted/all-omitted window ingests nothing but
+                    // continues paging below; it never clears demand here.
+                    if !by_id.is_empty() {
+                        let bodies: Vec<tinkle_schema::proto::Message> =
+                            by_id.into_values().collect();
+                        // Merge entity hydration from both reads.
+                        let mut users = history.users;
+                        users.extend(rechecked.users);
+                        let mut chats = history.chats;
+                        chats.extend(rechecked.chats);
+                        match self
+                            .ingest_catchup_window(&ctx, &bodies, &users, &chats, run_removals)
+                            .await
+                        {
+                            Ok(ids) => {
+                                for id in &ids {
+                                    cached.insert(*id);
+                                }
+                                total += ids.len() as u64;
+                            }
+                            Err(CatchupCommitError::FenceLost) => {
+                                return Err(TinkleError::Sync(format!(
+                                    "reconcile scope changed for {target_key}; dropping stale pages"
+                                )));
+                            }
+                            Err(CatchupCommitError::Failed(e)) => {
+                                tracing::debug!(target_key, error = %e, "new-message catch-up ingest failed");
+                                self.persist_catchup_demand(
+                                    &ctx,
+                                    offset_id,
+                                    run_top,
+                                    covering_new,
+                                    chain_top,
+                                )
+                                .await;
+                                return Ok(total);
+                            }
+                        }
+                    }
+                }
             }
-            Err(e) => {
-                tracing::debug!(target_key, error = %e, "new-message catch-up ingest failed");
-                self.persist_catchup_demand(target_key).await;
-                0
+            // Resume fast-forward: while covering post-resume arrivals, stop
+            // descending only on proof of connection to the previously
+            // covered range — the window reaches the stored cover top, or
+            // passes the edge — and jump to the edge instead of re-paging
+            // already-covered windows. A merely overlapping cached id proves
+            // nothing about contiguity (healed windows, scrolled-back history,
+            // and seeds plant scattered ids below the edge), so overlap alone
+            // must neither end coverage nor trigger the jump. Routine-hint
+            // runs funnel through here too, so they resume from the edge
+            // rather than being restricted to the newest window while older
+            // history may still be uncached.
+            if covering_new {
+                let reached_top = matches!((min_id, cover_top), (Some(m), Some(t)) if m <= t);
+                let past_edge = matches!((min_id, resume.edge), (Some(m), Some(e)) if m <= e);
+                if reached_top || past_edge {
+                    covering_new = false;
+                    if !past_edge {
+                        // Strictly above the stored edge: jump to it. The
+                        // next loop-top bound check still applies; the
+                        // no-progress guard recalibrates from the edge.
+                        offset_id = resume.edge;
+                        prev_edge = None;
+                        continue;
+                    }
+                    // Reached or passed the edge in transit: the stored edge
+                    // is behind us, so keep normal paging from here.
+                }
+                // Otherwise this window sits strictly above the covered
+                // range: keep covering with the normal advancement below.
+            }
+            // Paging decision mirrors `load_history`.
+            match more {
+                Some(true) => {
+                    let next = match offset {
+                        Some(off) => Some(off),
+                        None => min_id,
+                    };
+                    let Some(next_edge) = next else {
+                        // Server claims more but supplies no cursor.
+                        tracing::debug!(
+                            target_key,
+                            "new-message catch-up stalled: more_available without edge"
+                        );
+                        self.persist_catchup_demand(
+                            &ctx,
+                            offset_id,
+                            run_top,
+                            covering_new,
+                            chain_top,
+                        )
+                        .await;
+                        return Ok(total);
+                    };
+                    if let Some(prev) = prev_edge {
+                        if next_edge >= prev {
+                            tracing::debug!(
+                                target_key,
+                                prev,
+                                next_edge,
+                                "new-message catch-up stalled: edge did not advance"
+                            );
+                            self.persist_catchup_demand(
+                                &ctx,
+                                offset_id,
+                                run_top,
+                                covering_new,
+                                chain_top,
+                            )
+                            .await;
+                            return Ok(total);
+                        }
+                    }
+                    prev_edge = Some(next_edge);
+                    offset_id = Some(next_edge);
+                    continue;
+                }
+                Some(false) => {
+                    self.clear_catchup_demand(&ctx).await;
+                    return Ok(total);
+                }
+                None => {
+                    if empty || !full {
+                        self.clear_catchup_demand(&ctx).await;
+                        return Ok(total);
+                    }
+                    let Some(edge) = min_id else {
+                        self.clear_catchup_demand(&ctx).await;
+                        return Ok(total);
+                    };
+                    if let Some(prev) = prev_edge {
+                        if edge >= prev {
+                            tracing::debug!(
+                                target_key,
+                                prev,
+                                edge,
+                                "new-message catch-up stalled: edge did not advance"
+                            );
+                            self.persist_catchup_demand(
+                                &ctx,
+                                offset_id,
+                                run_top,
+                                covering_new,
+                                chain_top,
+                            )
+                            .await;
+                            return Ok(total);
+                        }
+                    }
+                    prev_edge = Some(edge);
+                    offset_id = Some(edge);
+                    continue;
+                }
             }
         }
     }
 
-    /// Persist an unfinished catch-up: durable `background_sync_jobs` row
-    /// when the table exists, plus the in-memory demand entry. Never fails.
+    /// One fenced catch-up commit: hold `checkpoint_save_lock`, re-check
+    /// the run fence under it with the preserved fence generation, then
+    /// commit under `fence_principal` (never a function-start snapshot).
+    /// Mirrors the journal shard commit path, so ingestion cannot race a
+    /// logout or principal switch that lands between the check and the
+    /// commit. Fence loss is `FenceLost` (caller drops the stale page with
+    /// a scope-changed error and no effects); anything else is `Failed`
+    /// (caller persists demand with the next offset).
     #[cfg(not(target_arch = "wasm32"))]
-    async fn persist_catchup_demand(&self, target_key: &str) {
+    async fn ingest_catchup_window(
+        &self,
+        ctx: &CatchupCommitCtx<'_>,
+        messages: &[tinkle_schema::proto::Message],
+        users: &[tinkle_schema::proto::User],
+        chats: &[tinkle_schema::proto::Chat],
+        exclude: &HashSet<i64>,
+    ) -> Result<Vec<i64>, CatchupCommitError> {
+        let _guard = ctx.mgr.checkpoint_save_lock().await;
+        if !ctx
+            .mgr
+            .check_fence(ctx.fence_principal, ctx.fence_generation)
+            .await
         {
-            let mut pending = self.catchup_pending.lock().await;
-            pending.insert(target_key.to_string());
+            return Err(CatchupCommitError::FenceLost);
         }
-        let (principal, storage) = match (self.principal().await, self.sqlite.clone()) {
-            (p, Some(s)) if p != UNKNOWN_PRINCIPAL => (p, s),
+        self.ingest_messages(
+            ctx.fence_principal,
+            ctx.target_key,
+            IngestBatch {
+                messages,
+                users,
+                chats,
+                exclude,
+            },
+            ctx.epoch,
+        )
+        .await
+        .map_err(CatchupCommitError::Failed)
+    }
+
+    /// Persist an unfinished catch-up: durable `background_sync_jobs` row
+    /// when the table exists, plus the in-memory demand entry. Never fails
+    /// the run (a skipped persist just retries from the retained edge).
+    /// `next_offset` is the `GetHistory` offset this run stopped at and
+    /// `run_top` the newest id it observed. The stored edge only ever moves
+    /// deeper: it is replaced solely by a deeper offset, so a persist from
+    /// the covering phase (whose offsets sit above the edge) can never
+    /// clobber it with a shallower one. The cover top is claimed from the
+    /// current run only when nothing is stored yet, and retained
+    /// afterwards, so the next run can prove connection to the contiguous
+    /// range. A legacy row (edge without a proven top) keeps an empty top
+    /// so resume pages through the edge instead of jumping over
+    /// potentially uncached arrivals. Both travel in-memory and in the
+    /// durable payload.
+    /// Holds `checkpoint_save_lock` and re-checks the fence first: a stale
+    /// run (logout/principal switch mid-flight) skips the write instead of
+    /// recording demand under the wrong scope. Durable writes go under
+    /// `fence_principal`, never a function-start snapshot.
+    /// `covering_open` marks an in-flight covering chain (`covering_new`
+    /// at the persist point): the current offset is stored as the covering
+    /// cursor so the next run resumes mid-chain instead of restarting at
+    /// the newest window — chains longer than the per-run budget would
+    /// otherwise never connect and the tail below the edge would starve.
+    /// When the chain closed this run (`!covering_open` with a claimed
+    /// `chain_top`), the covering cursor is cleared and `cover_top` widens
+    /// to the chain's starting top.
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn persist_catchup_demand(
+        &self,
+        ctx: &CatchupCommitCtx<'_>,
+        next_offset: Option<i64>,
+        run_top: Option<i64>,
+        covering_open: bool,
+        chain_top: Option<i64>,
+    ) {
+        let _guard = ctx.mgr.checkpoint_save_lock().await;
+        if !ctx
+            .mgr
+            .check_fence(ctx.fence_principal, ctx.fence_generation)
+            .await
+        {
+            return;
+        }
+        let resume = {
+            let mut pending = self.catchup_pending.lock().await;
+            let stored = pending.get(ctx.target_key).copied().unwrap_or_default();
+            // The edge only ever moves deeper: a covering-phase persist
+            // (whose offsets sit above the edge) can never clobber it with
+            // a shallower one. The established cover top is retained; the
+            // current run's top is claimed only when nothing is stored.
+            let edge = match (stored.edge, next_offset) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (Some(a), None) => Some(a),
+                (None, b) => b,
+            };
+            let cover_top = match (covering_open, chain_top) {
+                // The covering chain connected this run: clear the cursor
+                // and widen the proven top to the chain's starting top.
+                (false, Some(chain)) => Some(match stored.cover_top {
+                    Some(t) => t.max(chain),
+                    None => chain,
+                }),
+                // Chain still open or none: legacy retention rules below.
+                _ => {
+                    match (stored.edge, stored.cover_top, run_top) {
+                        // Retained top describes the contiguous range already
+                        // proven; never replace it mid-chain.
+                        (_, Some(t), _) => Some(t),
+                        // Legacy row (edge without a proven top): keep it empty
+                        // so the resume fallback (top = edge) pages through the
+                        // edge instead of jumping over potentially uncached
+                        // arrivals.
+                        (Some(_), None, _) => None,
+                        // Fresh claim: the current run's top starts the proven
+                        // range.
+                        (None, None, c) => c,
+                    }
+                }
+            };
+            // Covering cursor: only while the chain is open and a resume
+            // offset exists; a chain broken without a cursor restarts
+            // newest, so its top claim is dropped too.
+            let covering = if covering_open && next_offset.is_some() && edge.is_some() {
+                next_offset
+            } else {
+                None
+            };
+            let covering_top = covering.and_then(|_| stored.covering_top.or(chain_top));
+            let resume = CatchupResume {
+                edge,
+                cover_top: if edge.is_some() { cover_top } else { None },
+                covering,
+                covering_top,
+            };
+            pending.insert(ctx.target_key.to_string(), resume);
+            resume
+        };
+        let storage = match self.sqlite.clone() {
+            Some(s) => s,
             _ => return,
         };
+        let principal = ctx.fence_principal.to_string();
+        let target_key = ctx.target_key.to_string();
         let job_id = format!("catchup:{target_key}");
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1651,55 +2289,182 @@ impl Client {
         let job = tinkle_storage::BackgroundSyncJob {
             job_id: job_id.clone(),
             kind: "new_messages".to_string(),
-            target_key: target_key.to_string(),
+            target_key,
             state: "pending".to_string(),
-            payload: Vec::new(),
+            payload: Self::encode_resume_state(resume),
             attempts: 0,
             next_due: now,
             claimed_by: None,
             updated_at: now,
         };
-        let p = principal.clone();
-        let result =
-            tokio::task::spawn_blocking(move || storage.enqueue_background_sync_job(&p, &job))
-                .await;
+        let result = tokio::task::spawn_blocking(move || {
+            storage.enqueue_background_sync_job(&principal, &job)
+        })
+        .await;
         match result {
             // Ok(true) = durable row written; Ok(false) = table missing,
             // in-memory demand above is the retry path.
             Ok(Ok(_)) => {}
             Ok(Err(e)) => {
-                tracing::debug!(target_key, error = %e, "catch-up job persist failed");
+                tracing::debug!(target_key = ctx.target_key, error = %e, "catch-up job persist failed");
             }
             Err(e) => {
-                tracing::debug!(target_key, error = %e, "catch-up job task failed");
+                tracing::debug!(target_key = ctx.target_key, error = %e, "catch-up job task failed");
             }
         }
     }
 
     /// Clear a finished catch-up from both the durable table (when present)
-    /// and the in-memory set. Missing-table is not an error.
+    /// and the in-memory map. Missing-table is not an error. Holds
+    /// `checkpoint_save_lock` and re-checks the fence first: a stale run
+    /// that reaches the boundary after a scope change leaves the live
+    /// scope's demand alone instead of clearing it.
     #[cfg(not(target_arch = "wasm32"))]
-    async fn clear_catchup_demand(&self, target_key: &str) {
+    async fn clear_catchup_demand(&self, ctx: &CatchupCommitCtx<'_>) {
+        let _guard = ctx.mgr.checkpoint_save_lock().await;
+        if !ctx
+            .mgr
+            .check_fence(ctx.fence_principal, ctx.fence_generation)
+            .await
+        {
+            return;
+        }
         {
             let mut pending = self.catchup_pending.lock().await;
-            pending.remove(target_key);
+            pending.remove(ctx.target_key);
         }
-        let (principal, storage) = match (self.principal().await, self.sqlite.clone()) {
-            (p, Some(s)) if p != UNKNOWN_PRINCIPAL => (p, s),
+        let storage = match self.sqlite.clone() {
+            Some(s) => s,
             _ => return,
         };
-        let job_id = format!("catchup:{target_key}");
-        let p = principal.clone();
-        let _ =
-            tokio::task::spawn_blocking(move || storage.delete_background_sync_job(&p, &job_id))
-                .await;
+        let principal = ctx.fence_principal.to_string();
+        let job_id = format!("catchup:{}", ctx.target_key);
+        let _ = tokio::task::spawn_blocking(move || {
+            storage.delete_background_sync_job(&principal, &job_id)
+        })
+        .await;
+    }
+
+    /// Encode a catch-up resume state for `BackgroundSyncJob.payload`.
+    /// A missing edge encodes as empty (demand starting newest); the top
+    /// rides along only when an edge is present. Older single-edge rows
+    /// (`resume_offset=N` without a top) still decode.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn encode_resume_state(resume: CatchupResume) -> Vec<u8> {
+        let Some(edge) = resume.edge else {
+            return Vec::new();
+        };
+        let mut out = format!("resume_offset={edge}");
+        if let Some(t) = resume.cover_top {
+            out.push_str(&format!(";cover_top={t}"));
+        }
+        if let Some(c) = resume.covering {
+            out.push_str(&format!(";covering={c}"));
+        }
+        if let Some(t) = resume.covering_top {
+            out.push_str(&format!(";covering_top={t}"));
+        }
+        out.into_bytes()
+    }
+
+    /// Decode a catch-up resume state; garbage (or a non-positive edge)
+    /// means start newest.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn decode_resume_state(payload: &[u8]) -> CatchupResume {
+        let text = match std::str::from_utf8(payload) {
+            Ok(t) => t,
+            Err(_) => return CatchupResume::default(),
+        };
+        let mut edge = None;
+        let mut cover_top = None;
+        let mut covering = None;
+        let mut covering_top = None;
+        for part in text.split(';') {
+            let Some((k, v)) = part.split_once('=') else {
+                continue;
+            };
+            let Ok(n) = v.parse::<i64>() else {
+                continue;
+            };
+            if n <= 0 {
+                continue;
+            }
+            match k {
+                "resume_offset" => edge = Some(n),
+                "cover_top" => cover_top = Some(n),
+                "covering" => covering = Some(n),
+                "covering_top" => covering_top = Some(n),
+                _ => {}
+            }
+        }
+        // Fields without their precondition are meaningless (same
+        // invariants as persist): top and covering require an edge, and a
+        // covering top requires the cursor.
+        let with_edge = edge.is_some();
+        cover_top = if with_edge { cover_top } else { None };
+        covering = if with_edge { covering } else { None };
+        covering_top = if covering.is_some() {
+            covering_top
+        } else {
+            None
+        };
+        CatchupResume {
+            edge,
+            cover_top,
+            covering,
+            covering_top,
+        }
+    }
+
+    /// Load durable catch-up resume edges for one principal into the
+    /// in-memory map (pre-restart runs persisted them via
+    /// `persist_catchup_demand`). Runs at login; the sweep then resumes
+    /// from these edges. Best-effort: a missing table or no rows just
+    /// means no stored resume state. Only fills gaps: a live in-memory
+    /// edge (same process, deeper run) always wins over the durable row.
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn hydrate_catchup_resume_edges(&self, principal: &str) {
+        let storage = match self.sqlite.clone() {
+            Some(s) => s,
+            None => return,
+        };
+        let p = principal.to_string();
+        let jobs = match tokio::task::spawn_blocking(move || {
+            storage.list_background_sync_jobs(&p, Some("pending"))
+        })
+        .await
+        {
+            Ok(Ok(j)) => j,
+            _ => return,
+        };
+        if jobs.is_empty() {
+            return;
+        }
+        let mut pending = self.catchup_pending.lock().await;
+        for job in jobs {
+            if job.kind != "new_messages" {
+                continue;
+            }
+            pending
+                .entry(job.target_key)
+                .or_insert_with(|| Self::decode_resume_state(&job.payload));
+        }
     }
 
     /// Best-effort history heal for a journal skip: fetch the latest history
     /// window and repopulate the offline cache without moving the journal
     /// cursor. Failures are logged, never fatal to the reconcile run.
     /// Uses the shared `ingest_messages` helper (same-cursor commit).
-    async fn heal_via_history(&self, target: &tinkle_schema::proto::Target, target_key: &str) {
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+    async fn heal_via_history(
+        &self,
+        mgr: &SyncManager,
+        fence_principal: &str,
+        fence_generation: u64,
+        run_epoch: u64,
+        target: &tinkle_schema::proto::Target,
+        target_key: &str,
+    ) {
         let req = tinkle_schema::proto::GetHistoryRequest {
             target: Some(*target),
             offset_id: None,
@@ -1713,19 +2478,31 @@ impl Client {
             Ok(resp) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 if self.sqlite.is_some() {
-                    let principal = self.principal().await;
-                    if principal != UNKNOWN_PRINCIPAL {
+                    // Fence the heal: hold the manager checkpoint lock,
+                    // re-check the run fence, and commit under the fenced
+                    // principal + client epoch so a heal started before
+                    // logout cannot write afterward. Losses are logged and
+                    // dropped; the heal stays best-effort.
+                    let _guard = mgr.checkpoint_save_lock().await;
+                    if mgr.check_fence(fence_principal, fence_generation).await
+                        && self.reconcile_epoch() == run_epoch
+                    {
                         let empty = HashSet::new();
                         let _ = self
                             .ingest_messages(
-                                &principal,
+                                fence_principal,
                                 target_key,
-                                &resp.messages,
-                                &resp.users,
-                                &resp.chats,
-                                &empty,
+                                IngestBatch {
+                                    messages: &resp.messages,
+                                    users: &resp.users,
+                                    chats: &resp.chats,
+                                    exclude: &empty,
+                                },
+                                run_epoch,
                             )
                             .await;
+                    } else {
+                        tracing::debug!(target_key, "history heal fenced; dropping page");
                     }
                 }
                 tracing::debug!(
@@ -2188,7 +2965,7 @@ impl Client {
         }
         let dirty: HashSet<String> = mgr.dirty_keys().await.into_iter().collect();
         let pending_catchup: HashSet<String> =
-            self.catchup_pending.lock().await.iter().cloned().collect();
+            self.catchup_pending.lock().await.keys().cloned().collect();
         let mut added = Vec::new();
         for key in keys {
             if demand.contains_key(&key) {
@@ -2309,6 +3086,7 @@ impl Client {
         &self,
         req: tinkle_schema::proto::GetHistoryRequest,
     ) -> Result<tinkle_schema::proto::GetHistoryResponse, TinkleError> {
+        let run_epoch = self.reconcile_epoch();
         if req.target.is_none() {
             return Err(TinkleError::Codec(
                 "GetHistoryRequest.target missing".into(),
@@ -2394,10 +3172,13 @@ impl Client {
                         .ingest_messages(
                             &principal,
                             &key,
-                            &all_messages,
-                            &all_users,
-                            &all_chats,
-                            &empty,
+                            IngestBatch {
+                                messages: &all_messages,
+                                users: &all_users,
+                                chats: &all_chats,
+                                exclude: &empty,
+                            },
+                            run_epoch,
                         )
                         .await;
                 }
@@ -2684,5 +3465,54 @@ mod tests {
             std::time::Duration::from_secs(60)
         );
         assert!(TargetDemand::fresh().next_due <= std::time::Instant::now());
+    }
+
+    #[test]
+    fn resume_state_codec_round_trips() {
+        use super::{CatchupResume, Client};
+        // Full v3 row: edge + top + open covering chain.
+        let full = CatchupResume {
+            edge: Some(151),
+            cover_top: Some(250),
+            covering: Some(301),
+            covering_top: Some(1300),
+        };
+        assert_eq!(
+            Client::decode_resume_state(&Client::encode_resume_state(full)),
+            full
+        );
+        // v2 row (edge + top, no covering) still decodes; the covering
+        // top is dropped without its cursor.
+        let v2 = Client::decode_resume_state(b"resume_offset=151;cover_top=250");
+        assert_eq!(v2.edge, Some(151));
+        assert_eq!(v2.cover_top, Some(250));
+        assert_eq!(v2.covering, None);
+        assert_eq!(v2.covering_top, None);
+        let orphan_top = Client::decode_resume_state(b"resume_offset=151;covering_top=1300");
+        assert_eq!(orphan_top.covering_top, None);
+        // Edge without a top (older single-edge rows) still decodes.
+        let edge_only = Client::decode_resume_state(b"resume_offset=151");
+        assert_eq!(edge_only.edge, Some(151));
+        assert_eq!(edge_only.cover_top, None);
+        // No edge encodes as empty; garbage decodes as fresh demand.
+        assert!(Client::encode_resume_state(CatchupResume::default()).is_empty());
+        assert_eq!(Client::decode_resume_state(&[]), CatchupResume::default());
+        assert_eq!(
+            Client::decode_resume_state(b"resume_offset=0"),
+            CatchupResume::default()
+        );
+        assert_eq!(
+            Client::decode_resume_state(b"garbage"),
+            CatchupResume::default()
+        );
+        assert_eq!(
+            Client::decode_resume_state(b"resume_offset=-5;cover_top=10"),
+            CatchupResume::default()
+        );
+        // A covering cursor without an edge is meaningless.
+        assert_eq!(
+            Client::decode_resume_state(b"covering=301"),
+            CatchupResume::default()
+        );
     }
 }
