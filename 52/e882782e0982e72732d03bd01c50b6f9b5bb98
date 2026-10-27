@@ -1,0 +1,19 @@
+crates/libtinkle/src/client.rs
+  s_594cf7bcdb17bb::t_1b274e9be7fd24 343-354
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "52e882782e0982e72732d03bd01c50b6f9b5bb98",
+  "prompts": {},
+  "sessions": {
+    "s_594cf7bcdb17bb": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e84aab78dffetyVbfGGdTiAzH2",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "oscarlaw <oscarlaw2010@gmail.com>"
+    }
+  }
+}
