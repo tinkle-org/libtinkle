@@ -340,14 +340,22 @@ impl Client {
         // the previous principal would resume the wrong cache. Clear on
         // principal change, before hydrating this principal's durable rows.
         // (Unchanged principal keeps live edges; hydration only fills gaps.)
+        //
+        // The client checkpoint lock is taken on every call — before
+        // reading the current principal — and `changed` is computed under
+        // it, so the check cannot race another principal writer and no
+        // ingest can slip between the check and the epoch invalidation.
+        // From here through both principal writes, an in-flight ingest
+        // either completes before the switch or fails the epoch check: it
+        // can never observe the new epoch with the old principal. The
+        // guard releases after `self.principal` and `set_principal` have
+        // both landed. Epoch bump and demand clear stay changed-only.
+        #[cfg(not(target_arch = "wasm32"))]
+        let _client_guard = self.checkpoint_save.lock().await;
         #[cfg(not(target_arch = "wasm32"))]
         let changed = *self.principal.read().await != p;
         #[cfg(not(target_arch = "wasm32"))]
         if changed {
-            // Invalidate in-flight ingests under the old principal before
-            // clearing demand: the bump waits on the client checkpoint
-            // lock, so it also drains them.
-            let _g = self.checkpoint_save.lock().await;
             self.reconcile_epoch.fetch_add(1, Ordering::SeqCst);
             self.catchup_pending.lock().await.clear();
         }
