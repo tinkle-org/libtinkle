@@ -44,6 +44,6 @@ tokio-util = { version = "0.7" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
-tokio-tungstenite = { version = "0.26" }
+tokio-tungstenite = { version = "0.30" }
 futures-util = "0.3"
 anyhow = "1"

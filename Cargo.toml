@@ -20,7 +20,7 @@ rust-version = "1.91"
 prost = "0.14"
 prost-types = "0.14"
 tokio = { version = "1", features = ["full"] }
-tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 futures-util = "0.3"
 tungstenite = "0.26"
 thiserror = "2"
