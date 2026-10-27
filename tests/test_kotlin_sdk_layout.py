@@ -29,6 +29,9 @@ class KotlinSdkLayoutTest(unittest.TestCase):
             "sample/src/main/kotlin/com/tinkle/sdk/smoke/SmokeChecks.kt",
             "sample/src/androidTest/kotlin/com/tinkle/sdk/smoke/NativeSmokeTest.kt",
             "scripts/verify-consumer.sh",
+            "fixture-tests/settings.gradle.kts", "fixture-tests/build.gradle.kts",
+            "fixture-tests/src/test/kotlin/android/util/Base64.kt",
+            "fixture-tests/src/test/kotlin/com/tinkle/sdk/smoke/LoopbackGatewayTest.kt",
         )
         for name in required:
             with self.subTest(path=name):
@@ -79,6 +82,16 @@ class KotlinSdkLayoutTest(unittest.TestCase):
                 content = (SDK / name).read_text()
                 self.assertNotIn("tinklehq", content)
                 self.assertIn("tinkle-org", content)
+
+    def test_kotlin_2_3_uses_compatible_r8_and_fixture_tests_are_jvm_only(self):
+        build = (SDK / "build.gradle.kts").read_text()
+        self.assertIn('id("org.jetbrains.kotlin.android") version "2.3.0"', build)
+        self.assertEqual(build.count('version "8.13.2"'), 2)
+        fixture = (SDK / "fixture-tests/build.gradle.kts").read_text()
+        self.assertIn('kotlin("jvm") version "2.3.0"', fixture)
+        self.assertIn('kotlin.srcDir("../sample/src/main/kotlin")', fixture)
+        self.assertIn('kotlin.exclude("**/SmokeChecks.kt")', fixture)
+        self.assertNotIn("fixture-tests", (SDK / "sample/build.gradle.kts").read_text())
 
 
 if __name__ == "__main__":

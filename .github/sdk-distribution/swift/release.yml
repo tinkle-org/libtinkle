@@ -1,0 +1,146 @@
+# Inactive source template; manual installation requirements: ../README.md.
+# PR validation uses 26.6; release qualification requires exactly 27.1, with no fallback.
+name: Swift SDK release tag
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      sdk_sha:
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: swift-sdk-release-${{ github.ref }}-${{ inputs.sdk_sha }}
+  cancel-in-progress: false
+jobs:
+  qualify:
+    if: github.repository == 'tinkle-org/tinkle-sdk-swift' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      XCODE_VERSION: '27.1'
+      IPHONEOS_DEPLOYMENT_TARGET: '15.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sdk_sha }}
+          fetch-depth: 0
+          path: sdk
+          persist-credentials: false
+      - name: Validate supplied SHAs and protected core provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SDK_SHA: ${{ inputs.sdk_sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          with open('sdk/sdk-artifact.json') as manifest:
+              data = json.load(manifest)
+          sha = data['source_revision']
+          assert data['source_repository'] == 'tinkle-org/libtinkle' and re.fullmatch('[0-9a-f]{40}', sha)
+          assert sha == os.environ['SOURCE_SHA'], 'Manifest source revision must match the validated CI source'
+          assert re.fullmatch('[0-9a-f]{40}', os.environ['SDK_SHA']), 'Expected exact SDK revision'
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd='sdk', text=True).strip() == os.environ['SDK_SHA'], 'SDK checkout must match the validated CI commit'
+          branch = json.loads(subprocess.check_output(['gh', 'api', 'repos/tinkle-org/libtinkle/branches/main']))
+          assert branch['protected'], 'Core main must be protected'
+          compare = json.loads(subprocess.check_output(['gh', 'api', 'repos/tinkle-org/libtinkle/compare/' + sha + '...main']))
+          assert compare['merge_base_commit']['sha'] == sha, 'Core automation must be on main'
+          PY
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tinkle-org/libtinkle
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          path: core
+          persist-credentials: false
+      - name: Select and verify release Xcode (no validation-version fallback)
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1 (Node 24)
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+      - name: Assert exact Xcode version
+        run: |
+          IFS= read -r selected < <(xcodebuild -version)
+          test "$selected" = "Xcode $XCODE_VERSION"
+          xcrun --show-sdk-path
+      - name: Verify published checksums and generated binding parity
+        run: python3 core/scripts/sdk-ci.py stage --sdk swift --destination sdk --artifacts artifacts --download
+      - name: Qualify release consumer on the available current simulator runtime
+        run: python3 core/scripts/sdk-ci.py swift-test --destination sdk
+      - name: Collect failure toolchain evidence (no environment or credentials)
+        if: failure()
+        run: |
+          mkdir -p evidence
+          xcodebuild -version > evidence/xcode-version.txt 2>&1 || true
+          xcrun simctl list devices available > evidence/simulator-devices.txt 2>&1 || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: swift-release-consumer-results
+          include-hidden-files: true # Only the explicit xcresult/evidence paths below.
+          path: |
+            sdk/.build/ci-results.xcresult
+            evidence/xcode-version.txt
+            evidence/simulator-devices.txt
+          retention-days: 14
+  authorize:
+    needs: qualify
+    if: github.repository == 'tinkle-org/tinkle-sdk-swift' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sdk_sha }}
+          fetch-depth: 0
+          path: sdk
+          persist-credentials: false
+      - name: Validate supplied SHAs and protected core provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SDK_SHA: ${{ inputs.sdk_sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          with open('sdk/sdk-artifact.json') as manifest:
+              data = json.load(manifest)
+          sha = data['source_revision']
+          assert data['source_repository'] == 'tinkle-org/libtinkle' and re.fullmatch('[0-9a-f]{40}', sha)
+          assert sha == os.environ['SOURCE_SHA'], 'Manifest source revision must match the validated CI source'
+          assert re.fullmatch('[0-9a-f]{40}', os.environ['SDK_SHA']), 'Expected exact SDK revision'
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd='sdk', text=True).strip() == os.environ['SDK_SHA'], 'SDK checkout must match the validated CI commit'
+          branch = json.loads(subprocess.check_output(['gh', 'api', 'repos/tinkle-org/libtinkle/branches/main']))
+          assert branch['protected'], 'Core main must be protected'
+          compare = json.loads(subprocess.check_output(['gh', 'api', 'repos/tinkle-org/libtinkle/compare/' + sha + '...main']))
+          assert compare['merge_base_commit']['sha'] == sha, 'Core automation must be on main'
+          PY
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tinkle-org/libtinkle
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          path: core
+          persist-credentials: false
+      - name: Verify merged release PR, published manifest, full snapshot, and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          SDK_REF: ${{ github.ref }}
+        run: |
+          if [[ "$EVENT_NAME" != push ]]; then
+            exit 1
+          fi
+          if [[ "$SDK_REF" == refs/heads/main ]]; then
+            python3 core/scripts/sdk-ci.py sdk-tag --sdk swift --destination sdk --create
+          elif [[ "$SDK_REF" == refs/tags/v* ]]; then
+            python3 core/scripts/sdk-ci.py sdk-tag --sdk swift --destination sdk
+          else
+            exit 1
+          fi

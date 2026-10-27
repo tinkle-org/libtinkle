@@ -422,7 +422,7 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "provenance"):
             release.promote(self.manifest, self.artifacts, "kotlin", destination)
 
-    def test_android_build_runs_buildsrc_tests_separately(self):
+    def test_android_build_runs_fixture_and_buildsrc_tests_before_assembly(self):
         destination = self.root / "android"
         destination.mkdir()
         (destination / "gradlew").write_text("#!/bin/sh\nexit 0\n")
@@ -430,13 +430,14 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "one final release AAR"):
                 ci.android_build(destination, self.artifacts)
             self.assertEqual(command.call_args_list[0].args,
+                             ("bash", destination / "gradlew", "--no-daemon", "-p", "fixture-tests", "test"))
+            self.assertEqual(command.call_args_list[1].args,
                              ("bash", destination / "gradlew", "-p", "buildSrc", "test"))
+            self.assertEqual(command.call_args_list[2].args,
+                             ("bash", destination / "gradlew", "--no-daemon", "assembleRelease", "testReleaseUnitTest"))
 
     def consumer_scaffold(self, sdk, destination):
-        try:
-            names = ci.local_package_files(sdk)
-        except ValueError:
-            names = ci.CONSUMER_FILES[sdk]
+        names = ci.local_package_files(sdk)
         for name in names:
             path = destination / name
             path.parent.mkdir(parents=True, exist_ok=True)

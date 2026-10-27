@@ -25,8 +25,19 @@ public object SmokeChecks {
             TinkleSdk.initialize()
             uniffiEnsureInitialized()
             InMemoryFfiStore().destroy()
-            foreignJournalCallbacks()
-            sqlitePersistence()
+            phase("foreign journal callbacks") { foreignJournalCallbacks() }
+            phase("SQLite persistence and journal resume") { sqlitePersistence() }
+        }
+    }
+
+    private suspend fun phase(name: String, block: suspend () -> Unit) {
+        try {
+            block()
+        } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            throw AssertionError("Smoke phase failed: $name: ${error.message}", error)
+        } catch (error: AssertionError) {
+            throw AssertionError("Smoke phase failed: $name: ${error.message}", error)
         }
     }
 
@@ -145,6 +156,7 @@ public object SmokeChecks {
                         check(changed.appliedAcceptSeq == 1L)
                         check(storage.loadJournal("user:42", "target:room:7") == 1L)
                         check(gateway.requests.toList() == listOf("target:room:7" to 0L))
+                        check(gateway.historyRequests.toList() == listOf("target:room:7"))
                     } finally {
                         shutdown(client)
                     }
@@ -164,6 +176,8 @@ public object SmokeChecks {
                         client.setPrincipalUserId(42)
                         client.subscribe(listOf(TargetSub("room", 7)), emptyList())
                         check(gateway.requests.toList() == listOf("target:room:7" to 1L))
+                        check(gateway.historyRequests.toList() == listOf("target:room:7"))
+                        check(storage.loadJournal("user:42", "target:room:7") == 1L)
                     } finally {
                         shutdown(client)
                     }

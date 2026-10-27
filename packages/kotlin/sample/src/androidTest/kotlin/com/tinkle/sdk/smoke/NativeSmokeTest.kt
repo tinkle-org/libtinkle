@@ -8,6 +8,13 @@ import org.junit.runner.RunWith
 class NativeSmokeTest {
     @Test
     fun installedAarInitializesAndPersistsThroughRust() {
-        SmokeChecks.run()
+        try {
+            SmokeChecks.run()
+        } catch (error: Throwable) {
+            // Gradle's summary truncates causes and suppressed fixture failures.
+            // Keep the complete chain in device logcat before JUnit reports it.
+            error.printStackTrace()
+            throw error
+        }
     }
 }

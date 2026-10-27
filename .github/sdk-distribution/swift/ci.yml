@@ -1,0 +1,161 @@
+# Inactive source template; installation and release blockers: ../README.md.
+name: Swift SDK CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Bootstrap only: libtinkle branch/tag/SHA; empty uses sdk-artifact.json'
+        type: string
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  group: swift-sdk-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ready: ${{ steps.source.outputs.ready }}
+      core_sha: ${{ steps.source.outputs.core_sha }}
+      bootstrap: ${{ steps.source.outputs.bootstrap }}
+      sdk_sha: ${{ steps.source.outputs.sdk_sha }}
+      release: ${{ steps.source.outputs.release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - id: source
+        name: Select published provenance or explicit bootstrap source
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, re, subprocess, urllib.parse
+          sdk_sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          release = False
+          if os.environ['GITHUB_EVENT_NAME'] == 'push':
+              if os.environ['GITHUB_REF'].startswith('refs/tags/v'):
+                  release = True
+              elif os.environ['GITHUB_REF'] == 'refs/heads/main':
+                  # Read actual commit parents, not shallow-history boundaries. A merge
+                  # is compared only with its first parent, including conflict resolutions.
+                  commit = subprocess.check_output(['git', 'cat-file', '-p', sdk_sha], text=True)
+                  parents = [line.split()[1] for line in commit.split('\n\n', 1)[0].splitlines()
+                             if line.startswith('parent ')]
+                  if parents:
+                      diff = ['git', 'diff', '--name-only', parents[0], sdk_sha]
+                  else:
+                      diff = ['git', 'diff-tree', '--root', '--no-commit-id', '--name-only', '-r', sdk_sha]
+                  changed = subprocess.check_output(diff + ['--', 'sdk-artifact.json'], text=True)
+                  release = 'sdk-artifact.json' in changed.splitlines()
+          metadata = pathlib.Path('sdk-artifact.json')
+          assert not release or metadata.is_file(), 'Release push requires SDK provenance'
+          ref = os.environ.get('SOURCE_REF', '')
+          if metadata.exists():
+              assert not ref, 'Published SDK CI must use its manifest SHA'
+              data = json.loads(metadata.read_text())
+              assert data['source_repository'] == 'tinkle-org/libtinkle'
+              ref = data['source_revision']
+              assert re.fullmatch('[0-9a-f]{40}', ref), 'Expected exact source revision'
+              bootstrap = False
+          else:
+              bootstrap = bool(ref)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('ready=' + str(bool(ref)).lower() + '\n')
+              output.write('bootstrap=' + str(bootstrap).lower() + '\n')
+              output.write('sdk_sha=' + sdk_sha + '\n')
+              output.write('release=' + str(release).lower() + '\n')
+              if ref:
+                  data = json.loads(subprocess.check_output(['gh', 'api', 'repos/tinkle-org/libtinkle/commits/' + urllib.parse.quote(ref, safe='')]))
+                  assert re.fullmatch('[0-9a-f]{40}', data['sha'])
+                  assert bootstrap or data['sha'] == ref, 'Published source revision changed'
+                  output.write('core_sha=' + data['sha'] + '\n')
+              else:
+                  with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+                      summary.write('Native consumer validation is **not run**: awaiting the first core release. Dispatch with explicit source_ref for bootstrap proof. This is not release evidence.\n')
+          PY
+  consumer:
+    needs: source
+    if: needs.source.outputs.ready == 'true'
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.1
+      XCODE_VERSION: '26.6'
+      IPHONEOS_DEPLOYMENT_TARGET: '15.0'
+      BOOTSTRAP: ${{ needs.source.outputs.bootstrap }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sdk_sha }}
+          path: sdk
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tinkle-org/libtinkle
+          ref: ${{ needs.source.outputs.core_sha }}
+          fetch-depth: 0
+          path: core
+          persist-credentials: false
+      - name: Select and verify validation Xcode (release qualification requires 27.1)
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1 (Node 24)
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+      - name: Assert exact Xcode version
+        run: |
+          IFS= read -r selected < <(xcodebuild -version)
+          test "$selected" = "Xcode $XCODE_VERSION"
+          xcrun --show-sdk-path
+      - name: Bootstrap native artifact (test only)
+        if: env.BOOTSTRAP == 'true'
+        working-directory: core
+        env:
+          SDK_OUTPUT_DIR: ${{ github.workspace }}/artifacts
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --target aarch64-apple-ios --target aarch64-apple-ios-sim --target x86_64-apple-ios
+          python3 scripts/sdk-ci.py toolchain
+          bash scripts/build-ios.sh
+      - name: Verify downloaded checksum and binding parity, then stage local XCFramework
+        run: |
+          if [[ "$BOOTSTRAP" == true ]]; then
+            python3 core/scripts/sdk-ci.py stage --sdk swift --destination sdk --artifacts artifacts --bootstrap
+          else
+            python3 core/scripts/sdk-ci.py stage --sdk swift --destination sdk --artifacts artifacts --download
+          fi
+      - name: Simulator consumer test (iOS 15 deployment target; available current runtime)
+        run: python3 core/scripts/sdk-ci.py swift-test --destination sdk
+      - name: Collect failure toolchain evidence (no environment or credentials)
+        if: failure()
+        run: |
+          mkdir -p evidence
+          xcodebuild -version > evidence/xcode-version.txt 2>&1 || true
+          xcrun simctl list devices available > evidence/simulator-devices.txt 2>&1 || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: swift-consumer-results
+          include-hidden-files: true # Only the explicit xcresult/evidence paths below.
+          path: |
+            sdk/.build/ci-results.xcresult
+            evidence/xcode-version.txt
+            evidence/simulator-devices.txt
+          retention-days: 14
+  release:
+    needs: [source, consumer]
+    if: github.repository == 'tinkle-org/tinkle-sdk-swift' && github.event_name == 'push' && needs.source.outputs.bootstrap == 'false' && needs.source.outputs.ready == 'true' && needs.source.outputs.release == 'true' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    permissions:
+      contents: write
+      pull-requests: read
+    # Direct dependency: GITHUB_TOKEN-created tags do not trigger another push run.
+    uses: ./.github/workflows/release.yml
+    with:
+      source_sha: ${{ needs.source.outputs.core_sha }}
+      sdk_sha: ${{ needs.source.outputs.sdk_sha }}

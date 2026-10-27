@@ -16,8 +16,8 @@ import kotlin.concurrent.thread
 
 /**
  * Test fixture only, mirroring libtinkle's client_integration.rs gateway.
- * Field IDs come from syntra.v1.Frame and tinkle.v1.GetTargetChangesResponse.
- * It serves one loopback client and one RPC; it is not a protocol implementation.
+ * Field IDs come from syntra.v1.Frame and tinkle.v1 journal/history responses.
+ * It serves one loopback client and two RPCs; it is not a protocol implementation.
  */
 internal class LoopbackGateway(private val deletionTargets: Set<String> = emptySet()) : AutoCloseable {
     private val listener = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
@@ -25,6 +25,7 @@ internal class LoopbackGateway(private val deletionTargets: Set<String> = emptyS
     @Volatile private var connection: Socket? = null
     val port: Int get() = listener.localPort
     val requests = ConcurrentLinkedQueue<Pair<String, Long>>()
+    val historyRequests = ConcurrentLinkedQueue<String>()
     private val worker = thread(name = "tinkle-smoke-gateway", isDaemon = true) {
         try {
             listener.accept().use { socket ->
@@ -53,7 +54,7 @@ internal class LoopbackGateway(private val deletionTargets: Set<String> = emptyS
                     val frame = fields(readBinary(input, output) ?: break)
                     val request = frame[12] as? ByteArray ?: continue
                     val rpc = fields(request)
-                    check((rpc[1] as ByteArray).toString(Charsets.UTF_8) == "/tinkle.v1.MessagesService/GetTargetChanges")
+                    val method = (rpc[1] as ByteArray).toString(Charsets.UTF_8)
                     val payload = fields(rpc[2] as? ByteArray ?: byteArrayOf())
                     val target = fields(payload[1] as ByteArray)
                     val targetKey = when {
@@ -61,16 +62,28 @@ internal class LoopbackGateway(private val deletionTargets: Set<String> = emptyS
                         target[2] is Long -> "target:room:${target[2]}"
                         else -> error("Missing fixture target")
                     }
-                    val cursor = payload[2] as? Long ?: 0L
-                    requests.add(targetKey to cursor)
-                    val response = if (targetKey in deletionTargets && cursor == 0L) {
-                        // One valid deletion at accept_seq=1 drives a real journal
-                        // commit without requiring GetMessages hydration or history.
-                        val change = number(1, 101) + number(2, 2) + number(4, 1)
-                        bytes(1, change) + number(2, 0) + number(3, 1)
-                    } else {
-                        // Explicitly caught up; empty pages must not invent progress.
-                        number(2, 0) + number(3, cursor)
+                    val response = when (method) {
+                        "/tinkle.v1.MessagesService/GetTargetChanges" -> {
+                            val cursor = payload[2] as? Long ?: 0L
+                            requests.add(targetKey to cursor)
+                            if (targetKey in deletionTargets && cursor == 0L) {
+                                // A deletion drives a journal commit without body hydration.
+                                val change = number(1, 101) + number(2, 2) + number(4, 1)
+                                bytes(1, change) + number(2, 0) + number(3, 1)
+                            } else {
+                                // Empty pages must not invent journal progress.
+                                number(2, 0) + number(3, cursor)
+                            }
+                        }
+                        "/tinkle.v1.MessagesService/GetHistory" -> {
+                            // SQLite reconciliation also discovers new messages after
+                            // journal paging. An empty, terminal history window is valid
+                            // and must not advance the journal acceptance position.
+                            check(payload[5] == 100L) { "Unexpected fixture history limit" }
+                            historyRequests.add(targetKey)
+                            number(6, 0) // GetHistoryResponse.more_available = false.
+                        }
+                        else -> error("Unexpected fixture RPC: $method")
                     }
                     send(output, number(1, 1) + number(2, frame[2] as Long) + bytes(13, bytes(1, response)))
                 }
@@ -85,7 +98,7 @@ internal class LoopbackGateway(private val deletionTargets: Set<String> = emptyS
         connection?.close()
         worker.join(2_000)
         check(!worker.isAlive) { "Gateway did not stop" }
-        failure.get()?.let { throw AssertionError("Loopback gateway failed", it) }
+        failure.get()?.let { throw AssertionError("Loopback gateway failed: ${it.javaClass.simpleName}: ${it.message}", it) }
     }
 
     private fun readBinary(input: DataInputStream, output: OutputStream): ByteArray? {

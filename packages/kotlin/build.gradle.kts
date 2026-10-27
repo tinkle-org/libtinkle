@@ -2,8 +2,9 @@ import com.tinkle.build.PrepareSdkArtifacts
 import com.tinkle.build.SdkArtifacts
 
 plugins {
-    id("com.android.library") version "8.13.0"
-    id("com.android.application") version "8.13.0" apply false
+    // 8.13.2 bundles R8 8.13.19, the Kotlin 2.3-compatible shrinker.
+    id("com.android.library") version "8.13.2"
+    id("com.android.application") version "8.13.2" apply false
     id("org.jetbrains.kotlin.android") version "2.3.0"
     `maven-publish`
 }

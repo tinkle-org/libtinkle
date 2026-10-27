@@ -2,6 +2,7 @@ name: Native SDK artifacts
 on:
   pull_request:
   push:
+    branches: [main]
     tags: ['tinkle-ffi-v*']
   workflow_call:
     inputs:
@@ -29,8 +30,8 @@ permissions:
 env:
   RUSTUP_TOOLCHAIN: 1.99.1
 concurrency:
-  group: native-sdk-${{ inputs.source_ref || github.ref_name }}
-  cancel-in-progress: false
+  group: native-sdk-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || inputs.source_ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   source:
     runs-on: ubuntu-latest
@@ -77,6 +78,12 @@ jobs:
           PY
       - name: Validate local package catalog before native builds
         run: python3 -m unittest discover -s tests -p 'test_sdk_packages.py' -v
+  rust-checks:
+    needs: source
+    if: needs.source.outputs.publish == 'true'
+    uses: ./.github/workflows/ci.yml
+    with:
+      source_sha: ${{ needs.source.outputs.sha }}
   ios:
     needs: source
     runs-on: macos-26
@@ -92,7 +99,14 @@ jobs:
           ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
       - name: Select and verify pinned Xcode
-        run: python3 scripts/sdk-ci.py select-xcode --version "$XCODE_VERSION"
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1 (Node 24)
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+      - name: Assert exact Xcode version
+        run: |
+          IFS= read -r selected < <(xcodebuild -version)
+          test "$selected" = "Xcode $XCODE_VERSION"
+          xcrun --show-sdk-path
       - run: rustup toolchain install 1.99.1 --profile minimal --target aarch64-apple-ios --target aarch64-apple-ios-sim --target x86_64-apple-ios
       - name: Verify pinned generator
         run: python3 scripts/sdk-ci.py toolchain
@@ -123,7 +137,11 @@ jobs:
       - run: rustup toolchain install 1.99.1 --profile minimal --target aarch64-linux-android --target armv7-linux-androideabi --target i686-linux-android --target x86_64-linux-android
       - name: Verify pinned generator
         run: python3 scripts/sdk-ci.py toolchain
-      - run: python3 scripts/sdk-ci.py android-setup
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4 (Node 24)
+        with:
+          packages: 'platform-tools ndk;30.0.16248370 platforms;android-36 build-tools;36.0.0'
+      - name: Pin the NDK used by build and verification tools
+        run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/30.0.16248370" >> "$GITHUB_ENV"
       - run: bash scripts/build-android.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -173,7 +191,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Select and verify pinned Xcode
-        run: python3 scripts/sdk-ci.py select-xcode --version "$XCODE_VERSION"
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1 (Node 24)
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+      - name: Assert exact Xcode version
+        run: |
+          IFS= read -r selected < <(xcodebuild -version)
+          test "$selected" = "Xcode $XCODE_VERSION"
+          xcrun --show-sdk-path
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sdk-release
@@ -184,6 +209,14 @@ jobs:
           python3 scripts/sdk-ci.py stage --sdk swift --destination /tmp/swift-consumer --artifacts artifacts --candidate
       - name: Packaged simulator consumer (deployment target 15; current runtime only)
         run: python3 scripts/sdk-ci.py swift-test --destination /tmp/swift-consumer
+      - name: Preserve simulator test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: swift-consumer-results
+          include-hidden-files: true # Explicit xcresult path, not the whole .build tree.
+          path: /tmp/swift-consumer/.build/ci-results.xcresult
+          retention-days: 14
   kotlin-consumer:
     needs: [source, manifest]
     runs-on: ubuntu-latest
@@ -220,7 +253,11 @@ jobs:
       - run: |
           python3 scripts/sdk-ci.py sync-package --sdk kotlin --destination /tmp/kotlin-consumer
           python3 scripts/sdk-ci.py stage --sdk kotlin --destination /tmp/kotlin-consumer --artifacts artifacts --candidate
-      - run: python3 scripts/sdk-ci.py android-setup
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4 (Node 24)
+        with:
+          packages: 'platform-tools ndk;30.0.16248370 platforms;android-36 build-tools;36.0.0'
+      - name: Pin the NDK used by build and verification tools
+        run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/30.0.16248370" >> "$GITHUB_ENV"
       - name: Assemble and unit-test release AAR
         run: python3 scripts/sdk-ci.py android-build --destination /tmp/kotlin-consumer --artifacts artifacts
       - name: Enable KVM
@@ -232,8 +269,26 @@ jobs:
           arch: x86_64
           disable-animations: true
           script: python3 scripts/sdk-ci.py android-test --destination /tmp/kotlin-consumer --artifacts artifacts --api-level ${{ matrix.api }} --page-size ${{ matrix.pages }}
+      - name: Preserve installed-consumer test evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kotlin-consumer-${{ matrix.api }}-${{ matrix.pages }}
+          path: |
+            /tmp/kotlin-consumer/build/diagnostics
+            /tmp/kotlin-consumer/fixture-tests/build/test-results
+            /tmp/kotlin-consumer/fixture-tests/build/reports/tests
+            /tmp/kotlin-consumer/buildSrc/build/test-results
+            /tmp/kotlin-consumer/buildSrc/build/reports/tests
+            /tmp/kotlin-consumer/build/sdk-ci-aar.json
+            /tmp/kotlin-consumer/build/outputs/aar/*-release.aar
+            /tmp/kotlin-consumer/sample/build/reports/androidTests
+            /tmp/kotlin-consumer/sample/build/outputs/androidTest-results
+            /tmp/kotlin-consumer/sample/build/outputs/mapping
+            /tmp/kotlin-consumer/sample/build/outputs/apk
+          retention-days: 14
   publish:
-    needs: [source, manifest, swift-consumer, kotlin-consumer]
+    needs: [source, rust-checks, manifest, swift-consumer, kotlin-consumer]
     if: needs.source.outputs.publish == 'true' && github.repository == 'tinkle-org/libtinkle' && github.event_name != 'pull_request' && (inputs.publish == true || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/tinkle-ffi-v'))) && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/tinkle-ffi-v'))
     runs-on: ubuntu-latest
     permissions:
