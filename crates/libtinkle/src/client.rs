@@ -23,6 +23,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 use std::collections::HashSet;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
@@ -95,6 +97,14 @@ struct Interests {
 struct CatchupResume {
     edge: Option<i64>,
     cover_top: Option<i64>,
+    /// In-flight covering descent position: the `GetHistory` offset the
+    /// next covering run continues from. Set only while a covering chain
+    /// is open (budget spent or failure mid-chain); cleared when the chain
+    /// connects to `cover_top`, which widens the top instead.
+    covering: Option<i64>,
+    /// Newest id observed when the covering chain started: the value the
+    /// `cover_top` widens to once the chain connects.
+    covering_top: Option<i64>,
 }
 
 /// Outcome of one fenced catch-up commit that the reconcile loop must
@@ -108,6 +118,17 @@ enum CatchupCommitError {
     Failed(TinkleError),
 }
 
+/// Grouped payload refs for one ingest commit (clippy
+/// `too_many_arguments`: commit fields travel together). Native-only:
+/// wasm has no SQLite commit to parameterize.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct IngestBatch<'a> {
+    pub messages: &'a [tinkle_schema::proto::Message],
+    pub users: &'a [tinkle_schema::proto::User],
+    pub chats: &'a [tinkle_schema::proto::Chat],
+    pub exclude: &'a HashSet<i64>,
+}
+
 /// Grouped scope inputs for one fenced catch-up commit (clippy
 /// `too_many_arguments`: fence fields travel together).
 #[cfg(not(target_arch = "wasm32"))]
@@ -116,6 +137,7 @@ struct CatchupCommitCtx<'a> {
     fence_principal: &'a str,
     fence_generation: u64,
     target_key: &'a str,
+    epoch: u64,
 }
 
 /// Typed Tinkle client over Syntra + gRPC fallback.
@@ -148,6 +170,19 @@ pub struct Client {
     start_lock: Arc<tokio::sync::Mutex<()>>,
     drain_mgrs: Arc<tokio::sync::Mutex<Vec<Arc<SyncManager>>>>,
     suspended: Arc<AtomicBool>,
+    /// Client-level commit gate: every native ingest holds this lock
+    /// across its epoch check + write, and logout/principal switches wait
+    /// on it before bumping the epoch — so a wipe can never interleave a
+    /// commit, and pending catch-up/heal runs are invalidated even when no
+    /// live manager exists to fence.
+    #[cfg(not(target_arch = "wasm32"))]
+    checkpoint_save: Arc<tokio::sync::Mutex<()>>,
+    /// Client-level reconcile epoch, shared by every `SyncManager`
+    /// instance (a fresh one is built per connection). Bumped on logout
+    /// and principal change; commits capture it at run start and re-check
+    /// under the checkpoint lock.
+    #[cfg(not(target_arch = "wasm32"))]
+    reconcile_epoch: Arc<AtomicU64>,
     /// In-memory fallback for unfinished new-message catch-ups when the
     /// `background_sync_jobs` table is unavailable (pre-v4 databases).
     /// Durable jobs win when the table exists; this map keeps demand alive
@@ -214,6 +249,10 @@ impl Client {
             drain_mgrs: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             suspended: Arc::new(AtomicBool::new(false)),
             #[cfg(not(target_arch = "wasm32"))]
+            checkpoint_save: Arc::new(tokio::sync::Mutex::new(())),
+            #[cfg(not(target_arch = "wasm32"))]
+            reconcile_epoch: Arc::new(AtomicU64::new(0)),
+            #[cfg(not(target_arch = "wasm32"))]
             catchup_pending: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
@@ -243,6 +282,10 @@ impl Client {
             start_lock: Arc::new(tokio::sync::Mutex::new(())),
             drain_mgrs: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             suspended: Arc::new(AtomicBool::new(false)),
+            #[cfg(not(target_arch = "wasm32"))]
+            checkpoint_save: Arc::new(tokio::sync::Mutex::new(())),
+            #[cfg(not(target_arch = "wasm32"))]
+            reconcile_epoch: Arc::new(AtomicU64::new(0)),
             catchup_pending: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
@@ -250,6 +293,20 @@ impl Client {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn sqlite_storage(&self) -> Option<Arc<tinkle_storage::Storage>> {
         self.sqlite.clone()
+    }
+
+    /// Current client-level reconcile epoch (native only).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn reconcile_epoch(&self) -> u64 {
+        self.reconcile_epoch.load(Ordering::SeqCst)
+    }
+
+    /// Wasm stub: no SQLite commit gate exists on wasm, so there is no
+    /// epoch to invalidate; callers only thread the value into native-only
+    /// paths.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn reconcile_epoch(&self) -> u64 {
+        0
     }
 
     pub fn config(&self) -> &ClientConfig {
@@ -287,6 +344,11 @@ impl Client {
         let changed = *self.principal.read().await != p;
         #[cfg(not(target_arch = "wasm32"))]
         if changed {
+            // Invalidate in-flight ingests under the old principal before
+            // clearing demand: the bump waits on the client checkpoint
+            // lock, so it also drains them.
+            let _g = self.checkpoint_save.lock().await;
+            self.reconcile_epoch.fetch_add(1, Ordering::SeqCst);
             self.catchup_pending.lock().await.clear();
         }
         *self.principal.write().await = p.clone();
@@ -384,9 +446,11 @@ impl Client {
     /// are wiped separately via `Storage::clear_principal`. Native-only:
     /// called from the push module's `logout`.
     ///
-    /// Holds `checkpoint_save_lock` (when a live scope exists) across the
-    /// whole reset so an in-flight ingest cannot commit between the
-    /// principal write and the generation bump.
+    /// Lock order: the manager checkpoint lock first (when a live scope
+    /// exists), then the client checkpoint lock — the same order every
+    /// commit path uses — both held across the epoch bump and the reset,
+    /// so an ingest can neither commit between the epoch change and the
+    /// cleanup nor after it.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) async fn reset_session_for_logout(&self) {
         let mgr = self.live_mgr().await.ok();
@@ -394,6 +458,8 @@ impl Client {
             Some(m) => Some(m.checkpoint_save_lock().await),
             None => None,
         };
+        let _client_guard = self.checkpoint_save.lock().await;
+        self.reconcile_epoch.fetch_add(1, Ordering::SeqCst);
         self.reset_session_locked(mgr.as_deref()).await;
     }
 
@@ -412,12 +478,15 @@ impl Client {
         }
     }
 
-    /// Logout-scoped durable wipe + in-memory reset under a single
-    /// `checkpoint_save_lock` hold: the `clear_principal` row wipe and the
-    /// generation-bumping reset are atomic w.r.t. commits, so an in-flight
-    /// ingest can neither commit between them nor land after the wipe
-    /// under the old scope. Native-only: called from the push module's
-    /// `logout` instead of wiping inline.
+    /// Logout-scoped durable wipe + in-memory reset. Lock order: the
+    /// manager checkpoint lock first (when a live scope exists), then the
+    /// client checkpoint lock — the same order every commit path uses —
+    /// both held across the epoch bump, the `clear_principal` row wipe,
+    /// and the generation-bumping reset, so an in-flight ingest can
+    /// neither commit between them nor land after the wipe under the old
+    /// scope. With no live manager, the client lock alone still drains
+    /// push-path ingests and invalidates their epoch. Native-only:
+    /// called from the push module's `logout` instead of wiping inline.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) async fn logout_wipe_and_reset(&self, principal: &str) -> Result<(), TinkleError> {
         let mgr = self.live_mgr().await.ok();
@@ -425,6 +494,8 @@ impl Client {
             Some(m) => Some(m.checkpoint_save_lock().await),
             None => None,
         };
+        let _client_guard = self.checkpoint_save.lock().await;
+        self.reconcile_epoch.fetch_add(1, Ordering::SeqCst);
         // Capture the wipe result but never let it bypass the reset: the
         // in-memory scope (principal, generation fence, tracked state) must
         // come down even when the durable wipe fails, or a half-logged-out
@@ -1058,6 +1129,7 @@ impl Client {
         target_key: &str,
         target: tinkle_schema::proto::Target,
     ) -> Result<u64, TinkleError> {
+        let run_epoch = self.reconcile_epoch();
         let mut after: i64 = self
             .store
             .load_journal(fence_principal, target_key)
@@ -1115,7 +1187,15 @@ impl Client {
             // Journal skip → best-effort history heal (does not move cursor).
             if let Some(first) = page.changes.first() {
                 if first.accept_seq > after.saturating_add(1) {
-                    self.heal_via_history(&target, target_key).await;
+                    self.heal_via_history(
+                        mgr,
+                        fence_principal,
+                        fence_generation,
+                        run_epoch,
+                        &target,
+                        target_key,
+                    )
+                    .await;
                 }
             }
             // Hydrate + project (native SQLite cache). Wasm reconciles
@@ -1173,6 +1253,15 @@ impl Client {
                     if !mgr.check_fence(fence_principal, fence_generation).await {
                         return Err(TinkleError::Sync(format!(
                             "reconcile scope changed for {target_key}; dropping stale pages"
+                        )));
+                    }
+                    // Client-level commit gate (same epoch check as
+                    // ingest_messages): a logout bump waits on this lock,
+                    // so it invalidates the shard before it writes.
+                    let _commit_guard = self.checkpoint_save.lock().await;
+                    if self.reconcile_epoch() != run_epoch {
+                        return Err(TinkleError::Sync(format!(
+                            "reconcile epoch changed for {target_key}; dropping stale pages"
                         )));
                     }
                     let gen = {
@@ -1335,11 +1424,14 @@ impl Client {
             if self.sqlite.is_some() {
                 let caught = self
                     .reconcile_new_messages(
-                        mgr,
-                        fence_principal,
-                        fence_generation,
+                        CatchupCommitCtx {
+                            mgr,
+                            fence_principal,
+                            fence_generation,
+                            target_key,
+                            epoch: run_epoch,
+                        },
                         &target,
-                        target_key,
                         &run_removals,
                     )
                     .await?;
@@ -1368,11 +1460,15 @@ impl Client {
         &self,
         principal: &str,
         target_key: &str,
-        messages: &[tinkle_schema::proto::Message],
-        users: &[tinkle_schema::proto::User],
-        chats: &[tinkle_schema::proto::Chat],
-        exclude: &HashSet<i64>,
+        batch: IngestBatch<'_>,
+        run_epoch: u64,
     ) -> Result<Vec<i64>, TinkleError> {
+        let IngestBatch {
+            messages,
+            users,
+            chats,
+            exclude,
+        } = batch;
         let storage = match self.sqlite.clone() {
             Some(s) => s,
             None => return Ok(Vec::new()),
@@ -1411,6 +1507,15 @@ impl Client {
         let want_ids: Vec<i64> = ops.messages.iter().map(|m| m.message_id).collect();
         if want_ids.is_empty() && ops.users.is_empty() && ops.chats.is_empty() {
             return Ok(Vec::new());
+        }
+        // Client-level commit gate: serialize ingests process-wide and
+        // reject stale epochs (logout/principal switch) so a commit can
+        // never land during or after a wipe. Check + write share one hold.
+        let _commit_guard = self.checkpoint_save.lock().await;
+        if self.reconcile_epoch() != run_epoch {
+            return Err(TinkleError::Sync(
+                "reconcile epoch changed; dropping stale ingest".into(),
+            ));
         }
         let current: i64 = self
             .store
@@ -1647,13 +1752,26 @@ impl Client {
     #[cfg(not(target_arch = "wasm32"))]
     async fn reconcile_new_messages(
         &self,
-        mgr: &SyncManager,
-        fence_principal: &str,
-        fence_generation: u64,
+        ctx: CatchupCommitCtx<'_>,
         target: &tinkle_schema::proto::Target,
-        target_key: &str,
         run_removals: &HashSet<i64>,
     ) -> Result<u64, TinkleError> {
+        let CatchupCommitCtx {
+            mgr,
+            fence_principal,
+            fence_generation,
+            target_key,
+            epoch: run_epoch,
+        } = ctx;
+        // Rebuild the per-run scope: every fenced operation below (commits
+        // and demand bookkeeping) shares this one fence context.
+        let ctx = CatchupCommitCtx {
+            mgr,
+            fence_principal,
+            fence_generation,
+            target_key,
+            epoch: run_epoch,
+        };
         // History windows cap at 100 (`MAX_TARGET_CHANGES_LIMIT` is for the
         // journal only).
         const HISTORY_CATCHUP_LIMIT: i32 = 100;
@@ -1692,11 +1810,15 @@ impl Client {
         // or passes the edge) and jumps to the edge instead of re-paging
         // already-covered windows. Without this, arrivals between runs
         // newer than the edge would be skipped by the jump.
-        let mut covering_new = resume.edge.is_some();
+        let mut covering_new = resume.edge.is_some() || resume.covering.is_some();
         // Connection threshold for the covering phase: the top of the
         // previously covered contiguous range. Falls back to the edge for
         // rows written before the top was persisted.
         let cover_top = resume.cover_top.or(resume.edge);
+        // Top of the covering chain (the newest id when it started). A
+        // resumed chain carries it in the stored state; a fresh chain
+        // claims it from the first window's max id below.
+        let mut chain_top: Option<i64> = resume.covering_top;
         // Diff baseline, loaded once; extended with ingested ids as windows
         // commit so overlapping windows never re-request the same bodies.
         let mut cached: HashSet<i64> = {
@@ -1709,7 +1831,10 @@ impl Client {
             }
         };
         let mut total: u64 = 0;
-        let mut offset_id: Option<i64> = None;
+        // A stored covering cursor resumes the descent mid-chain instead
+        // of restarting at the newest window (which would starve the tail:
+        // chains longer than the per-run budget would never connect).
+        let mut offset_id: Option<i64> = resume.covering;
         // Edge of the previous window (smallest message id seen, else the
         // server offset). Paging moves backward, so each new edge must be
         // strictly smaller; anything else while `more` says continue is a
@@ -1717,14 +1842,6 @@ impl Client {
         let mut prev_edge: Option<i64> = None;
         let mut windows: u32 = 0;
         let mut run_top: Option<i64> = None;
-        // Per-run scope for every fenced operation below (commits and
-        // demand bookkeeping share one fence context).
-        let ctx = CatchupCommitCtx {
-            mgr,
-            fence_principal,
-            fence_generation,
-            target_key,
-        };
         loop {
             if !mgr.check_fence(fence_principal, fence_generation).await {
                 return Err(TinkleError::Sync(format!(
@@ -1739,7 +1856,8 @@ impl Client {
                     windows,
                     "new-message catch-up window budget spent"
                 );
-                self.persist_catchup_demand(&ctx, offset_id, run_top).await;
+                self.persist_catchup_demand(&ctx, offset_id, run_top, covering_new, chain_top)
+                    .await;
                 return Ok(total);
             }
             let history_req = tinkle_schema::proto::GetHistoryRequest {
@@ -1755,7 +1873,8 @@ impl Client {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::debug!(target_key, error = %e, "new-message catch-up history failed");
-                    self.persist_catchup_demand(&ctx, offset_id, run_top).await;
+                    self.persist_catchup_demand(&ctx, offset_id, run_top, covering_new, chain_top)
+                        .await;
                     return Ok(total);
                 }
             };
@@ -1770,6 +1889,10 @@ impl Client {
             // Track the newest id seen: windows page strictly backward, so
             // the max across fetched windows is this run's coverage top.
             run_top = std::cmp::max(run_top, history.messages.iter().map(|m| m.message_id).max());
+            // The covering chain's top is claimed from the first window.
+            if covering_new {
+                chain_top = chain_top.or(run_top);
+            }
             if empty {
                 // Still upsert any entities the window carried.
                 if !history.users.is_empty() || !history.chats.is_empty() {
@@ -1792,7 +1915,14 @@ impl Client {
                         }
                         Err(CatchupCommitError::Failed(e)) => {
                             tracing::debug!(target_key, error = %e, "new-message catch-up ingest failed");
-                            self.persist_catchup_demand(&ctx, offset_id, run_top).await;
+                            self.persist_catchup_demand(
+                                &ctx,
+                                offset_id,
+                                run_top,
+                                covering_new,
+                                chain_top,
+                            )
+                            .await;
                             return Ok(total);
                         }
                     }
@@ -1814,7 +1944,14 @@ impl Client {
                         Ok(r) => r,
                         Err(e) => {
                             tracing::debug!(target_key, error = %e, "new-message catch-up fetch failed");
-                            self.persist_catchup_demand(&ctx, offset_id, run_top).await;
+                            self.persist_catchup_demand(
+                                &ctx,
+                                offset_id,
+                                run_top,
+                                covering_new,
+                                chain_top,
+                            )
+                            .await;
                             return Ok(total);
                         }
                     };
@@ -1863,7 +2000,14 @@ impl Client {
                             }
                             Err(CatchupCommitError::Failed(e)) => {
                                 tracing::debug!(target_key, error = %e, "new-message catch-up ingest failed");
-                                self.persist_catchup_demand(&ctx, offset_id, run_top).await;
+                                self.persist_catchup_demand(
+                                    &ctx,
+                                    offset_id,
+                                    run_top,
+                                    covering_new,
+                                    chain_top,
+                                )
+                                .await;
                                 return Ok(total);
                             }
                         }
@@ -1913,7 +2057,14 @@ impl Client {
                             target_key,
                             "new-message catch-up stalled: more_available without edge"
                         );
-                        self.persist_catchup_demand(&ctx, offset_id, run_top).await;
+                        self.persist_catchup_demand(
+                            &ctx,
+                            offset_id,
+                            run_top,
+                            covering_new,
+                            chain_top,
+                        )
+                        .await;
                         return Ok(total);
                     };
                     if let Some(prev) = prev_edge {
@@ -1924,7 +2075,14 @@ impl Client {
                                 next_edge,
                                 "new-message catch-up stalled: edge did not advance"
                             );
-                            self.persist_catchup_demand(&ctx, offset_id, run_top).await;
+                            self.persist_catchup_demand(
+                                &ctx,
+                                offset_id,
+                                run_top,
+                                covering_new,
+                                chain_top,
+                            )
+                            .await;
                             return Ok(total);
                         }
                     }
@@ -1953,7 +2111,14 @@ impl Client {
                                 edge,
                                 "new-message catch-up stalled: edge did not advance"
                             );
-                            self.persist_catchup_demand(&ctx, offset_id, run_top).await;
+                            self.persist_catchup_demand(
+                                &ctx,
+                                offset_id,
+                                run_top,
+                                covering_new,
+                                chain_top,
+                            )
+                            .await;
                             return Ok(total);
                         }
                     }
@@ -1993,10 +2158,13 @@ impl Client {
         self.ingest_messages(
             ctx.fence_principal,
             ctx.target_key,
-            messages,
-            users,
-            chats,
-            exclude,
+            IngestBatch {
+                messages,
+                users,
+                chats,
+                exclude,
+            },
+            ctx.epoch,
         )
         .await
         .map_err(CatchupCommitError::Failed)
@@ -2020,12 +2188,22 @@ impl Client {
     /// run (logout/principal switch mid-flight) skips the write instead of
     /// recording demand under the wrong scope. Durable writes go under
     /// `fence_principal`, never a function-start snapshot.
+    /// `covering_open` marks an in-flight covering chain (`covering_new`
+    /// at the persist point): the current offset is stored as the covering
+    /// cursor so the next run resumes mid-chain instead of restarting at
+    /// the newest window — chains longer than the per-run budget would
+    /// otherwise never connect and the tail below the edge would starve.
+    /// When the chain closed this run (`!covering_open` with a claimed
+    /// `chain_top`), the covering cursor is cleared and `cover_top` widens
+    /// to the chain's starting top.
     #[cfg(not(target_arch = "wasm32"))]
     async fn persist_catchup_demand(
         &self,
         ctx: &CatchupCommitCtx<'_>,
         next_offset: Option<i64>,
         run_top: Option<i64>,
+        covering_open: bool,
+        chain_top: Option<i64>,
     ) {
         let _guard = ctx.mgr.checkpoint_save_lock().await;
         if !ctx
@@ -2047,20 +2225,44 @@ impl Client {
                 (Some(a), None) => Some(a),
                 (None, b) => b,
             };
-            let cover_top = match (stored.edge, stored.cover_top, run_top) {
-                // Retained top describes the contiguous range already proven;
-                // never replace it mid-chain.
-                (_, Some(t), _) => Some(t),
-                // Legacy row (edge without a proven top): keep it empty so the
-                // resume fallback (top = edge) pages through the edge instead
-                // of jumping over potentially uncached arrivals.
-                (Some(_), None, _) => None,
-                // Fresh claim: the current run's top starts the proven range.
-                (None, None, c) => c,
+            let cover_top = match (covering_open, chain_top) {
+                // The covering chain connected this run: clear the cursor
+                // and widen the proven top to the chain's starting top.
+                (false, Some(chain)) => Some(match stored.cover_top {
+                    Some(t) => t.max(chain),
+                    None => chain,
+                }),
+                // Chain still open or none: legacy retention rules below.
+                _ => {
+                    match (stored.edge, stored.cover_top, run_top) {
+                        // Retained top describes the contiguous range already
+                        // proven; never replace it mid-chain.
+                        (_, Some(t), _) => Some(t),
+                        // Legacy row (edge without a proven top): keep it empty
+                        // so the resume fallback (top = edge) pages through the
+                        // edge instead of jumping over potentially uncached
+                        // arrivals.
+                        (Some(_), None, _) => None,
+                        // Fresh claim: the current run's top starts the proven
+                        // range.
+                        (None, None, c) => c,
+                    }
+                }
             };
+            // Covering cursor: only while the chain is open and a resume
+            // offset exists; a chain broken without a cursor restarts
+            // newest, so its top claim is dropped too.
+            let covering = if covering_open && next_offset.is_some() && edge.is_some() {
+                next_offset
+            } else {
+                None
+            };
+            let covering_top = covering.and_then(|_| stored.covering_top.or(chain_top));
             let resume = CatchupResume {
                 edge,
                 cover_top: if edge.is_some() { cover_top } else { None },
+                covering,
+                covering_top,
             };
             pending.insert(ctx.target_key.to_string(), resume);
             resume
@@ -2141,11 +2343,20 @@ impl Client {
     /// (`resume_offset=N` without a top) still decode.
     #[cfg(not(target_arch = "wasm32"))]
     fn encode_resume_state(resume: CatchupResume) -> Vec<u8> {
-        match (resume.edge, resume.cover_top) {
-            (Some(edge), Some(top)) => format!("resume_offset={edge};cover_top={top}").into_bytes(),
-            (Some(edge), None) => format!("resume_offset={edge}").into_bytes(),
-            (None, _) => Vec::new(),
+        let Some(edge) = resume.edge else {
+            return Vec::new();
+        };
+        let mut out = format!("resume_offset={edge}");
+        if let Some(t) = resume.cover_top {
+            out.push_str(&format!(";cover_top={t}"));
         }
+        if let Some(c) = resume.covering {
+            out.push_str(&format!(";covering={c}"));
+        }
+        if let Some(t) = resume.covering_top {
+            out.push_str(&format!(";covering_top={t}"));
+        }
+        out.into_bytes()
     }
 
     /// Decode a catch-up resume state; garbage (or a non-positive edge)
@@ -2158,6 +2369,8 @@ impl Client {
         };
         let mut edge = None;
         let mut cover_top = None;
+        let mut covering = None;
+        let mut covering_top = None;
         for part in text.split(';') {
             let Some((k, v)) = part.split_once('=') else {
                 continue;
@@ -2171,12 +2384,28 @@ impl Client {
             match k {
                 "resume_offset" => edge = Some(n),
                 "cover_top" => cover_top = Some(n),
+                "covering" => covering = Some(n),
+                "covering_top" => covering_top = Some(n),
                 _ => {}
             }
         }
-        // A top without an edge is meaningless (same invariant as persist).
-        let cover_top = if edge.is_some() { cover_top } else { None };
-        CatchupResume { edge, cover_top }
+        // Fields without their precondition are meaningless (same
+        // invariants as persist): top and covering require an edge, and a
+        // covering top requires the cursor.
+        let with_edge = edge.is_some();
+        cover_top = if with_edge { cover_top } else { None };
+        covering = if with_edge { covering } else { None };
+        covering_top = if covering.is_some() {
+            covering_top
+        } else {
+            None
+        };
+        CatchupResume {
+            edge,
+            cover_top,
+            covering,
+            covering_top,
+        }
     }
 
     /// Load durable catch-up resume edges for one principal into the
@@ -2218,7 +2447,16 @@ impl Client {
     /// window and repopulate the offline cache without moving the journal
     /// cursor. Failures are logged, never fatal to the reconcile run.
     /// Uses the shared `ingest_messages` helper (same-cursor commit).
-    async fn heal_via_history(&self, target: &tinkle_schema::proto::Target, target_key: &str) {
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+    async fn heal_via_history(
+        &self,
+        mgr: &SyncManager,
+        fence_principal: &str,
+        fence_generation: u64,
+        run_epoch: u64,
+        target: &tinkle_schema::proto::Target,
+        target_key: &str,
+    ) {
         let req = tinkle_schema::proto::GetHistoryRequest {
             target: Some(*target),
             offset_id: None,
@@ -2232,19 +2470,31 @@ impl Client {
             Ok(resp) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 if self.sqlite.is_some() {
-                    let principal = self.principal().await;
-                    if principal != UNKNOWN_PRINCIPAL {
+                    // Fence the heal: hold the manager checkpoint lock,
+                    // re-check the run fence, and commit under the fenced
+                    // principal + client epoch so a heal started before
+                    // logout cannot write afterward. Losses are logged and
+                    // dropped; the heal stays best-effort.
+                    let _guard = mgr.checkpoint_save_lock().await;
+                    if mgr.check_fence(fence_principal, fence_generation).await
+                        && self.reconcile_epoch() == run_epoch
+                    {
                         let empty = HashSet::new();
                         let _ = self
                             .ingest_messages(
-                                &principal,
+                                fence_principal,
                                 target_key,
-                                &resp.messages,
-                                &resp.users,
-                                &resp.chats,
-                                &empty,
+                                IngestBatch {
+                                    messages: &resp.messages,
+                                    users: &resp.users,
+                                    chats: &resp.chats,
+                                    exclude: &empty,
+                                },
+                                run_epoch,
                             )
                             .await;
+                    } else {
+                        tracing::debug!(target_key, "history heal fenced; dropping page");
                     }
                 }
                 tracing::debug!(
@@ -2828,6 +3078,7 @@ impl Client {
         &self,
         req: tinkle_schema::proto::GetHistoryRequest,
     ) -> Result<tinkle_schema::proto::GetHistoryResponse, TinkleError> {
+        let run_epoch = self.reconcile_epoch();
         if req.target.is_none() {
             return Err(TinkleError::Codec(
                 "GetHistoryRequest.target missing".into(),
@@ -2913,10 +3164,13 @@ impl Client {
                         .ingest_messages(
                             &principal,
                             &key,
-                            &all_messages,
-                            &all_users,
-                            &all_chats,
-                            &empty,
+                            IngestBatch {
+                                messages: &all_messages,
+                                users: &all_users,
+                                chats: &all_chats,
+                                exclude: &empty,
+                            },
+                            run_epoch,
                         )
                         .await;
                 }
@@ -3208,14 +3462,26 @@ mod tests {
     #[test]
     fn resume_state_codec_round_trips() {
         use super::{CatchupResume, Client};
+        // Full v3 row: edge + top + open covering chain.
         let full = CatchupResume {
             edge: Some(151),
             cover_top: Some(250),
+            covering: Some(301),
+            covering_top: Some(1300),
         };
         assert_eq!(
             Client::decode_resume_state(&Client::encode_resume_state(full)),
             full
         );
+        // v2 row (edge + top, no covering) still decodes; the covering
+        // top is dropped without its cursor.
+        let v2 = Client::decode_resume_state(b"resume_offset=151;cover_top=250");
+        assert_eq!(v2.edge, Some(151));
+        assert_eq!(v2.cover_top, Some(250));
+        assert_eq!(v2.covering, None);
+        assert_eq!(v2.covering_top, None);
+        let orphan_top = Client::decode_resume_state(b"resume_offset=151;covering_top=1300");
+        assert_eq!(orphan_top.covering_top, None);
         // Edge without a top (older single-edge rows) still decodes.
         let edge_only = Client::decode_resume_state(b"resume_offset=151");
         assert_eq!(edge_only.edge, Some(151));
@@ -3233,6 +3499,11 @@ mod tests {
         );
         assert_eq!(
             Client::decode_resume_state(b"resume_offset=-5;cover_top=10"),
+            CatchupResume::default()
+        );
+        // A covering cursor without an edge is meaningless.
+        assert_eq!(
+            Client::decode_resume_state(b"covering=301"),
             CatchupResume::default()
         );
     }

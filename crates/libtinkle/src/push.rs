@@ -808,6 +808,9 @@ impl PushManager {
                     reason: "invalid:message_ids".into(),
                 };
             }
+            // Capture the client reconcile epoch before the fetch: data
+            // read before a logout must not commit after its epoch bump.
+            let run_epoch = self.client.reconcile_epoch();
             let fetch_fut = self.client.get_messages(target, ids);
             match tokio::time::timeout_at(deadline, fetch_fut).await {
                 Ok(Ok(resp)) => {
@@ -882,10 +885,13 @@ impl PushManager {
                     .ingest_messages(
                         &wanted,
                         &target_key,
-                        &fetched_messages,
-                        &fetched_users,
-                        &fetched_chats,
-                        &empty,
+                        crate::client::IngestBatch {
+                            messages: &fetched_messages,
+                            users: &fetched_users,
+                            chats: &fetched_chats,
+                            exclude: &empty,
+                        },
+                        run_epoch,
                     )
                     .await
                 {

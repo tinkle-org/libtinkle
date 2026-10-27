@@ -594,6 +594,7 @@ fn mock_target_changes(key: &str, after: i64, limit: i32) -> GetTargetChangesRes
         || key == "target:room:17"
         || key == "target:room:18"
         || key == "target:room:20"
+        || key == "target:room:21"
     {
         // Paged catch-up rooms: journal discloses edits/removals only, so
         // the journal here is empty (cursor 0, no changes). The run
@@ -1137,6 +1138,38 @@ fn mock_history(key: &str, req: &GetHistoryRequest) -> GetHistoryResponse {
             count: 80,
             offset_id_offset: None,
             more_available: Some(false),
+        };
+    }
+    if key == "target:room:21" {
+        // 1300-message backlog above a resume edge: procedural windows of
+        // 100, offset `o` serves (o-100)..=(o-1); `None` serves the newest.
+        // Drives the multi-run covering-cursor test below.
+        const TOTAL: i64 = 1300;
+        const WIN: i64 = 100;
+        let start = match req.offset_id {
+            None => TOTAL,
+            Some(o) => o - 1,
+        };
+        let lo = (start - WIN + 1).max(1);
+        let messages: Vec<TinkleMessage> = (lo..=start)
+            .rev()
+            .map(|id| TinkleMessage {
+                message_id: id,
+                target: req.target,
+                from_id: 42,
+                message: format!("m{id}"),
+                accept_seq: Some(id),
+                ..Default::default()
+            })
+            .collect();
+        let more = lo > 1;
+        return GetHistoryResponse {
+            messages,
+            users: vec![],
+            chats: vec![],
+            count: 1300,
+            offset_id_offset: if more { Some(lo) } else { None },
+            more_available: Some(more),
         };
     }
     if key == "target:room:18" {
@@ -2386,11 +2419,14 @@ async fn legacy_resume_row_keeps_cover_top_empty() {
         .iter()
         .find(|j| j.target_key == "target:room:20")
         .expect("failure must persist catch-up demand");
-    assert_eq!(
-        job.payload,
-        b"resume_offset=151",
-        "legacy row must not gain an unproven top, got {:?}",
-        String::from_utf8_lossy(&job.payload)
+    let payload = String::from_utf8_lossy(&job.payload);
+    assert!(
+        payload.starts_with("resume_offset=151;"),
+        "legacy row must retain its edge, got {payload:?}"
+    );
+    assert!(
+        !payload.contains("cover_top="),
+        "legacy row must not gain an unproven top, got {payload:?}"
     );
     // Remove the error arm and re-reconcile: the run resumes from the edge
     // and clears at the boundary.
@@ -2416,6 +2452,86 @@ async fn legacy_resume_row_keeps_cover_top_empty() {
     assert!(
         !jobs.iter().any(|j| j.target_key == "target:room:20"),
         "retry must clear demand, got {jobs:?}"
+    );
+    c.close().await;
+}
+
+#[tokio::test]
+async fn covering_cursor_spans_budget_runs_and_fetches_tail() {
+    // Resume state {edge: 201, cover_top: 250} with a 1,050-message backlog
+    // above the cover top (251..=1300). The covering chain needs 11
+    // windows, more than the 10-window per-run budget: run 1 must persist
+    // the covering cursor mid-chain; run 2 resumes from it, connects to the
+    // cover top (widening it), pages through the edge, and fetches the tail
+    // below the edge (1..=200).
+    let (addr, log) = start_mock_logged().await;
+    let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
+    storage
+        .enqueue_background_sync_job(
+            "user:42",
+            &tinkle_storage::BackgroundSyncJob {
+                job_id: "catchup:target:room:21".into(),
+                kind: "new_messages".into(),
+                target_key: "target:room:21".into(),
+                state: "pending".into(),
+                payload: b"resume_offset=201;cover_top=250".to_vec(),
+                attempts: 0,
+                next_due: 0,
+                claimed_by: None,
+                updated_at: 0,
+            },
+        )
+        .unwrap();
+    seed_cached_messages(&storage, "target:room:21", 21, 201..=250);
+    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
+    let c = libtinkle::Client::new_sqlite(
+        cfg,
+        libtinkle::Credential::from_session_token("test-token"),
+        storage.clone(),
+    );
+    c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
+
+    // Run 1: 10 newest windows (1300..=301), budget spent mid-chain.
+    let first = c.reconcile_target("target:room:21").await.unwrap();
+    assert_eq!(first, 1000, "run 1 must stop at the window budget");
+    let jobs = storage.list_background_sync_jobs("user:42", None).unwrap();
+    let job = jobs
+        .iter()
+        .find(|j| j.target_key == "target:room:21")
+        .expect("budget-hit mid-chain must persist catch-up demand");
+    assert_eq!(
+        job.payload,
+        b"resume_offset=201;cover_top=250;covering=301;covering_top=1300",
+        "run 1 must persist the covering cursor + chain top, got {:?}",
+        String::from_utf8_lossy(&job.payload)
+    );
+
+    // Run 2: resume from the covering cursor (301), connect, page through
+    // the edge, and finish at the boundary with the tail below the edge.
+    let second = c.reconcile_target("target:room:21").await.unwrap();
+    assert_eq!(second, 250, "run 2 must ingest only the missing 250");
+    let ids = storage
+        .cached_message_ids("user:42", "target:room:21")
+        .unwrap();
+    assert_eq!(ids.len(), 1300, "all 1300 must be cached after run 2");
+    for expect in [1, 100, 150, 200, 201, 300, 1300] {
+        assert!(ids.contains(&expect), "missing {expect} in cache");
+    }
+    // Run 2 added exactly 3 windows (301->201, 201->101, 101->1): the
+    // covering resume must not re-page run 1's covered windows.
+    let history_calls = log
+        .history
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| k == "target:room:21")
+        .count();
+    assert_eq!(history_calls, 13, "run 1 = 10 windows, run 2 = 3 windows");
+    let jobs = storage.list_background_sync_jobs("user:42", None).unwrap();
+    assert!(
+        !jobs.iter().any(|j| j.target_key == "target:room:21"),
+        "resume to boundary must clear demand, got {jobs:?}"
     );
     c.close().await;
 }
