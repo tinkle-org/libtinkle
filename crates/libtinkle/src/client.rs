@@ -2192,9 +2192,11 @@ impl Client {
     /// so resume pages through the edge instead of jumping over
     /// potentially uncached arrivals. Both travel in-memory and in the
     /// durable payload.
-    /// Holds `checkpoint_save_lock` and re-checks the fence first: a stale
-    /// run (logout/principal switch mid-flight) skips the write instead of
-    /// recording demand under the wrong scope. Durable writes go under
+    /// Holds the manager checkpoint lock, then the client checkpoint lock
+    /// (manager-to-client order holds everywhere), and re-checks both the
+    /// run fence and the client epoch first: a stale run (logout/principal
+    /// switch mid-flight) skips the write instead of recording demand
+    /// under the wrong scope. Durable writes go under
     /// `fence_principal`, never a function-start snapshot.
     /// `covering_open` marks an in-flight covering chain (`covering_new`
     /// at the persist point): the current offset is stored as the covering
@@ -2219,6 +2221,15 @@ impl Client {
             .check_fence(ctx.fence_principal, ctx.fence_generation)
             .await
         {
+            return;
+        }
+        // Client checkpoint lock second (manager-to-client order holds
+        // everywhere), then re-check the client epoch: its scope is the
+        // whole process, while manager generations are per-connection, so
+        // a stale run can pass a dead manager's fence check yet must not
+        // write demand after a logout/switch bumped the epoch.
+        let _client_guard = self.checkpoint_save.lock().await;
+        if self.reconcile_epoch() != ctx.epoch {
             return;
         }
         let resume = {
@@ -2315,10 +2326,12 @@ impl Client {
     }
 
     /// Clear a finished catch-up from both the durable table (when present)
-    /// and the in-memory map. Missing-table is not an error. Holds
-    /// `checkpoint_save_lock` and re-checks the fence first: a stale run
-    /// that reaches the boundary after a scope change leaves the live
-    /// scope's demand alone instead of clearing it.
+    /// and the in-memory map. Missing-table is not an error. Holds the
+    /// manager checkpoint lock, then the client checkpoint lock
+    /// (manager-to-client order holds everywhere), and re-checks both the
+    /// run fence and the client epoch first: a stale run that reaches the
+    /// boundary after a scope change leaves the live scope's demand alone
+    /// instead of clearing it.
     #[cfg(not(target_arch = "wasm32"))]
     async fn clear_catchup_demand(&self, ctx: &CatchupCommitCtx<'_>) {
         let _guard = ctx.mgr.checkpoint_save_lock().await;
@@ -2327,6 +2340,12 @@ impl Client {
             .check_fence(ctx.fence_principal, ctx.fence_generation)
             .await
         {
+            return;
+        }
+        // See persist_catchup_demand: the epoch check covers scope changes
+        // the per-connection manager fence cannot see.
+        let _client_guard = self.checkpoint_save.lock().await;
+        if self.reconcile_epoch() != ctx.epoch {
             return;
         }
         {
