@@ -808,6 +808,9 @@ impl PushManager {
                     reason: "invalid:message_ids".into(),
                 };
             }
+            // Capture the client reconcile epoch before the fetch: data
+            // read before a logout must not commit after its epoch bump.
+            let run_epoch = self.client.reconcile_epoch();
             let fetch_fut = self.client.get_messages(target, ids);
             match tokio::time::timeout_at(deadline, fetch_fut).await {
                 Ok(Ok(resp)) => {
@@ -882,10 +885,13 @@ impl PushManager {
                     .ingest_messages(
                         &wanted,
                         &target_key,
-                        &fetched_messages,
-                        &fetched_users,
-                        &fetched_chats,
-                        &empty,
+                        crate::client::IngestBatch {
+                            messages: &fetched_messages,
+                            users: &fetched_users,
+                            chats: &fetched_chats,
+                            exclude: &empty,
+                        },
+                        run_epoch,
                     )
                     .await
                 {
@@ -1155,15 +1161,13 @@ impl Client {
             }
         }
         if principal != crate::sync::UNKNOWN_PRINCIPAL {
-            if let Some(storage) = self.sqlite_storage() {
-                let p = principal.clone();
-                tokio::task::spawn_blocking(move || storage.clear_principal(&p))
-                    .await
-                    .map_err(|e| TinkleError::CursorStore(format!("logout wipe task failed: {e}")))?
-                    .map_err(|e| TinkleError::CursorStore(e.to_string()))?;
-            }
+            // Wipe + reset under one checkpoint-save hold so an in-flight
+            // ingest cannot commit between them (see logout_wipe_and_reset).
+            self.logout_wipe_and_reset(&principal).await?;
+        } else {
+            // Nothing durable to wipe; still drop interests/watch/demand.
+            self.reset_session_for_logout().await;
         }
-        self.reset_session_for_logout().await;
         Ok(logged_out)
     }
 }
