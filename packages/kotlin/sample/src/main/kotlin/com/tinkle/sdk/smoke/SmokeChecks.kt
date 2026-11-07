@@ -1,6 +1,8 @@
 package com.tinkle.sdk.smoke
 
 import com.tinkle.sdk.ClientConfigFfi
+import com.tinkle.sdk.ClientInfoFfi
+import com.tinkle.sdk.ClientOptionsFfi
 import com.tinkle.sdk.FfiCursorStore
 import com.tinkle.sdk.FfiException
 import com.tinkle.sdk.FfiSyncEvent
@@ -42,7 +44,8 @@ public object SmokeChecks {
     }
 
     private fun config(gateway: LoopbackGateway) = ClientConfigFfi(
-        "ws://127.0.0.1:${gateway.port}/syntra/v1/ws", true, null, grpcEndpoint = null,
+        ClientInfoFfi("fixture-device", "android", "36", "1", "0001", ClientOptionsFfi("", "", "", "", "", "")),
+        gateway.host, gateway.port.toUShort(), null,
     )
 
     private suspend fun foreignJournalCallbacks() {
@@ -70,7 +73,7 @@ public object SmokeChecks {
             override suspend fun clearPrincipal(principal: String) = Unit
         }
         LoopbackGateway(setOf("target:room:9", "target:room:10")).use { gateway ->
-            val client = TinkleClient(config(gateway), "local-smoke-fixture", foreignStore)
+            val client = TinkleClient(config(gateway), gateway.trustSource(), foreignStore)
             try {
                 client.connect()
                 client.setPrincipalUserId(42)
@@ -145,7 +148,7 @@ public object SmokeChecks {
                     check(storage.getUserProto("user:42", 99) == null)
                 }
                 LoopbackGateway(setOf("target:room:7")).use { gateway ->
-                    val client = TinkleClient.newSqlite(config(gateway), "local-smoke-fixture", storage)
+                    val client = TinkleClient.newSqlite(config(gateway), gateway.trustSource(), storage)
                     try {
                         client.connect()
                         client.setPrincipalUserId(42)
@@ -170,7 +173,7 @@ public object SmokeChecks {
                 check(storage.loadJournal("user:42", "target:room:7") == 1L)
                 check(storage.loadJournal("user:43", "target:room:7") == null)
                 LoopbackGateway().use { gateway ->
-                    val client = TinkleClient.newSqlite(config(gateway), "local-smoke-fixture", storage)
+                    val client = TinkleClient.newSqlite(config(gateway), gateway.trustSource(), storage)
                     try {
                         client.connect()
                         client.setPrincipalUserId(42)

@@ -1,62 +1,165 @@
-//! Client configuration + credential handling.
-//!
-//! Credentials are opaque secret bytes presented only as
-//! `ClientHello.credential`. They are redacted from `Debug`, never
-//! logged, never placed in URLs, never persisted by this crate, and
-//! zeroized on drop.
+//! Native TCP endpoints and caller-owned server/enrollment trust inputs.
 
 use std::time::Duration;
-use zeroize::{Zeroize, ZeroizeOnDrop};
-
+use syntra_core::secure_channel::{self, Carrier, Context, Mode, Secret32};
 use syntra_runtime::ConnectionConfig;
+use zeroize::Zeroize;
 
-use crate::errors::TinkleError;
+use crate::TinkleError;
 
-/// Opaque credential (e.g. session token bytes). `Debug` is redacted.
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
-pub struct Credential {
-    bytes: Vec<u8>,
+/// Public server identity provisioned by the host through a trusted channel.
+/// Scope bytes are exact UTF-8; no normalization or endpoint-derived trust.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerTrust {
+    /// Provisioned X25519 server public-key pin (32 bytes).
+    pub server_public_key: [u8; 32],
+    /// Server-selected key identifier bound into the channel context.
+    pub server_key_id: u32,
+    /// Exact application routing/security scope, 1..=255 UTF-8 bytes.
+    pub scope: String,
 }
 
-impl Credential {
-    pub fn new(bytes: Vec<u8>) -> Self {
-        Self { bytes }
-    }
-
-    pub fn from_session_token(token: &str) -> Self {
-        Self {
-            bytes: token.as_bytes().to_vec(),
+impl ServerTrust {
+    /// Validate the pin and exact scope before any network I/O.
+    pub fn validate(&self) -> Result<(), TinkleError> {
+        if self.server_public_key == [0; 32] || self.scope.is_empty() || self.scope.len() > 255 {
+            return Err(TinkleError::Configuration(
+                "nonzero server pin and 1..=255 byte scope required".into(),
+            ));
         }
-    }
-
-    /// Borrow secret bytes for the handshake only. Callers MUST NOT log
-    /// or retain the returned slice beyond the handshake.
-    /// crate-internal: only the connection engine may touch secrets.
-    pub(crate) fn expose_secret(&self) -> &[u8] {
-        &self.bytes
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
+        Ok(())
     }
 }
 
-impl std::fmt::Debug for Credential {
+/// Returned authorization enrollment. The host stores this separately in its
+/// protected secret store, never in the application cache/cursor database.
+/// Not Clone; every temporary key copy used by Syntra is zeroized on drop.
+pub struct Enrollment {
+    authorization_key: std::sync::Arc<crate::authorization::SecretCell>,
+    handle: [u8; 8],
+    epoch: u64,
+}
+
+impl Enrollment {
+    pub(crate) fn secret(&self) -> std::sync::Arc<crate::authorization::SecretCell> {
+        self.authorization_key.clone()
+    }
+    pub(crate) fn binding(&self) -> ([u8; 8], u64) {
+        (self.handle, self.epoch)
+    }
+    /// Adopt host-provisioned ACTIVE material. STAGED/unknown/expired status is
+    /// rejected; normal enrollment obtains this only after Bootstrap activation.
+    pub fn from_active_status(
+        authorization_key: [u8; 32],
+        status: &tinkle_schema::proto::DeviceEnrollmentStatus,
+    ) -> Result<Self, TinkleError> {
+        let authorization_key = zeroize::Zeroizing::new(authorization_key);
+        crate::enrollment::validate_status(status)?;
+        if status.state != tinkle_schema::proto::DeviceEnrollmentState::Active as i32 {
+            return Err(TinkleError::Configuration(
+                "Returning requires ACTIVE enrollment".into(),
+            ));
+        }
+        Self::new(
+            *authorization_key,
+            status
+                .handle
+                .as_ref()
+                .try_into()
+                .map_err(|_| TinkleError::Codec("invalid active handle".into()))?,
+            status.enrollment_epoch,
+        )
+    }
+
+    pub(crate) fn new(
+        authorization_key: [u8; 32],
+        handle: [u8; 8],
+        epoch: u64,
+    ) -> Result<Self, TinkleError> {
+        let authorization_key = zeroize::Zeroizing::new(authorization_key);
+        if *authorization_key == [0; 32] || handle == [0; 8] || epoch == 0 {
+            return Err(TinkleError::Configuration(
+                "nonzero enrollment key, handle and epoch required".into(),
+            ));
+        }
+        let enrollment = Self {
+            authorization_key: crate::authorization::SecretCell::new(authorization_key),
+            handle,
+            epoch,
+        };
+        Ok(enrollment)
+    }
+}
+impl Drop for Enrollment {
+    fn drop(&mut self) {
+        self.authorization_key.retire();
+        self.handle.zeroize();
+        self.epoch.zeroize();
+    }
+}
+
+impl std::fmt::Debug for Enrollment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Credential([redacted])")
+        f.write_str("Enrollment([redacted])")
     }
 }
 
-/// Reconnect policy: bounded exponential backoff with jitter.
+/// Explicit channel mode and trust, supplied from host provisioning/AK storage.
+/// Bootstrap never silently replaces a rejected Returning enrollment.
+#[derive(Debug)]
+pub enum TrustSource {
+    /// Public trust only; never an automatic Bootstrap fallback after logout.
+    SignedOut(ServerTrust),
+    /// Pinned server proof without authorization-key possession.
+    Bootstrap(ServerTrust),
+    /// Pinned server proof plus possession of a returned enrollment key.
+    Returning {
+        /// Public identity to which the host bound this enrollment.
+        trust: ServerTrust,
+        /// Protected enrollment material loaded by the host.
+        enrollment: Enrollment,
+    },
+}
+
+impl TrustSource {
+    pub(crate) fn security(&self) -> Result<secure_channel::ClientConfig, TinkleError> {
+        let (trust, mode, handle, epoch, authorization_key) = match self {
+            Self::SignedOut(_) => return Err(TinkleError::SignedOut),
+            Self::Bootstrap(trust) => (trust, Mode::Bootstrap, [0; 8], 0, None),
+            Self::Returning { trust, enrollment } => (
+                trust,
+                Mode::Returning,
+                enrollment.handle,
+                enrollment.epoch,
+                Some(Secret32::new(*enrollment.authorization_key.snapshot()?)),
+            ),
+        };
+        trust.validate()?;
+        Ok(secure_channel::ClientConfig {
+            context: Context {
+                mode,
+                carrier: Carrier::Tcp,
+                server_key_id: trust.server_key_id,
+                scope: trust.scope.as_bytes().to_vec(),
+                handle,
+                epoch,
+            },
+            server_public_key: trust.server_public_key,
+            authorization_key,
+        })
+    }
+}
+
+/// Reconnect scheduling owned solely by the application supervisor.
 #[derive(Debug, Clone)]
 pub struct ReconnectPolicy {
-    /// Initial delay after first loss.
+    /// Delay floor before jitter, sampled by the supervisor scheduler.
     pub base_delay: Duration,
-    /// Maximum delay cap.
+    /// Maximum exponential delay before jitter.
     pub max_delay: Duration,
-    /// Maximum reconnect attempts (None = unbounded; callers SHOULD bound).
+    /// Maximum consecutive failed attempts; None leaves retries unbounded.
     pub max_attempts: Option<u32>,
-    /// Multiplier per attempt.
+    /// Finite exponential multiplier, at least one.
     pub multiplier: f64,
 }
 
@@ -73,108 +176,71 @@ impl Default for ReconnectPolicy {
 
 impl ReconnectPolicy {
     pub(crate) fn delay_for(&self, attempt: u32) -> Duration {
-        let mut d = self.base_delay.as_millis() as f64 * self.multiplier.powi(attempt as i32);
-        let max = self.max_delay.as_millis() as f64;
-        if d > max {
-            d = max;
-        }
-        // Full jitter: random in [d/2, d].
-        let jitter: f64 = rand::random::<f64>() * 0.5 + 0.5;
-        Duration::from_millis((d * jitter) as u64)
+        let d = (self.base_delay.as_secs_f64() * self.multiplier.powi(attempt.min(1024) as i32))
+            .min(self.max_delay.as_secs_f64());
+        Duration::from_secs_f64(d * (rand::random::<f64>() * 0.5 + 0.5))
     }
 }
 
-/// High-level client configuration.
+/// Native encrypted TCP configuration. Both ports use the same host and exact
+/// trust source. Ports are configurable for deployments and ephemeral fixtures;
+/// there is no plaintext, HTTP, TLS or trust-bypass option.
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
-    /// gRPC base endpoint for direct-unary reconciliation and file RPCs
-    /// (`GetTargetChanges` / `GetMessages`, plus `begin_upload` /
-    /// `upload_part` / `upload_status` / `complete_upload` /
-    /// `abort_upload` / `get_file_info` / `download_part`), e.g.
-    /// `https://gateway.example.com`.
-    /// Syntra is primary; when set (native only), retryable Syntra failures
-    /// fall back to this endpoint automatically.
-    /// Prefer `with_grpc_endpoint` over direct assignment: the builder
-    /// validates scheme/`https` up front, while a directly assigned
-    /// value is only checked when catch-up runs.
-    pub grpc_endpoint: Option<String>,
-    /// WSS URL, e.g. `wss://gateway.example.com/syntra/v1/ws`.
-    pub url: String,
-    /// Allow `ws://` (development loopback/isolated nets only).
-    pub allow_insecure: bool,
-    /// Syntra connection tuning.
+    /// Complete immutable metadata required by ConnectionService.InitConnect.
+    pub client_info: crate::ClientInfo,
+    /// Bare DNS hostname or IP address without a scheme, path or port.
+    pub host: String,
+    /// Initial preferred TCP port, 443 by default.
+    pub primary_port: u16,
+    /// Initial dial-failure alternative, TCP 80 by default.
+    pub fallback_port: Option<u16>,
+    /// Published Syntra RPC/runtime limits.
     pub connection: ConnectionConfig,
-    /// Reconnect tuning.
+    /// Scheduling policy for the single application supervisor.
     pub reconnect: ReconnectPolicy,
-    /// Default per-RPC timeout_ms when callers pass 0 is
-    /// `connection.default_timeout` (bounded, documented).
-    pub user_agent: Option<String>,
+    /// Per-dial ceiling inside the shared 15-second establishment budget.
+    pub connect_timeout: Duration,
 }
 
 impl ClientConfig {
-    pub fn new(url: impl Into<String>) -> Self {
+    /// Default native route: TCP 443, then TCP 80 on dial failure only.
+    pub fn new(host: impl Into<String>, client_info: crate::ClientInfo) -> Self {
         Self {
-            grpc_endpoint: None,
-            url: url.into(),
-            allow_insecure: false,
+            client_info,
+            host: host.into(),
+            primary_port: 443,
+            fallback_port: Some(80),
             connection: ConnectionConfig::default(),
             reconnect: ReconnectPolicy::default(),
-            user_agent: None,
+            connect_timeout: Duration::from_secs(10),
         }
     }
 
-    /// Validate a gRPC catch-up endpoint without storing it. Shared by
-    /// the builder and fallible constructors so misconfig fails fast
-    /// with `GrpcConfig` (FailedPrecondition) instead of surfacing as a
-    /// retried `Grpc` (Unavailable) at reconcile time.
-    pub fn validate_grpc_endpoint(endpoint: &str, allow_insecure: bool) -> Result<(), TinkleError> {
-        if endpoint.trim().is_empty() {
-            return Err(TinkleError::GrpcConfig(
-                "grpc_endpoint must not be blank".into(),
+    /// Reject invalid native routes/runtime limits before network I/O.
+    pub fn validate(&self) -> Result<(), TinkleError> {
+        if self.host.is_empty()
+            || self.host.trim() != self.host
+            || self.host.chars().any(char::is_whitespace)
+            || (self.host.contains(':') && self.host.parse::<std::net::Ipv6Addr>().is_err())
+            || self.host.contains(['/', '?', '#', '@'])
+            || self.host.contains("://")
+            || self.primary_port == 0
+            || self.fallback_port == Some(0)
+            || self.connect_timeout.is_zero()
+            || self.connect_timeout > Duration::from_secs(15)
+            || self.reconnect.base_delay.is_zero()
+            || self.reconnect.max_delay < self.reconnect.base_delay
+            || self.reconnect.max_delay > Duration::from_secs(86_400)
+            || !self.reconnect.multiplier.is_finite()
+            || self.reconnect.multiplier < 1.0
+        {
+            return Err(TinkleError::Configuration(
+                "invalid native TCP configuration".into(),
             ));
         }
-        let lower = endpoint.to_ascii_lowercase();
-        if allow_insecure {
-            if !(lower.starts_with("https://") || lower.starts_with("http://")) {
-                return Err(TinkleError::GrpcConfig(
-                    "grpc_endpoint must include http:// or https:// scheme".into(),
-                ));
-            }
-        } else if !lower.starts_with("https://") {
-            return Err(TinkleError::GrpcConfig(
-                "grpc_endpoint must use https:// unless allow_insecure".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    /// gRPC endpoint for direct-unary reconciliation RPCs.
-    ///
-    /// Fails fast: blank endpoints, missing schemes, and non-`https`
-    /// endpoints without `allow_insecure` return `GrpcConfig`
-    /// (FailedPrecondition) here instead of failing at reconcile time.
-    /// Call after `insecure_dev` when a dev `http://` endpoint is intended.
-    pub fn with_grpc_endpoint(mut self, endpoint: impl Into<String>) -> Result<Self, TinkleError> {
-        let endpoint = endpoint.into();
-        Self::validate_grpc_endpoint(&endpoint, self.allow_insecure)?;
-        self.grpc_endpoint = Some(endpoint);
-        Ok(self)
-    }
-
-    /// Development-only plaintext. Production MUST use `wss://`.
-    pub fn insecure_dev(mut self) -> Self {
-        self.allow_insecure = true;
-        self
-    }
-
-    pub(crate) fn ws_config(&self) -> syntra_ws::WsConfig {
-        let mut cfg = if self.allow_insecure {
-            syntra_ws::WsConfig::insecure_dev(self.url.clone())
-        } else {
-            syntra_ws::WsConfig::secure(self.url.clone())
-        };
-        cfg.connect_timeout = Duration::from_secs(10);
-        cfg.close_grace = Duration::from_secs(2);
-        cfg
+        self.connection
+            .validate()
+            .map_err(|_| TinkleError::Configuration("invalid connection limits".into()))
     }
 }

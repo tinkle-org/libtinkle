@@ -657,6 +657,36 @@ internal open class UniffiForeignFutureResultVoid(
 internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
     fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultVoid.UniffiByValue,)
 }
+internal interface UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`incarnation`: RustBuffer.ByValue,`revision`: RustBuffer.ByValue,`active`: Long,`permitId`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteI8,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
+}
+internal interface UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod1 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`permitId`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
+}
+internal interface UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod2 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
+}
+internal interface UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod3 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`expectedRevision`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`operationId`: RustBuffer.ByValue,`record`: Long,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
+}
+internal interface UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod4 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`expectedRevision`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteI8,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
+}
+internal interface UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod5 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`expectedRevision`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteI8,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
+}
+internal interface UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod6 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
+}
+internal interface UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod7 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`kind`: RustBuffer.ByValue,`operationId`: RustBuffer.ByValue,`record`: Long,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
+}
+internal interface UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod8 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`operationId`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
+}
+internal interface UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod9 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
+}
 internal interface UniffiCallbackInterfaceFfiCursorStoreMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`principal`: RustBuffer.ByValue,`targetKey`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
@@ -668,6 +698,52 @@ internal interface UniffiCallbackInterfaceFfiCursorStoreMethod2 : com.sun.jna.Ca
 }
 internal interface UniffiCallbackInterfaceFfiCursorStoreMethod3 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`principal`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
+}
+@Structure.FieldOrder("uniffiFree", "uniffiClone", "beginRestore", "endRestore", "namespaceSnapshot", "commitCurrent", "beginClear", "finishClear", "clear", "commit", "loadOperation", "loadActive")
+internal open class UniffiVTableCallbackInterfaceFfiSecureEnrollmentStore(
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    @JvmField internal var `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+    @JvmField internal var `beginRestore`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod0? = null,
+    @JvmField internal var `endRestore`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod1? = null,
+    @JvmField internal var `namespaceSnapshot`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod2? = null,
+    @JvmField internal var `commitCurrent`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod3? = null,
+    @JvmField internal var `beginClear`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod4? = null,
+    @JvmField internal var `finishClear`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod5? = null,
+    @JvmField internal var `clear`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod6? = null,
+    @JvmField internal var `commit`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod7? = null,
+    @JvmField internal var `loadOperation`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod8? = null,
+    @JvmField internal var `loadActive`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod9? = null,
+) : Structure() {
+    class UniffiByValue(
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+        `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+        `beginRestore`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod0? = null,
+        `endRestore`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod1? = null,
+        `namespaceSnapshot`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod2? = null,
+        `commitCurrent`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod3? = null,
+        `beginClear`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod4? = null,
+        `finishClear`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod5? = null,
+        `clear`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod6? = null,
+        `commit`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod7? = null,
+        `loadOperation`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod8? = null,
+        `loadActive`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod9? = null,
+    ): UniffiVTableCallbackInterfaceFfiSecureEnrollmentStore(`uniffiFree`,`uniffiClone`,`beginRestore`,`endRestore`,`namespaceSnapshot`,`commitCurrent`,`beginClear`,`finishClear`,`clear`,`commit`,`loadOperation`,`loadActive`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceFfiSecureEnrollmentStore) {
+        `uniffiFree` = other.`uniffiFree`
+        `uniffiClone` = other.`uniffiClone`
+        `beginRestore` = other.`beginRestore`
+        `endRestore` = other.`endRestore`
+        `namespaceSnapshot` = other.`namespaceSnapshot`
+        `commitCurrent` = other.`commitCurrent`
+        `beginClear` = other.`beginClear`
+        `finishClear` = other.`finishClear`
+        `clear` = other.`clear`
+        `commit` = other.`commit`
+        `loadOperation` = other.`loadOperation`
+        `loadActive` = other.`loadActive`
+    }
+
 }
 @Structure.FieldOrder("uniffiFree", "uniffiClone", "loadJournal", "saveJournal", "removeTarget", "clearPrincipal")
 internal open class UniffiVTableCallbackInterfaceFfiCursorStore(
@@ -730,6 +806,14 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_tinkle_ffi_checksum_func_tinkle_ffi_init(
     ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_get_sessions(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_revoke_other_sessions(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_revoke_session(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_session_status(
+    ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_connect(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_files_abort_upload(
@@ -756,6 +840,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_is_connected(
     ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_is_signed_out(
+    ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_is_suspended(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_load_dialogs(
@@ -769,6 +855,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_reconcile_now(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_replace_trust_source(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_resume(
     ): Int
@@ -792,6 +880,24 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_tracked_targets(
     ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_activate_enrollment(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_bind_secure_enrollment_store(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_load_enrollment_operation(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_prepare_enrollment(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_restore_active_enrollment(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_resume_enrollment(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_rotate_enrollment(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_send_code(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_sign_in(
+    ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_handle_push_wake(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_logout(
@@ -801,6 +907,32 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_register_push(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_unregister_push(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_enrollmentoperation_operation_id(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_begin_restore(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_end_restore(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_namespace_snapshot(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_commit_current(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_begin_clear(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_finish_clear(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_clear(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_commit(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_load_operation(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_load_active(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_protectedenrollmentrecord_copy_for_secure_storage(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_storedenrollment_status(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_sqlitestorage_clear_principal(
     ): Int
@@ -830,6 +962,10 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite(
     ): Int
+    external fun uniffi_tinkle_ffi_checksum_constructor_trustsourceffi_bootstrap(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_constructor_protectedenrollmentrecord_from_secure_storage(
+    ): Int
     external fun uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open_async(
@@ -855,6 +991,7 @@ internal object UniffiLib {
     init {
         Native.register(UniffiLib::class.java, findLibraryName(componentName = "tinkle_ffi"))
         uniffiCallbackInterfaceFfiCursorStore.register(this)
+        uniffiCallbackInterfaceFfiSecureEnrollmentStore.register(this)
 
     }
 
@@ -863,9 +1000,17 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_tinkle_ffi_fn_free_tinkleclient(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    external fun uniffi_tinkle_ffi_fn_constructor_tinkleclient_new(`config`: RustBuffer.ByValue,`credential`: RustBuffer.ByValue,`store`: Long,uniffi_out_err: UniffiRustCallStatus,
+    external fun uniffi_tinkle_ffi_fn_constructor_tinkleclient_new(`config`: RustBuffer.ByValue,`trustSource`: Long,`store`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Long
-    external fun uniffi_tinkle_ffi_fn_constructor_tinkleclient_new_sqlite(`config`: RustBuffer.ByValue,`credential`: RustBuffer.ByValue,`storage`: Long,uniffi_out_err: UniffiRustCallStatus,
+    external fun uniffi_tinkle_ffi_fn_constructor_tinkleclient_new_sqlite(`config`: RustBuffer.ByValue,`trustSource`: Long,`storage`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_get_sessions(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_revoke_other_sessions(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_revoke_session(`ptr`: Long,`sessionId`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_session_status(`ptr`: Long,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_connect(`ptr`: Long,
     ): Long
@@ -893,6 +1038,8 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_is_connected(`ptr`: Long,
     ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_is_signed_out(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_is_suspended(`ptr`: Long,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_load_dialogs(`ptr`: Long,`request`: RustBuffer.ByValue,`policy`: RustBuffer.ByValue,
@@ -906,6 +1053,8 @@ internal object UniffiLib {
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_reconcile_now(`ptr`: Long,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_reconnect(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_replace_trust_source(`ptr`: Long,`source`: Long,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_resume(`ptr`: Long,
     ): Long
@@ -929,6 +1078,24 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_tracked_targets(`ptr`: Long,
     ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_activate_enrollment(`ptr`: Long,`candidate`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_bind_secure_enrollment_store(`ptr`: Long,`store`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_load_enrollment_operation(`ptr`: Long,`store`: Long,`operationId`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_prepare_enrollment(`ptr`: Long,`store`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_restore_active_enrollment(`ptr`: Long,`store`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_resume_enrollment(`ptr`: Long,`operation`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_rotate_enrollment(`ptr`: Long,`operation`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_send_code(`ptr`: Long,`phoneNumber`: RustBuffer.ByValue,`langCode`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_sign_in(`ptr`: Long,`phoneNumber`: RustBuffer.ByValue,`code`: RustBuffer.ByValue,`verificationId`: RustBuffer.ByValue,`operation`: Long,
+    ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_handle_push_wake(`ptr`: Long,`envelope`: RustBuffer.ByValue,`timeoutSecs`: Long,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_logout(`ptr`: Long,
@@ -939,6 +1106,58 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_unregister_push(`ptr`: Long,`token`: RustBuffer.ByValue,
     ): Long
+    external fun uniffi_tinkle_ffi_fn_clone_trustsourceffi(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_free_trustsourceffi(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_constructor_trustsourceffi_bootstrap(`trust`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_clone_enrollmentoperation(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_free_enrollmentoperation(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_method_enrollmentoperation_operation_id(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_tinkle_ffi_fn_clone_ffisecureenrollmentstore(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_free_ffisecureenrollmentstore(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_init_callback_vtable_ffisecureenrollmentstore(`vtable`: UniffiVTableCallbackInterfaceFfiSecureEnrollmentStore,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_begin_restore(`ptr`: Long,`incarnation`: RustBuffer.ByValue,`revision`: RustBuffer.ByValue,`active`: Long,`permitId`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_end_restore(`ptr`: Long,`permitId`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_namespace_snapshot(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_commit_current(`ptr`: Long,`expectedRevision`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`operationId`: RustBuffer.ByValue,`record`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_begin_clear(`ptr`: Long,`expectedRevision`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_finish_clear(`ptr`: Long,`expectedRevision`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_clear(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_commit(`ptr`: Long,`kind`: RustBuffer.ByValue,`operationId`: RustBuffer.ByValue,`record`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_load_operation(`ptr`: Long,`operationId`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_load_active(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_clone_protectedenrollmentrecord(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_free_protectedenrollmentrecord(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_constructor_protectedenrollmentrecord_from_secure_storage(`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_protectedenrollmentrecord_copy_for_secure_storage(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_tinkle_ffi_fn_clone_storedenrollment(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_free_storedenrollment(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_method_storedenrollment_status(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
     external fun uniffi_tinkle_ffi_fn_clone_sqlitestorage(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Long
     external fun uniffi_tinkle_ffi_fn_free_sqlitestorage(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
@@ -1124,7 +1343,19 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_func_tinkle_ffi_init() and 0xFFFF) != 34048) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_connect() and 0xFFFF) != 57683) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_get_sessions() and 0xFFFF) != 52916) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_revoke_other_sessions() and 0xFFFF) != 6069) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_revoke_session() and 0xFFFF) != 47284) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_session_status() and 0xFFFF) != 59367) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_connect() and 0xFFFF) != 42477) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_abort_upload() and 0xFFFF) != 34739) {
@@ -1163,6 +1394,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_is_connected() and 0xFFFF) != 22480) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_is_signed_out() and 0xFFFF) != 36053) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_is_suspended() and 0xFFFF) != 47511) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1182,6 +1416,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect() and 0xFFFF) != 32861) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_replace_trust_source() and 0xFFFF) != 50093) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_resume() and 0xFFFF) != 27994) {
@@ -1217,10 +1454,37 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_tracked_targets() and 0xFFFF) != 47873) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_activate_enrollment() and 0xFFFF) != 43136) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_bind_secure_enrollment_store() and 0xFFFF) != 7806) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_load_enrollment_operation() and 0xFFFF) != 4266) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_prepare_enrollment() and 0xFFFF) != 34565) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_restore_active_enrollment() and 0xFFFF) != 34764) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_resume_enrollment() and 0xFFFF) != 16014) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_rotate_enrollment() and 0xFFFF) != 55365) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_send_code() and 0xFFFF) != 30274) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_sign_in() and 0xFFFF) != 24766) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_handle_push_wake() and 0xFFFF) != 20979) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_logout() and 0xFFFF) != 58830) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_logout() and 0xFFFF) != 22012) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_open_push_notification() and 0xFFFF) != 18901) {
@@ -1230,6 +1494,45 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_unregister_push() and 0xFFFF) != 33025) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_enrollmentoperation_operation_id() and 0xFFFF) != 1256) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_begin_restore() and 0xFFFF) != 28725) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_end_restore() and 0xFFFF) != 7264) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_namespace_snapshot() and 0xFFFF) != 16665) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_commit_current() and 0xFFFF) != 53640) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_begin_clear() and 0xFFFF) != 48419) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_finish_clear() and 0xFFFF) != 58217) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_clear() and 0xFFFF) != 25367) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_commit() and 0xFFFF) != 2601) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_load_operation() and 0xFFFF) != 18449) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_load_active() and 0xFFFF) != 64614) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_protectedenrollmentrecord_copy_for_secure_storage() and 0xFFFF) != 33978) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_storedenrollment_status() and 0xFFFF) != 16456) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_clear_principal() and 0xFFFF) != 7934) {
@@ -1268,10 +1571,16 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_fficursorstore_clear_principal() and 0xFFFF) != 37263) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new() and 0xFFFF) != 37854) {
+    if ((lib.uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new() and 0xFFFF) != 19386) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite() and 0xFFFF) != 8694) {
+    if ((lib.uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite() and 0xFFFF) != 4956) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_constructor_trustsourceffi_bootstrap() and 0xFFFF) != 27011) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_constructor_protectedenrollmentrecord_from_secure_storage() and 0xFFFF) != 51245) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open() and 0xFFFF) != 43150) {
@@ -1606,6 +1915,33 @@ private class JavaLangRefCleanable(
 /**
  * @suppress
  */
+public object FfiConverterUShort: FfiConverter<UShort, Short> {
+    override fun lift(value: Short): UShort {
+        return value.toUShort()
+    }
+
+    fun lift(value: Int): UShort {
+        return value.toUShort()
+    }
+
+    override fun read(buf: ByteBuffer): UShort {
+        return lift(buf.getShort())
+    }
+
+    override fun lower(value: UShort): Short {
+        return value.toShort()
+    }
+
+    override fun allocationSize(value: UShort) = 2UL
+
+    override fun write(value: UShort, buf: ByteBuffer) {
+        buf.putShort(value.toShort())
+    }
+}
+
+/**
+ * @suppress
+ */
 public object FfiConverterUInt: FfiConverter<UInt, Int> {
     override fun lift(value: Int): UInt {
         return value.toUInt()
@@ -1791,6 +2127,267 @@ public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
     override fun write(value: ByteArray, buf: ByteBuffer) {
         buf.putInt(value.size)
         buf.put(value)
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a handle
+// to the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its handle should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the handle, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
+ * Receipt for a durably retained operation/capability. No public constructor.
+ */
+public interface EnrollmentOperationInterface {
+
+    fun `operationId`(): kotlin.String
+
+    companion object
+}
+
+/**
+ * Receipt for a durably retained operation/capability. No public constructor.
+ */
+open class EnrollmentOperation: Disposable, AutoCloseable, EnrollmentOperationInterface
+{
+
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
+    }
+
+    /**
+     * @suppress
+     *
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
+    }
+
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the handle being freed concurrently.
+        try {
+            return block(this.uniffiCloneHandle())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
+        override fun run() {
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_tinkle_ffi_fn_free_enrollmentoperation(handle, status)
+            }
+        }
+    }
+
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
+        return uniffiRustCall() { status ->
+            UniffiLib.uniffi_tinkle_ffi_fn_clone_enrollmentoperation(handle, status)
+        }
+    }
+
+    override fun `operationId`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_enrollmentoperation_operation_id(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+
+
+
+
+
+
+
+    /**
+     * @suppress
+     */
+    companion object
+
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeEnrollmentOperation: FfiConverter<EnrollmentOperation, Long> {
+    override fun lower(value: EnrollmentOperation): Long {
+        return value.uniffiCloneHandle()
+    }
+
+    override fun lift(value: Long): EnrollmentOperation {
+        return EnrollmentOperation(UniffiWithHandle, value)
+    }
+
+    override fun read(buf: ByteBuffer): EnrollmentOperation {
+        return lift(buf.getLong())
+    }
+
+    override fun allocationSize(value: EnrollmentOperation) = 8UL
+
+    override fun write(value: EnrollmentOperation, buf: ByteBuffer) {
+        buf.putLong(lower(value))
     }
 }
 
@@ -2449,6 +3046,964 @@ public object FfiConverterTypeFfiCursorStore: FfiConverter<FfiCursorStore, Long>
 
 
 /**
+ * Implement over confidential, durable platform storage. Returning success from
+ * commit acknowledges durability, never an asynchronous enqueue. Operation is
+ * create-only; Candidate replaces only its operation; Active atomically installs
+ * both the active slot and operation record. Preserve prior active material
+ * until Active commits. No ordinary preferences/cache/SQLite implementation is
+ * provided. Failures are sanitized before they return to the Rust coordinator.
+ * clear is a full durable namespace invalidation, including all pending
+ * capabilities; it must prevent earlier writes from publishing afterward.
+ */
+public interface FfiSecureEnrollmentStore {
+
+    /**
+     * Atomically compare incarnation/revision and the entire ACTIVE record,
+     * reject cleanup markers, and exclude all namespace writes/clears/resets
+     * until endRestore. False grants no permission. No unchecked lease expiry.
+     * endRestore must cancel a late beginRestore with the same caller-owned ID.
+     */
+    suspend fun `beginRestore`(`incarnation`: kotlin.String, `revision`: kotlin.String, `active`: ProtectedEnrollmentRecord, `permitId`: kotlin.String): kotlin.Boolean
+
+    /**
+     * Idempotently release/cancel this install permit, even if acquisition is
+     * still pending. A lost owner needs process-scoped release or blocked writes
+     * until host recovery; never allow late adoption after a silent expiry.
+     */
+    suspend fun `endRestore`(`permitId`: kotlin.String)
+
+    /**
+     * Return None for legacy storage, which cannot attest restart-safe cleanup.
+     */
+    suspend fun `namespaceSnapshot`(): ProtectedEnrollmentNamespace?
+
+    /**
+     * Atomically compare revision, reject tombstones, commit, and advance revision.
+     * None means superseded with no write; never use an unconditional fallback.
+     */
+    suspend fun `commitCurrent`(`expectedRevision`: kotlin.String, `kind`: SecureEnrollmentWrite, `operationId`: kotlin.String, `record`: ProtectedEnrollmentRecord): kotlin.String?
+
+    /**
+     * Compare revision and persist a durable cleanup marker before acknowledging.
+     */
+    suspend fun `beginClear`(`expectedRevision`: kotlin.String): kotlin.Boolean
+
+    /**
+     * Clear only under that matching marker; retain it to block restoration.
+     */
+    suspend fun `finishClear`(`expectedRevision`: kotlin.String): kotlin.Boolean
+
+    /**
+     * Atomically invalidate ACTIVE and every operation/candidate/capability in
+     * this namespace. Return success only after durable clearing/tombstoning
+     * that also rejects pending old writes. Idempotent; failure is not an ack.
+     */
+    suspend fun `clear`()
+
+    suspend fun `commit`(`kind`: SecureEnrollmentWrite, `operationId`: kotlin.String, `record`: ProtectedEnrollmentRecord)
+
+    suspend fun `loadOperation`(`operationId`: kotlin.String): ProtectedEnrollmentRecord?
+
+    suspend fun `loadActive`(): ProtectedEnrollmentRecord?
+
+    companion object
+}
+
+/**
+ * Implement over confidential, durable platform storage. Returning success from
+ * commit acknowledges durability, never an asynchronous enqueue. Operation is
+ * create-only; Candidate replaces only its operation; Active atomically installs
+ * both the active slot and operation record. Preserve prior active material
+ * until Active commits. No ordinary preferences/cache/SQLite implementation is
+ * provided. Failures are sanitized before they return to the Rust coordinator.
+ * clear is a full durable namespace invalidation, including all pending
+ * capabilities; it must prevent earlier writes from publishing afterward.
+ */
+open class FfiSecureEnrollmentStoreImpl: Disposable, AutoCloseable, FfiSecureEnrollmentStore
+{
+
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
+    }
+
+    /**
+     * @suppress
+     *
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
+    }
+
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the handle being freed concurrently.
+        try {
+            return block(this.uniffiCloneHandle())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
+        override fun run() {
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_tinkle_ffi_fn_free_ffisecureenrollmentstore(handle, status)
+            }
+        }
+    }
+
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
+        return uniffiRustCall() { status ->
+            UniffiLib.uniffi_tinkle_ffi_fn_clone_ffisecureenrollmentstore(handle, status)
+        }
+    }
+
+
+    /**
+     * Atomically compare incarnation/revision and the entire ACTIVE record,
+     * reject cleanup markers, and exclude all namespace writes/clears/resets
+     * until endRestore. False grants no permission. No unchecked lease expiry.
+     * endRestore must cancel a late beginRestore with the same caller-owned ID.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `beginRestore`(`incarnation`: kotlin.String, `revision`: kotlin.String, `active`: ProtectedEnrollmentRecord, `permitId`: kotlin.String) : kotlin.Boolean {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_begin_restore(
+                uniffiHandle,
+
+        FfiConverterString.lower(`incarnation`),
+        FfiConverterString.lower(`revision`),
+        FfiConverterTypeProtectedEnrollmentRecord.lower(`active`),
+        FfiConverterString.lower(`permitId`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_i8(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_i8(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_i8(future) },
+        // lift function
+        { FfiConverterBoolean.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Idempotently release/cancel this install permit, even if acquisition is
+     * still pending. A lost owner needs process-scoped release or blocked writes
+     * until host recovery; never allow late adoption after a silent expiry.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `endRestore`(`permitId`: kotlin.String) {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_end_restore(
+                uniffiHandle,
+
+        FfiConverterString.lower(`permitId`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_void(future) },
+        // lift function
+        { },
+
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Return None for legacy storage, which cannot attest restart-safe cleanup.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `namespaceSnapshot`() : ProtectedEnrollmentNamespace? {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_namespace_snapshot(
+                uniffiHandle,
+
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalTypeProtectedEnrollmentNamespace.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Atomically compare revision, reject tombstones, commit, and advance revision.
+     * None means superseded with no write; never use an unconditional fallback.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `commitCurrent`(`expectedRevision`: kotlin.String, `kind`: SecureEnrollmentWrite, `operationId`: kotlin.String, `record`: ProtectedEnrollmentRecord) : kotlin.String? {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_commit_current(
+                uniffiHandle,
+
+        FfiConverterString.lower(`expectedRevision`),
+        FfiConverterTypeSecureEnrollmentWrite.lower(`kind`),
+        FfiConverterString.lower(`operationId`),
+        FfiConverterTypeProtectedEnrollmentRecord.lower(`record`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalString.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Compare revision and persist a durable cleanup marker before acknowledging.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `beginClear`(`expectedRevision`: kotlin.String) : kotlin.Boolean {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_begin_clear(
+                uniffiHandle,
+
+        FfiConverterString.lower(`expectedRevision`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_i8(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_i8(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_i8(future) },
+        // lift function
+        { FfiConverterBoolean.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Clear only under that matching marker; retain it to block restoration.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `finishClear`(`expectedRevision`: kotlin.String) : kotlin.Boolean {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_finish_clear(
+                uniffiHandle,
+
+        FfiConverterString.lower(`expectedRevision`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_i8(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_i8(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_i8(future) },
+        // lift function
+        { FfiConverterBoolean.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Atomically invalidate ACTIVE and every operation/candidate/capability in
+     * this namespace. Return success only after durable clearing/tombstoning
+     * that also rejects pending old writes. Idempotent; failure is not an ack.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `clear`() {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_clear(
+                uniffiHandle,
+
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_void(future) },
+        // lift function
+        { },
+
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `commit`(`kind`: SecureEnrollmentWrite, `operationId`: kotlin.String, `record`: ProtectedEnrollmentRecord) {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_commit(
+                uniffiHandle,
+
+        FfiConverterTypeSecureEnrollmentWrite.lower(`kind`),
+        FfiConverterString.lower(`operationId`),
+        FfiConverterTypeProtectedEnrollmentRecord.lower(`record`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_void(future) },
+        // lift function
+        { },
+
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `loadOperation`(`operationId`: kotlin.String) : ProtectedEnrollmentRecord? {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_load_operation(
+                uniffiHandle,
+
+        FfiConverterString.lower(`operationId`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalTypeProtectedEnrollmentRecord.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `loadActive`() : ProtectedEnrollmentRecord? {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_load_active(
+                uniffiHandle,
+
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalTypeProtectedEnrollmentRecord.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+
+
+
+
+
+
+    /**
+     * @suppress
+     */
+    companion object
+
+}
+
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceFfiSecureEnrollmentStore {
+    internal object `beginRestore`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod0 {
+        override fun callback(`uniffiHandle`: Long,`incarnation`: RustBuffer.ByValue,`revision`: RustBuffer.ByValue,`active`: Long,`permitId`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteI8,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
+            val uniffiObj = FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(uniffiHandle)
+            val makeCall = suspend { ->
+                uniffiObj.`beginRestore`(
+                    FfiConverterString.lift(`incarnation`),
+                    FfiConverterString.lift(`revision`),
+                    FfiConverterTypeProtectedEnrollmentRecord.lift(`active`),
+                    FfiConverterString.lift(`permitId`),
+                )
+            }
+            val uniffiHandleSuccess = { returnValue: kotlin.Boolean ->
+                val uniffiResult = UniffiForeignFutureResultI8.UniffiByValue(
+                    FfiConverterBoolean.lower(returnValue),
+                    UniffiRustCallStatus.ByValue()
+                )
+                uniffiResult.write()
+                uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
+            }
+            val uniffiHandleError = { callStatus: UniffiRustCallStatus.ByValue ->
+                uniffiFutureCallback.callback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultI8.UniffiByValue(
+                        0.toByte(),
+                        callStatus,
+                    ),
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall,
+                uniffiHandleSuccess,
+                uniffiHandleError,
+                { e: FfiException -> FfiConverterTypeFfiError.lower(e) },
+                uniffiOutDroppedCallback
+            )
+        }
+    }
+    internal object `endRestore`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod1 {
+        override fun callback(`uniffiHandle`: Long,`permitId`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
+            val uniffiObj = FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(uniffiHandle)
+            val makeCall = suspend { ->
+                uniffiObj.`endRestore`(
+                    FfiConverterString.lift(`permitId`),
+                )
+            }
+            val uniffiHandleSuccess = { _: Unit ->
+                val uniffiResult = UniffiForeignFutureResultVoid.UniffiByValue(
+                    UniffiRustCallStatus.ByValue()
+                )
+                uniffiResult.write()
+                uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
+            }
+            val uniffiHandleError = { callStatus: UniffiRustCallStatus.ByValue ->
+                uniffiFutureCallback.callback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultVoid.UniffiByValue(
+                        callStatus,
+                    ),
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall,
+                uniffiHandleSuccess,
+                uniffiHandleError,
+                { e: FfiException -> FfiConverterTypeFfiError.lower(e) },
+                uniffiOutDroppedCallback
+            )
+        }
+    }
+    internal object `namespaceSnapshot`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod2 {
+        override fun callback(`uniffiHandle`: Long,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
+            val uniffiObj = FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(uniffiHandle)
+            val makeCall = suspend { ->
+                uniffiObj.`namespaceSnapshot`(
+                )
+            }
+            val uniffiHandleSuccess = { returnValue: ProtectedEnrollmentNamespace? ->
+                val uniffiResult = UniffiForeignFutureResultRustBuffer.UniffiByValue(
+                    FfiConverterOptionalTypeProtectedEnrollmentNamespace.lower(returnValue),
+                    UniffiRustCallStatus.ByValue()
+                )
+                uniffiResult.write()
+                uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
+            }
+            val uniffiHandleError = { callStatus: UniffiRustCallStatus.ByValue ->
+                uniffiFutureCallback.callback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer.UniffiByValue(
+                        RustBuffer.ByValue(),
+                        callStatus,
+                    ),
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall,
+                uniffiHandleSuccess,
+                uniffiHandleError,
+                { e: FfiException -> FfiConverterTypeFfiError.lower(e) },
+                uniffiOutDroppedCallback
+            )
+        }
+    }
+    internal object `commitCurrent`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod3 {
+        override fun callback(`uniffiHandle`: Long,`expectedRevision`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`operationId`: RustBuffer.ByValue,`record`: Long,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
+            val uniffiObj = FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(uniffiHandle)
+            val makeCall = suspend { ->
+                uniffiObj.`commitCurrent`(
+                    FfiConverterString.lift(`expectedRevision`),
+                    FfiConverterTypeSecureEnrollmentWrite.lift(`kind`),
+                    FfiConverterString.lift(`operationId`),
+                    FfiConverterTypeProtectedEnrollmentRecord.lift(`record`),
+                )
+            }
+            val uniffiHandleSuccess = { returnValue: kotlin.String? ->
+                val uniffiResult = UniffiForeignFutureResultRustBuffer.UniffiByValue(
+                    FfiConverterOptionalString.lower(returnValue),
+                    UniffiRustCallStatus.ByValue()
+                )
+                uniffiResult.write()
+                uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
+            }
+            val uniffiHandleError = { callStatus: UniffiRustCallStatus.ByValue ->
+                uniffiFutureCallback.callback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer.UniffiByValue(
+                        RustBuffer.ByValue(),
+                        callStatus,
+                    ),
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall,
+                uniffiHandleSuccess,
+                uniffiHandleError,
+                { e: FfiException -> FfiConverterTypeFfiError.lower(e) },
+                uniffiOutDroppedCallback
+            )
+        }
+    }
+    internal object `beginClear`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod4 {
+        override fun callback(`uniffiHandle`: Long,`expectedRevision`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteI8,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
+            val uniffiObj = FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(uniffiHandle)
+            val makeCall = suspend { ->
+                uniffiObj.`beginClear`(
+                    FfiConverterString.lift(`expectedRevision`),
+                )
+            }
+            val uniffiHandleSuccess = { returnValue: kotlin.Boolean ->
+                val uniffiResult = UniffiForeignFutureResultI8.UniffiByValue(
+                    FfiConverterBoolean.lower(returnValue),
+                    UniffiRustCallStatus.ByValue()
+                )
+                uniffiResult.write()
+                uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
+            }
+            val uniffiHandleError = { callStatus: UniffiRustCallStatus.ByValue ->
+                uniffiFutureCallback.callback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultI8.UniffiByValue(
+                        0.toByte(),
+                        callStatus,
+                    ),
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall,
+                uniffiHandleSuccess,
+                uniffiHandleError,
+                { e: FfiException -> FfiConverterTypeFfiError.lower(e) },
+                uniffiOutDroppedCallback
+            )
+        }
+    }
+    internal object `finishClear`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod5 {
+        override fun callback(`uniffiHandle`: Long,`expectedRevision`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteI8,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
+            val uniffiObj = FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(uniffiHandle)
+            val makeCall = suspend { ->
+                uniffiObj.`finishClear`(
+                    FfiConverterString.lift(`expectedRevision`),
+                )
+            }
+            val uniffiHandleSuccess = { returnValue: kotlin.Boolean ->
+                val uniffiResult = UniffiForeignFutureResultI8.UniffiByValue(
+                    FfiConverterBoolean.lower(returnValue),
+                    UniffiRustCallStatus.ByValue()
+                )
+                uniffiResult.write()
+                uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
+            }
+            val uniffiHandleError = { callStatus: UniffiRustCallStatus.ByValue ->
+                uniffiFutureCallback.callback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultI8.UniffiByValue(
+                        0.toByte(),
+                        callStatus,
+                    ),
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall,
+                uniffiHandleSuccess,
+                uniffiHandleError,
+                { e: FfiException -> FfiConverterTypeFfiError.lower(e) },
+                uniffiOutDroppedCallback
+            )
+        }
+    }
+    internal object `clear`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod6 {
+        override fun callback(`uniffiHandle`: Long,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
+            val uniffiObj = FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(uniffiHandle)
+            val makeCall = suspend { ->
+                uniffiObj.`clear`(
+                )
+            }
+            val uniffiHandleSuccess = { _: Unit ->
+                val uniffiResult = UniffiForeignFutureResultVoid.UniffiByValue(
+                    UniffiRustCallStatus.ByValue()
+                )
+                uniffiResult.write()
+                uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
+            }
+            val uniffiHandleError = { callStatus: UniffiRustCallStatus.ByValue ->
+                uniffiFutureCallback.callback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultVoid.UniffiByValue(
+                        callStatus,
+                    ),
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall,
+                uniffiHandleSuccess,
+                uniffiHandleError,
+                { e: FfiException -> FfiConverterTypeFfiError.lower(e) },
+                uniffiOutDroppedCallback
+            )
+        }
+    }
+    internal object `commit`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod7 {
+        override fun callback(`uniffiHandle`: Long,`kind`: RustBuffer.ByValue,`operationId`: RustBuffer.ByValue,`record`: Long,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
+            val uniffiObj = FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(uniffiHandle)
+            val makeCall = suspend { ->
+                uniffiObj.`commit`(
+                    FfiConverterTypeSecureEnrollmentWrite.lift(`kind`),
+                    FfiConverterString.lift(`operationId`),
+                    FfiConverterTypeProtectedEnrollmentRecord.lift(`record`),
+                )
+            }
+            val uniffiHandleSuccess = { _: Unit ->
+                val uniffiResult = UniffiForeignFutureResultVoid.UniffiByValue(
+                    UniffiRustCallStatus.ByValue()
+                )
+                uniffiResult.write()
+                uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
+            }
+            val uniffiHandleError = { callStatus: UniffiRustCallStatus.ByValue ->
+                uniffiFutureCallback.callback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultVoid.UniffiByValue(
+                        callStatus,
+                    ),
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall,
+                uniffiHandleSuccess,
+                uniffiHandleError,
+                { e: FfiException -> FfiConverterTypeFfiError.lower(e) },
+                uniffiOutDroppedCallback
+            )
+        }
+    }
+    internal object `loadOperation`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod8 {
+        override fun callback(`uniffiHandle`: Long,`operationId`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
+            val uniffiObj = FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(uniffiHandle)
+            val makeCall = suspend { ->
+                uniffiObj.`loadOperation`(
+                    FfiConverterString.lift(`operationId`),
+                )
+            }
+            val uniffiHandleSuccess = { returnValue: ProtectedEnrollmentRecord? ->
+                val uniffiResult = UniffiForeignFutureResultRustBuffer.UniffiByValue(
+                    FfiConverterOptionalTypeProtectedEnrollmentRecord.lower(returnValue),
+                    UniffiRustCallStatus.ByValue()
+                )
+                uniffiResult.write()
+                uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
+            }
+            val uniffiHandleError = { callStatus: UniffiRustCallStatus.ByValue ->
+                uniffiFutureCallback.callback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer.UniffiByValue(
+                        RustBuffer.ByValue(),
+                        callStatus,
+                    ),
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall,
+                uniffiHandleSuccess,
+                uniffiHandleError,
+                { e: FfiException -> FfiConverterTypeFfiError.lower(e) },
+                uniffiOutDroppedCallback
+            )
+        }
+    }
+    internal object `loadActive`: UniffiCallbackInterfaceFfiSecureEnrollmentStoreMethod9 {
+        override fun callback(`uniffiHandle`: Long,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
+            val uniffiObj = FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(uniffiHandle)
+            val makeCall = suspend { ->
+                uniffiObj.`loadActive`(
+                )
+            }
+            val uniffiHandleSuccess = { returnValue: ProtectedEnrollmentRecord? ->
+                val uniffiResult = UniffiForeignFutureResultRustBuffer.UniffiByValue(
+                    FfiConverterOptionalTypeProtectedEnrollmentRecord.lower(returnValue),
+                    UniffiRustCallStatus.ByValue()
+                )
+                uniffiResult.write()
+                uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
+            }
+            val uniffiHandleError = { callStatus: UniffiRustCallStatus.ByValue ->
+                uniffiFutureCallback.callback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer.UniffiByValue(
+                        RustBuffer.ByValue(),
+                        callStatus,
+                    ),
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall,
+                uniffiHandleSuccess,
+                uniffiHandleError,
+                { e: FfiException -> FfiConverterTypeFfiError.lower(e) },
+                uniffiOutDroppedCallback
+            )
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeFfiSecureEnrollmentStore.handleMap.remove(handle)
+        }
+    }
+
+    internal object uniffiClone: UniffiCallbackInterfaceClone {
+        override fun callback(handle: Long): Long {
+            return FfiConverterTypeFfiSecureEnrollmentStore.handleMap.clone(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceFfiSecureEnrollmentStore.UniffiByValue(
+        uniffiFree,
+        uniffiClone,
+        `beginRestore`,
+        `endRestore`,
+        `namespaceSnapshot`,
+        `commitCurrent`,
+        `beginClear`,
+        `finishClear`,
+        `clear`,
+        `commit`,
+        `loadOperation`,
+        `loadActive`,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_tinkle_ffi_fn_init_callback_vtable_ffisecureenrollmentstore(vtable)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiSecureEnrollmentStore: FfiConverter<FfiSecureEnrollmentStore, Long> {
+    internal val handleMap = UniffiHandleMap<FfiSecureEnrollmentStore>()
+
+    override fun lower(value: FfiSecureEnrollmentStore): Long {
+        if (value is FfiSecureEnrollmentStoreImpl) {
+             // Rust-implemented object.  Clone the handle and return it
+            return value.uniffiCloneHandle()
+         } else {
+            // Kotlin object, generate a new vtable handle and return that.
+            return handleMap.insert(value)
+         }
+    }
+
+    override fun lift(value: Long): FfiSecureEnrollmentStore {
+        if ((value and 1.toLong()) == 0.toLong()) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return FfiSecureEnrollmentStoreImpl(UniffiWithHandle, value)
+        } else {
+            // Kotlin-generated handle, get the object from the handle map
+            return handleMap.remove(value)
+        }
+    }
+
+    override fun read(buf: ByteBuffer): FfiSecureEnrollmentStore {
+        return lift(buf.getLong())
+    }
+
+    override fun allocationSize(value: FfiSecureEnrollmentStore) = 8UL
+
+    override fun write(value: FfiSecureEnrollmentStore, buf: ByteBuffer) {
+        buf.putLong(lower(value))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a handle
+// to the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its handle should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the handle, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
  * In-memory store for tests and ephemeral sessions. Wraps
  * [`libtinkle::InMemoryCursorStore`]; production apps implement
  * [`FfiCursorStore`] over SQLite/Keychain/DataStore instead.
@@ -2606,6 +4161,290 @@ public object FfiConverterTypeInMemoryFfiStore: FfiConverter<InMemoryFfiStore, L
     override fun allocationSize(value: InMemoryFfiStore) = 8UL
 
     override fun write(value: InMemoryFfiStore, buf: ByteBuffer) {
+        buf.putLong(lower(value))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a handle
+// to the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its handle should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the handle, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
+ * Opaque zeroizing Rust owner of a protected enrollment record. Foreign code
+ * may copy bytes only to encrypt/store them, must erase its copies, and release
+ * this handle after the platform transaction finishes. Never log these bytes.
+ */
+public interface ProtectedEnrollmentRecordInterface {
+
+    /**
+     * Copy for the host's protected transaction only. No persistence occurs here.
+     */
+    fun `copyForSecureStorage`(): kotlin.ByteArray
+
+    companion object
+}
+
+/**
+ * Opaque zeroizing Rust owner of a protected enrollment record. Foreign code
+ * may copy bytes only to encrypt/store them, must erase its copies, and release
+ * this handle after the platform transaction finishes. Never log these bytes.
+ */
+open class ProtectedEnrollmentRecord: Disposable, AutoCloseable, ProtectedEnrollmentRecordInterface
+{
+
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
+    }
+
+    /**
+     * @suppress
+     *
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
+    }
+
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the handle being freed concurrently.
+        try {
+            return block(this.uniffiCloneHandle())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
+        override fun run() {
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_tinkle_ffi_fn_free_protectedenrollmentrecord(handle, status)
+            }
+        }
+    }
+
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
+        return uniffiRustCall() { status ->
+            UniffiLib.uniffi_tinkle_ffi_fn_clone_protectedenrollmentrecord(handle, status)
+        }
+    }
+
+
+    /**
+     * Copy for the host's protected transaction only. No persistence occurs here.
+     */override fun `copyForSecureStorage`(): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_protectedenrollmentrecord_copy_for_secure_storage(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+
+
+
+
+
+
+    companion object {
+
+    /**
+     * Adopt decrypted bytes from Keychain/Keystore-protected storage.
+     */ fun `fromSecureStorage`(`bytes`: kotlin.ByteArray): ProtectedEnrollmentRecord {
+            return FfiConverterTypeProtectedEnrollmentRecord.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_constructor_protectedenrollmentrecord_from_secure_storage(
+
+
+        FfiConverterByteArray.lower(`bytes`),_status)
+}
+    )
+    }
+
+
+
+    }
+
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeProtectedEnrollmentRecord: FfiConverter<ProtectedEnrollmentRecord, Long> {
+    override fun lower(value: ProtectedEnrollmentRecord): Long {
+        return value.uniffiCloneHandle()
+    }
+
+    override fun lift(value: Long): ProtectedEnrollmentRecord {
+        return ProtectedEnrollmentRecord(UniffiWithHandle, value)
+    }
+
+    override fun read(buf: ByteBuffer): ProtectedEnrollmentRecord {
+        return lift(buf.getLong())
+    }
+
+    override fun allocationSize(value: ProtectedEnrollmentRecord) = 8UL
+
+    override fun write(value: ProtectedEnrollmentRecord, buf: ByteBuffer) {
         buf.putLong(lower(value))
     }
 }
@@ -3282,12 +5121,293 @@ public object FfiConverterTypeSqliteStorage: FfiConverter<SqliteStorage, Long> {
 
 
 /**
+ * Securely persisted candidate, never a Returning credential. No constructor.
+ */
+public interface StoredEnrollmentInterface {
+
+    fun `status`(): EnrollmentStatus
+
+    companion object
+}
+
+/**
+ * Securely persisted candidate, never a Returning credential. No constructor.
+ */
+open class StoredEnrollment: Disposable, AutoCloseable, StoredEnrollmentInterface
+{
+
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
+    }
+
+    /**
+     * @suppress
+     *
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
+    }
+
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the handle being freed concurrently.
+        try {
+            return block(this.uniffiCloneHandle())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
+        override fun run() {
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_tinkle_ffi_fn_free_storedenrollment(handle, status)
+            }
+        }
+    }
+
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
+        return uniffiRustCall() { status ->
+            UniffiLib.uniffi_tinkle_ffi_fn_clone_storedenrollment(handle, status)
+        }
+    }
+
+    override fun `status`(): EnrollmentStatus {
+            return FfiConverterTypeEnrollmentStatus.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_storedenrollment_status(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+
+
+
+
+
+
+
+    /**
+     * @suppress
+     */
+    companion object
+
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStoredEnrollment: FfiConverter<StoredEnrollment, Long> {
+    override fun lower(value: StoredEnrollment): Long {
+        return value.uniffiCloneHandle()
+    }
+
+    override fun lift(value: Long): StoredEnrollment {
+        return StoredEnrollment(UniffiWithHandle, value)
+    }
+
+    override fun read(buf: ByteBuffer): StoredEnrollment {
+        return lift(buf.getLong())
+    }
+
+    override fun allocationSize(value: StoredEnrollment) = 8UL
+
+    override fun write(value: StoredEnrollment, buf: ByteBuffer) {
+        buf.putLong(lower(value))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a handle
+// to the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its handle should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the handle, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
  * UniFFI client object.
  */
 public interface TinkleClientInterface {
 
     /**
-     * Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
+     * List active devices on the current authenticated channel.
+     */
+    suspend fun `getSessions`(): List<AccountSession>
+
+    /**
+     * Revoke every other device while retaining this device's enrollment.
+     */
+    suspend fun `revokeOtherSessions`(): kotlin.Boolean
+
+    /**
+     * Revoke one neutral session UUID once; unknown outcomes are never replayed.
+     */
+    suspend fun `revokeSession`(`sessionId`: kotlin.String): kotlin.Boolean
+
+    /**
+     * Query transport, authorization, and retained cleanup without network I/O.
+     */
+    suspend fun `sessionStatus`(): AccountStatus
+
+    /**
+     * Foreground connect: encrypted TCP + Syntra handshake to ACTIVE.
      * Reissues the retained watch set on the fresh connection, so presence
      * observations survive reconnects.
      */
@@ -3407,6 +5527,12 @@ public interface TinkleClientInterface {
     suspend fun `isConnected`(): kotlin.Boolean
 
     /**
+     * True even if durable clearing failed. This Client cannot restore any
+     * credentials or reconnect after local logout; resolve clearing explicitly.
+     */
+    fun `isSignedOut`(): kotlin.Boolean
+
+    /**
      * True while [`Self::suspend`] is in effect.
      */
     suspend fun `isSuspended`(): kotlin.Boolean
@@ -3470,6 +5596,11 @@ public interface TinkleClientInterface {
      * the fresh connection, so presence observations survive reconnects.
      */
     suspend fun `reconnect`()
+
+    /**
+     * Install newly enrolled/rotated channel trust and retire the old channel.
+     */
+    suspend fun `replaceTrustSource`(`source`: TrustSourceFfi)
 
     /**
      * Clear suspension set by [`Self::suspend`]. The supervisor resumes
@@ -3563,6 +5694,49 @@ public interface TinkleClientInterface {
     suspend fun `trackedTargets`(): List<kotlin.String>
 
     /**
+     * No acknowledgement can be sent without a StoredEnrollment receipt. Uses
+     * pinned Bootstrap and the retained capability; persists ACTIVE before fresh Returning.
+     */
+    suspend fun `activateEnrollment`(`candidate`: StoredEnrollment): EnrollmentStatus
+
+    /**
+     * Register a namespace for full acknowledged logout invalidation without
+     * restoring credentials. Normal enrollment/restore calls bind automatically.
+     */
+    suspend fun `bindSecureEnrollmentStore`(`store`: FfiSecureEnrollmentStore)
+
+    /**
+     * Recover pending flow after an ambiguous result/process restart, without SMS reuse.
+     */
+    suspend fun `loadEnrollmentOperation`(`store`: FfiSecureEnrollmentStore, `operationId`: kotlin.String): EnrollmentOperation
+
+    /**
+     * Persist the operation UUID/capability before SignIn or rotation can run.
+     */
+    suspend fun `prepareEnrollment`(`store`: FfiSecureEnrollmentStore): EnrollmentOperation
+
+    /**
+     * Observe conditional retained metadata before restoring an unexpired ACTIVE key.
+     * Exact retirement fences and awaits local clearing. Expired keys are never
+     * installed; UNKNOWN grants no admission. Inspect sessionStatus for cleanup acknowledgement.
+     */
+    suspend fun `restoreActiveEnrollment`(`store`: FfiSecureEnrollmentStore): EnrollmentStatus
+
+    suspend fun `resumeEnrollment`(`operation`: EnrollmentOperation): StoredEnrollment
+
+    suspend fun `rotateEnrollment`(`operation`: EnrollmentOperation): StoredEnrollment
+
+    /**
+     * First public request is automatically InitConnect-wrapped on this connection.
+     */
+    suspend fun `sendCode`(`phoneNumber`: kotlin.String, `langCode`: kotlin.String): CodeDelivery
+
+    /**
+     * Deliver on pinned Bootstrap, then await atomic candidate persistence.
+     */
+    suspend fun `signIn`(`phoneNumber`: kotlin.String, `code`: kotlin.String, `verificationId`: kotlin.String, `operation`: EnrollmentOperation): EnrollmentSignInResult
+
+    /**
      * Bounded push wake: parse-then-commit without the foreground
      * supervisor or socket.
      *
@@ -3580,11 +5754,11 @@ public interface TinkleClientInterface {
     suspend fun `handlePushWake`(`envelope`: FfiPushEnvelope, `timeoutSecs`: kotlin.ULong): FfiPushOutcome
 
     /**
-     * Logout + local cleanup: best-effort `AccountService/Logout`, then
-     * wipes the principal's SQLite rows, drops catch-up demand, and
-     * resets the session so in-flight push/reconcile work fences out.
-     * Returns the server's `logged_out` flag (`false` when the RPC was
-     * skipped or failed; the local wipe still happened).
+     * Permanently sign this Client out, retire keys/channel/liveness work and
+     * require acknowledged full secure-store clearing. True confirms remote
+     * revocation; false leaves it unconfirmed after successful local clearing.
+     * A cleanup error never reverses isSignedOut and never claims durability;
+     * resolve host clearing before permitting restoration on a new Client.
      */
     suspend fun `logout`(): kotlin.Boolean
 
@@ -3647,22 +5821,19 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
         this.cleanable = null
     }
     /**
-     * Create a client. `credential` is the opaque session token;
+     * Create a client with explicit bootstrap/returning channel trust;
      * `store` is the foreign (or in-memory) durable cursor store.
      *
-     * Fails fast with [`FfiError::Internal`] on an invalid non-blank
-     * `grpc_endpoint` (missing scheme, non-`https` without
-     * `allow_insecure`) instead of surfacing a retried network failure
-     * at reconciliation time.
+     * Consumes the one-use trust source. Invalid configuration fails fast.
      */
-    constructor(`config`: ClientConfigFfi, `credential`: kotlin.String, `store`: FfiCursorStore) :
+    constructor(`config`: ClientConfigFfi, `trustSource`: TrustSourceFfi, `store`: FfiCursorStore) :
         this(UniffiWithHandle,
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.uniffi_tinkle_ffi_fn_constructor_tinkleclient_new(
 
 
         FfiConverterTypeClientConfigFfi.lower(`config`),
-        FfiConverterString.lower(`credential`),
+        FfiConverterTypeTrustSourceFfi.lower(`trustSource`),
         FfiConverterTypeFfiCursorStore.lower(`store`),_status)
 }
     )
@@ -3745,7 +5916,103 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
 
     /**
-     * Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
+     * List active devices on the current authenticated channel.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `getSessions`() : List<AccountSession> {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_get_sessions(
+                uniffiHandle,
+
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeAccountSession.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Revoke every other device while retaining this device's enrollment.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `revokeOtherSessions`() : kotlin.Boolean {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_revoke_other_sessions(
+                uniffiHandle,
+
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_i8(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_i8(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_i8(future) },
+        // lift function
+        { FfiConverterBoolean.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Revoke one neutral session UUID once; unknown outcomes are never replayed.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `revokeSession`(`sessionId`: kotlin.String) : kotlin.Boolean {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_revoke_session(
+                uniffiHandle,
+
+        FfiConverterString.lower(`sessionId`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_i8(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_i8(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_i8(future) },
+        // lift function
+        { FfiConverterBoolean.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Query transport, authorization, and retained cleanup without network I/O.
+     */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sessionStatus`() : AccountStatus {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_session_status(
+                uniffiHandle,
+
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeAccountStatus.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+
+    /**
+     * Foreground connect: encrypted TCP + Syntra handshake to ACTIVE.
      * Reissues the retained watch set on the fresh connection, so presence
      * observations survive reconnects.
      */
@@ -4133,6 +6400,23 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
 
     /**
+     * True even if durable clearing failed. This Client cannot restore any
+     * credentials or reconnect after local logout; resolve clearing explicitly.
+     */override fun `isSignedOut`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_is_signed_out(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+
+    /**
      * True while [`Self::suspend`] is in effect.
      */
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
@@ -4319,6 +6603,32 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
             UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_reconnect(
                 uniffiHandle,
 
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_void(future) },
+        // lift function
+        { },
+
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Install newly enrolled/rotated channel trust and retire the old channel.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `replaceTrustSource`(`source`: TrustSourceFfi) {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_replace_trust_source(
+                uniffiHandle,
+
+        FfiConverterTypeTrustSourceFfi.lower(`source`),
             )
         },
         { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
@@ -4643,6 +6953,235 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
 
     /**
+     * No acknowledgement can be sent without a StoredEnrollment receipt. Uses
+     * pinned Bootstrap and the retained capability; persists ACTIVE before fresh Returning.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `activateEnrollment`(`candidate`: StoredEnrollment) : EnrollmentStatus {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_activate_enrollment(
+                uniffiHandle,
+
+        FfiConverterTypeStoredEnrollment.lower(`candidate`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeEnrollmentStatus.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Register a namespace for full acknowledged logout invalidation without
+     * restoring credentials. Normal enrollment/restore calls bind automatically.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `bindSecureEnrollmentStore`(`store`: FfiSecureEnrollmentStore) {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_bind_secure_enrollment_store(
+                uniffiHandle,
+
+        FfiConverterTypeFfiSecureEnrollmentStore.lower(`store`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_void(future) },
+        // lift function
+        { },
+
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Recover pending flow after an ambiguous result/process restart, without SMS reuse.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `loadEnrollmentOperation`(`store`: FfiSecureEnrollmentStore, `operationId`: kotlin.String) : EnrollmentOperation {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_load_enrollment_operation(
+                uniffiHandle,
+
+        FfiConverterTypeFfiSecureEnrollmentStore.lower(`store`),
+        FfiConverterString.lower(`operationId`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_u64(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_u64(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_u64(future) },
+        // lift function
+        { FfiConverterTypeEnrollmentOperation.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Persist the operation UUID/capability before SignIn or rotation can run.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `prepareEnrollment`(`store`: FfiSecureEnrollmentStore) : EnrollmentOperation {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_prepare_enrollment(
+                uniffiHandle,
+
+        FfiConverterTypeFfiSecureEnrollmentStore.lower(`store`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_u64(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_u64(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_u64(future) },
+        // lift function
+        { FfiConverterTypeEnrollmentOperation.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Observe conditional retained metadata before restoring an unexpired ACTIVE key.
+     * Exact retirement fences and awaits local clearing. Expired keys are never
+     * installed; UNKNOWN grants no admission. Inspect sessionStatus for cleanup acknowledgement.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `restoreActiveEnrollment`(`store`: FfiSecureEnrollmentStore) : EnrollmentStatus {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_restore_active_enrollment(
+                uniffiHandle,
+
+        FfiConverterTypeFfiSecureEnrollmentStore.lower(`store`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeEnrollmentStatus.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `resumeEnrollment`(`operation`: EnrollmentOperation) : StoredEnrollment {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_resume_enrollment(
+                uniffiHandle,
+
+        FfiConverterTypeEnrollmentOperation.lower(`operation`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_u64(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_u64(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_u64(future) },
+        // lift function
+        { FfiConverterTypeStoredEnrollment.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `rotateEnrollment`(`operation`: EnrollmentOperation) : StoredEnrollment {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_rotate_enrollment(
+                uniffiHandle,
+
+        FfiConverterTypeEnrollmentOperation.lower(`operation`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_u64(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_u64(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_u64(future) },
+        // lift function
+        { FfiConverterTypeStoredEnrollment.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * First public request is automatically InitConnect-wrapped on this connection.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sendCode`(`phoneNumber`: kotlin.String, `langCode`: kotlin.String) : CodeDelivery {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_send_code(
+                uniffiHandle,
+
+        FfiConverterString.lower(`phoneNumber`),
+        FfiConverterString.lower(`langCode`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeCodeDelivery.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Deliver on pinned Bootstrap, then await atomic candidate persistence.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `signIn`(`phoneNumber`: kotlin.String, `code`: kotlin.String, `verificationId`: kotlin.String, `operation`: EnrollmentOperation) : EnrollmentSignInResult {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_sign_in(
+                uniffiHandle,
+
+        FfiConverterString.lower(`phoneNumber`),
+        FfiConverterString.lower(`code`),
+        FfiConverterString.lower(`verificationId`),
+        FfiConverterTypeEnrollmentOperation.lower(`operation`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeEnrollmentSignInResult.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
      * Bounded push wake: parse-then-commit without the foreground
      * supervisor or socket.
      *
@@ -4681,11 +7220,11 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
 
     /**
-     * Logout + local cleanup: best-effort `AccountService/Logout`, then
-     * wipes the principal's SQLite rows, drops catch-up demand, and
-     * resets the session so in-flight push/reconcile work fences out.
-     * Returns the server's `logged_out` flag (`false` when the RPC was
-     * skipped or failed; the local wipe still happened).
+     * Permanently sign this Client out, retire keys/channel/liveness work and
+     * require acknowledged full secure-store clearing. True confirms remote
+     * revocation; false leaves it unconfirmed after successful local clearing.
+     * A cleanup error never reverses isSignedOut and never claims durability;
+     * resolve host clearing before permitting restoration on a new Client.
      */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
@@ -4811,16 +7350,16 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
      * journals and commits cache + accept positions atomically, then emits
      * `ConversationChanged`/`MessagesChanged`; UI reads the shared cache.
      *
-     * Fails fast on invalid `grpc_endpoint` like [`Self::new`].
+     * Consumes the one-use trust source like [`Self::new`].
      */
-    @Throws(FfiException::class) fun `newSqlite`(`config`: ClientConfigFfi, `credential`: kotlin.String, `storage`: SqliteStorage): TinkleClient {
+    @Throws(FfiException::class) fun `newSqlite`(`config`: ClientConfigFfi, `trustSource`: TrustSourceFfi, `storage`: SqliteStorage): TinkleClient {
             return FfiConverterTypeTinkleClient.lift(
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.uniffi_tinkle_ffi_fn_constructor_tinkleclient_new_sqlite(
 
 
         FfiConverterTypeClientConfigFfi.lower(`config`),
-        FfiConverterString.lower(`credential`),
+        FfiConverterTypeTrustSourceFfi.lower(`trustSource`),
         FfiConverterTypeSqliteStorage.lower(`storage`),_status)
 }
     )
@@ -4857,40 +7396,475 @@ public object FfiConverterTypeTinkleClient: FfiConverter<TinkleClient, Long> {
 }
 
 
+// This template implements a class for working with a Rust struct via a handle
+// to the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its handle should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the handle, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
 
 /**
- * Record mirrored into [`libtinkle::ClientConfig`]. All fields owned.
- *
- * `grpc_endpoint` enables the direct-unary gRPC fallback for reconciliation
- * RPCs (`GetMessages`/`GetTargetChanges`). Syntra stays primary on the live
- * connection; when set, retryable Syntra failures fall back to this endpoint
- * automatically. It is validated fail-fast by [`TinkleClient::new`] and
- * [`TinkleClient::new_sqlite`]: a non-blank-but-invalid endpoint (missing
- * scheme, non-`https` without `allow_insecure`) returns
- * [`FfiError::Internal`] at construction instead of surfacing as a retried
- * network failure at reconciliation time. `None` (or blank, treated as
- * unset for backward compatibility) keeps Syntra-only reconciliation.
+ * One-use Bootstrap trust owner. Returning is installed only through validated
+ * ACTIVE secure-store restoration or the acknowledged enrollment coordinator.
+ */
+public interface TrustSourceFfiInterface {
+
+    companion object
+}
+
+/**
+ * One-use Bootstrap trust owner. Returning is installed only through validated
+ * ACTIVE secure-store restoration or the acknowledged enrollment coordinator.
+ */
+open class TrustSourceFfi: Disposable, AutoCloseable, TrustSourceFfiInterface
+{
+
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
+    }
+
+    /**
+     * @suppress
+     *
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
+    }
+
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the handle being freed concurrently.
+        try {
+            return block(this.uniffiCloneHandle())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
+        override fun run() {
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_tinkle_ffi_fn_free_trustsourceffi(handle, status)
+            }
+        }
+    }
+
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
+        return uniffiRustCall() { status ->
+            UniffiLib.uniffi_tinkle_ffi_fn_clone_trustsourceffi(handle, status)
+        }
+    }
+
+
+
+
+
+
+
+    companion object {
+
+    @Throws(FfiException::class) fun `bootstrap`(`trust`: ServerTrustFfi): TrustSourceFfi {
+            return FfiConverterTypeTrustSourceFfi.lift(
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_constructor_trustsourceffi_bootstrap(
+
+
+        FfiConverterTypeServerTrustFfi.lower(`trust`),_status)
+}
+    )
+    }
+
+
+
+    }
+
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeTrustSourceFfi: FfiConverter<TrustSourceFfi, Long> {
+    override fun lower(value: TrustSourceFfi): Long {
+        return value.uniffiCloneHandle()
+    }
+
+    override fun lift(value: Long): TrustSourceFfi {
+        return TrustSourceFfi(UniffiWithHandle, value)
+    }
+
+    override fun read(buf: ByteBuffer): TrustSourceFfi {
+        return lift(buf.getLong())
+    }
+
+    override fun allocationSize(value: TrustSourceFfi) = 8UL
+
+    override fun write(value: TrustSourceFfi, buf: ByteBuffer) {
+        buf.putLong(lower(value))
+    }
+}
+
+
+
+/**
+ * One active device; identifiers and descriptive labels are not credentials.
+ */
+data class AccountSession (
+    /**
+     * Neutral session UUID used for display and revocation.
+     */
+    var `id`: kotlin.String
+    ,
+    /**
+     * Client-reported device model.
+     */
+    var `deviceModel`: kotlin.String
+    ,
+    /**
+     * Client-reported platform.
+     */
+    var `platform`: kotlin.String
+    ,
+    /**
+     * Client-reported operating system version.
+     */
+    var `systemVersion`: kotlin.String
+    ,
+    /**
+     * Client-reported application version.
+     */
+    var `appVersion`: kotlin.String
+    ,
+    /**
+     * Application build identifier, preserving leading zeroes.
+     */
+    var `appBuild`: kotlin.String
+    ,
+    /**
+     * Creation time in Unix seconds.
+     */
+    var `createdDate`: kotlin.Long
+    ,
+    /**
+     * Last activity time in Unix seconds.
+     */
+    var `activeDate`: kotlin.Long
+    ,
+    /**
+     * Server-reported address; hosts must treat this as personal data.
+     */
+    var `ip`: kotlin.String
+    ,
+    /**
+     * Country code, empty when unknown.
+     */
+    var `country`: kotlin.String
+    ,
+    /**
+     * Region, empty when unknown.
+     */
+    var `region`: kotlin.String
+    ,
+    /**
+     * Whether this session issued the listing request.
+     */
+    var `current`: kotlin.Boolean
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAccountSession: FfiConverterRustBuffer<AccountSession> {
+    override fun read(buf: ByteBuffer): AccountSession {
+        return AccountSession(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: AccountSession) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`deviceModel`) +
+            FfiConverterString.allocationSize(value.`platform`) +
+            FfiConverterString.allocationSize(value.`systemVersion`) +
+            FfiConverterString.allocationSize(value.`appVersion`) +
+            FfiConverterString.allocationSize(value.`appBuild`) +
+            FfiConverterLong.allocationSize(value.`createdDate`) +
+            FfiConverterLong.allocationSize(value.`activeDate`) +
+            FfiConverterString.allocationSize(value.`ip`) +
+            FfiConverterString.allocationSize(value.`country`) +
+            FfiConverterString.allocationSize(value.`region`) +
+            FfiConverterBoolean.allocationSize(value.`current`)
+    )
+
+    override fun write(value: AccountSession, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`deviceModel`, buf)
+            FfiConverterString.write(value.`platform`, buf)
+            FfiConverterString.write(value.`systemVersion`, buf)
+            FfiConverterString.write(value.`appVersion`, buf)
+            FfiConverterString.write(value.`appBuild`, buf)
+            FfiConverterLong.write(value.`createdDate`, buf)
+            FfiConverterLong.write(value.`activeDate`, buf)
+            FfiConverterString.write(value.`ip`, buf)
+            FfiConverterString.write(value.`country`, buf)
+            FfiConverterString.write(value.`region`, buf)
+            FfiConverterBoolean.write(value.`current`, buf)
+    }
+}
+
+
+
+/**
+ * Account lifecycle query, separate from contact connectivity observations.
+ */
+data class AccountStatus (
+    /**
+     * Current encrypted transport availability.
+     */
+    var `network`: AccountNetwork
+    ,
+    /**
+     * Current authorization knowledge.
+     */
+    var `authorization`: AccountAuthorization
+    ,
+    /**
+     * Retained local cleanup status.
+     */
+    var `cleanup`: AccountCleanup
+    ,
+    /**
+     * Restart-safe completion additionally requires cleanup == Complete.
+     */
+    var `restartSafeStore`: kotlin.Boolean
+    ,
+    /**
+     * Negative-only observation, never confirmation of a Logout invocation.
+     */
+    var `enrollmentObservation`: AccountEnrollmentObservation
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAccountStatus: FfiConverterRustBuffer<AccountStatus> {
+    override fun read(buf: ByteBuffer): AccountStatus {
+        return AccountStatus(
+            FfiConverterTypeAccountNetwork.read(buf),
+            FfiConverterTypeAccountAuthorization.read(buf),
+            FfiConverterTypeAccountCleanup.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterTypeAccountEnrollmentObservation.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: AccountStatus) = (
+            FfiConverterTypeAccountNetwork.allocationSize(value.`network`) +
+            FfiConverterTypeAccountAuthorization.allocationSize(value.`authorization`) +
+            FfiConverterTypeAccountCleanup.allocationSize(value.`cleanup`) +
+            FfiConverterBoolean.allocationSize(value.`restartSafeStore`) +
+            FfiConverterTypeAccountEnrollmentObservation.allocationSize(value.`enrollmentObservation`)
+    )
+
+    override fun write(value: AccountStatus, buf: ByteBuffer) {
+            FfiConverterTypeAccountNetwork.write(value.`network`, buf)
+            FfiConverterTypeAccountAuthorization.write(value.`authorization`, buf)
+            FfiConverterTypeAccountCleanup.write(value.`cleanup`, buf)
+            FfiConverterBoolean.write(value.`restartSafeStore`, buf)
+            FfiConverterTypeAccountEnrollmentObservation.write(value.`enrollmentObservation`, buf)
+    }
+}
+
+
+
+/**
+ * Both ports use one host and the exact same pin, scope and channel mode.
  */
 data class ClientConfigFfi (
-    /**
-     * Gateway URL, e.g. `wss://gateway.example.com/syntra/v1/ws`.
-     */
-    var `url`: kotlin.String
+    var `clientInfo`: ClientInfoFfi
     ,
-    /**
-     * Allow `ws://` (development loopback/isolated nets only).
-     */
-    var `allowInsecure`: kotlin.Boolean
+    var `host`: kotlin.String
     ,
-    /**
-     * Optional user-agent string.
-     */
-    var `userAgent`: kotlin.String?
+    var `primaryPort`: kotlin.UShort
     ,
-    /**
-     * Direct-unary gRPC base endpoint for reconciliation RPCs.
-     */
-    var `grpcEndpoint`: kotlin.String?
+    var `fallbackPort`: kotlin.UShort?
 
 ){
 
@@ -4907,25 +7881,330 @@ data class ClientConfigFfi (
 public object FfiConverterTypeClientConfigFfi: FfiConverterRustBuffer<ClientConfigFfi> {
     override fun read(buf: ByteBuffer): ClientConfigFfi {
         return ClientConfigFfi(
+            FfiConverterTypeClientInfoFfi.read(buf),
             FfiConverterString.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterOptionalString.read(buf),
-            FfiConverterOptionalString.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterOptionalUShort.read(buf),
         )
     }
 
     override fun allocationSize(value: ClientConfigFfi) = (
-            FfiConverterString.allocationSize(value.`url`) +
-            FfiConverterBoolean.allocationSize(value.`allowInsecure`) +
-            FfiConverterOptionalString.allocationSize(value.`userAgent`) +
-            FfiConverterOptionalString.allocationSize(value.`grpcEndpoint`)
+            FfiConverterTypeClientInfoFfi.allocationSize(value.`clientInfo`) +
+            FfiConverterString.allocationSize(value.`host`) +
+            FfiConverterUShort.allocationSize(value.`primaryPort`) +
+            FfiConverterOptionalUShort.allocationSize(value.`fallbackPort`)
     )
 
     override fun write(value: ClientConfigFfi, buf: ByteBuffer) {
-            FfiConverterString.write(value.`url`, buf)
-            FfiConverterBoolean.write(value.`allowInsecure`, buf)
-            FfiConverterOptionalString.write(value.`userAgent`, buf)
-            FfiConverterOptionalString.write(value.`grpcEndpoint`, buf)
+            FfiConverterTypeClientInfoFfi.write(value.`clientInfo`, buf)
+            FfiConverterString.write(value.`host`, buf)
+            FfiConverterUShort.write(value.`primaryPort`, buf)
+            FfiConverterOptionalUShort.write(value.`fallbackPort`, buf)
+    }
+}
+
+
+
+/**
+ * All five device/application labels are required before any native connection.
+ */
+data class ClientInfoFfi (
+    var `deviceModel`: kotlin.String
+    ,
+    var `platform`: kotlin.String
+    ,
+    var `osVersion`: kotlin.String
+    ,
+    var `appVersion`: kotlin.String
+    ,
+    var `appBuild`: kotlin.String
+    ,
+    var `options`: ClientOptionsFfi
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeClientInfoFfi: FfiConverterRustBuffer<ClientInfoFfi> {
+    override fun read(buf: ByteBuffer): ClientInfoFfi {
+        return ClientInfoFfi(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeClientOptionsFfi.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ClientInfoFfi) = (
+            FfiConverterString.allocationSize(value.`deviceModel`) +
+            FfiConverterString.allocationSize(value.`platform`) +
+            FfiConverterString.allocationSize(value.`osVersion`) +
+            FfiConverterString.allocationSize(value.`appVersion`) +
+            FfiConverterString.allocationSize(value.`appBuild`) +
+            FfiConverterTypeClientOptionsFfi.allocationSize(value.`options`)
+    )
+
+    override fun write(value: ClientInfoFfi, buf: ByteBuffer) {
+            FfiConverterString.write(value.`deviceModel`, buf)
+            FfiConverterString.write(value.`platform`, buf)
+            FfiConverterString.write(value.`osVersion`, buf)
+            FfiConverterString.write(value.`appVersion`, buf)
+            FfiConverterString.write(value.`appBuild`, buf)
+            FfiConverterTypeClientOptionsFfi.write(value.`options`, buf)
+    }
+}
+
+
+
+/**
+ * Entire optional descriptive snapshot; missing labels are explicitly empty.
+ */
+data class ClientOptionsFfi (
+    var `agent`: kotlin.String
+    ,
+    var `deviceId`: kotlin.String
+    ,
+    var `installId`: kotlin.String
+    ,
+    var `acceptLanguage`: kotlin.String
+    ,
+    var `timeZone`: kotlin.String
+    ,
+    var `userAgent`: kotlin.String
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeClientOptionsFfi: FfiConverterRustBuffer<ClientOptionsFfi> {
+    override fun read(buf: ByteBuffer): ClientOptionsFfi {
+        return ClientOptionsFfi(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ClientOptionsFfi) = (
+            FfiConverterString.allocationSize(value.`agent`) +
+            FfiConverterString.allocationSize(value.`deviceId`) +
+            FfiConverterString.allocationSize(value.`installId`) +
+            FfiConverterString.allocationSize(value.`acceptLanguage`) +
+            FfiConverterString.allocationSize(value.`timeZone`) +
+            FfiConverterString.allocationSize(value.`userAgent`)
+    )
+
+    override fun write(value: ClientOptionsFfi, buf: ByteBuffer) {
+            FfiConverterString.write(value.`agent`, buf)
+            FfiConverterString.write(value.`deviceId`, buf)
+            FfiConverterString.write(value.`installId`, buf)
+            FfiConverterString.write(value.`acceptLanguage`, buf)
+            FfiConverterString.write(value.`timeZone`, buf)
+            FfiConverterString.write(value.`userAgent`, buf)
+    }
+}
+
+
+
+/**
+ * Verification flow metadata. Treat the identifier as private flow state.
+ */
+data class CodeDelivery (
+    var `verificationId`: kotlin.String
+    ,
+    var `codeType`: kotlin.Int
+    ,
+    var `expiresAtSeconds`: kotlin.Long?
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeCodeDelivery: FfiConverterRustBuffer<CodeDelivery> {
+    override fun read(buf: ByteBuffer): CodeDelivery {
+        return CodeDelivery(
+            FfiConverterString.read(buf),
+            FfiConverterInt.read(buf),
+            FfiConverterOptionalLong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: CodeDelivery) = (
+            FfiConverterString.allocationSize(value.`verificationId`) +
+            FfiConverterInt.allocationSize(value.`codeType`) +
+            FfiConverterOptionalLong.allocationSize(value.`expiresAtSeconds`)
+    )
+
+    override fun write(value: CodeDelivery, buf: ByteBuffer) {
+            FfiConverterString.write(value.`verificationId`, buf)
+            FfiConverterInt.write(value.`codeType`, buf)
+            FfiConverterOptionalLong.write(value.`expiresAtSeconds`, buf)
+    }
+}
+
+
+
+/**
+ * SignIn's account projection plus a persisted staged receipt; no AK/capability.
+ */
+data class EnrollmentSignInResult (
+    var `userProto`: kotlin.ByteArray?
+    ,
+    var `isNewUser`: kotlin.Boolean
+    ,
+    var `enrollment`: StoredEnrollment
+
+): Disposable{
+
+
+
+
+
+    @Suppress("UNNECESSARY_SAFE_CALL") // codegen is much simpler if we unconditionally emit safe calls here
+    override fun destroy() {
+
+    Disposable.destroy(
+        this.`userProto`,
+        this.`isNewUser`,
+        this.`enrollment`
+    )
+    }
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeEnrollmentSignInResult: FfiConverterRustBuffer<EnrollmentSignInResult> {
+    override fun read(buf: ByteBuffer): EnrollmentSignInResult {
+        return EnrollmentSignInResult(
+            FfiConverterOptionalByteArray.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterTypeStoredEnrollment.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: EnrollmentSignInResult) = (
+            FfiConverterOptionalByteArray.allocationSize(value.`userProto`) +
+            FfiConverterBoolean.allocationSize(value.`isNewUser`) +
+            FfiConverterTypeStoredEnrollment.allocationSize(value.`enrollment`)
+    )
+
+    override fun write(value: EnrollmentSignInResult, buf: ByteBuffer) {
+            FfiConverterOptionalByteArray.write(value.`userProto`, buf)
+            FfiConverterBoolean.write(value.`isNewUser`, buf)
+            FfiConverterTypeStoredEnrollment.write(value.`enrollment`, buf)
+    }
+}
+
+
+
+/**
+ * Secret-free projection of the exact tuple acknowledged by the server.
+ */
+data class EnrollmentStatus (
+    var `operationId`: kotlin.String
+    ,
+    var `sessionId`: kotlin.String
+    ,
+    var `handle`: kotlin.ByteArray
+    ,
+    var `enrollmentEpoch`: kotlin.ULong
+    ,
+    var `scope`: kotlin.Int
+    ,
+    var `expiresAtSeconds`: kotlin.Long
+    ,
+    var `expiresAtNanos`: kotlin.Int
+    ,
+    var `state`: kotlin.Int
+    ,
+    var `userId`: kotlin.Long
+    ,
+    var `accountAuthEpoch`: kotlin.ULong
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeEnrollmentStatus: FfiConverterRustBuffer<EnrollmentStatus> {
+    override fun read(buf: ByteBuffer): EnrollmentStatus {
+        return EnrollmentStatus(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterByteArray.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterInt.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterInt.read(buf),
+            FfiConverterInt.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: EnrollmentStatus) = (
+            FfiConverterString.allocationSize(value.`operationId`) +
+            FfiConverterString.allocationSize(value.`sessionId`) +
+            FfiConverterByteArray.allocationSize(value.`handle`) +
+            FfiConverterULong.allocationSize(value.`enrollmentEpoch`) +
+            FfiConverterInt.allocationSize(value.`scope`) +
+            FfiConverterLong.allocationSize(value.`expiresAtSeconds`) +
+            FfiConverterInt.allocationSize(value.`expiresAtNanos`) +
+            FfiConverterInt.allocationSize(value.`state`) +
+            FfiConverterLong.allocationSize(value.`userId`) +
+            FfiConverterULong.allocationSize(value.`accountAuthEpoch`)
+    )
+
+    override fun write(value: EnrollmentStatus, buf: ByteBuffer) {
+            FfiConverterString.write(value.`operationId`, buf)
+            FfiConverterString.write(value.`sessionId`, buf)
+            FfiConverterByteArray.write(value.`handle`, buf)
+            FfiConverterULong.write(value.`enrollmentEpoch`, buf)
+            FfiConverterInt.write(value.`scope`, buf)
+            FfiConverterLong.write(value.`expiresAtSeconds`, buf)
+            FfiConverterInt.write(value.`expiresAtNanos`, buf)
+            FfiConverterInt.write(value.`state`, buf)
+            FfiConverterLong.write(value.`userId`, buf)
+            FfiConverterULong.write(value.`accountAuthEpoch`, buf)
     }
 }
 
@@ -5322,6 +8601,136 @@ public object FfiConverterTypeFfiSubscribeResponse: FfiConverterRustBuffer<FfiSu
 
 
 /**
+ * Atomic protected-store snapshot. Tokens are nonsecret and must never be reused
+ * after a namespace reset. The active record stays opaque and zeroizing.
+ */
+data class ProtectedEnrollmentNamespace (
+    /**
+     * Stable namespace incarnation, shared by app/extension callback wrappers.
+     */
+    var `incarnation`: kotlin.String
+    ,
+    /**
+     * Revision advanced atomically by every operation/candidate/active write.
+     */
+    var `revision`: kotlin.String
+    ,
+    /**
+     * Durable tombstone blocking restoration and late writes.
+     */
+    var `cleanupPending`: kotlin.Boolean
+    ,
+    /**
+     * Complete active slot captured in the same storage transaction.
+     */
+    var `active`: ProtectedEnrollmentRecord?
+    ,
+    /**
+     * Recoverable pending work exists besides the active slot.
+     */
+    var `hasPending`: kotlin.Boolean
+
+): Disposable{
+
+
+
+
+
+    @Suppress("UNNECESSARY_SAFE_CALL") // codegen is much simpler if we unconditionally emit safe calls here
+    override fun destroy() {
+
+    Disposable.destroy(
+        this.`incarnation`,
+        this.`revision`,
+        this.`cleanupPending`,
+        this.`active`,
+        this.`hasPending`
+    )
+    }
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeProtectedEnrollmentNamespace: FfiConverterRustBuffer<ProtectedEnrollmentNamespace> {
+    override fun read(buf: ByteBuffer): ProtectedEnrollmentNamespace {
+        return ProtectedEnrollmentNamespace(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalTypeProtectedEnrollmentRecord.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ProtectedEnrollmentNamespace) = (
+            FfiConverterString.allocationSize(value.`incarnation`) +
+            FfiConverterString.allocationSize(value.`revision`) +
+            FfiConverterBoolean.allocationSize(value.`cleanupPending`) +
+            FfiConverterOptionalTypeProtectedEnrollmentRecord.allocationSize(value.`active`) +
+            FfiConverterBoolean.allocationSize(value.`hasPending`)
+    )
+
+    override fun write(value: ProtectedEnrollmentNamespace, buf: ByteBuffer) {
+            FfiConverterString.write(value.`incarnation`, buf)
+            FfiConverterString.write(value.`revision`, buf)
+            FfiConverterBoolean.write(value.`cleanupPending`, buf)
+            FfiConverterOptionalTypeProtectedEnrollmentRecord.write(value.`active`, buf)
+            FfiConverterBoolean.write(value.`hasPending`, buf)
+    }
+}
+
+
+
+/**
+ * Provisioned public server identity, independent of the transport address.
+ */
+data class ServerTrustFfi (
+    var `serverPublicKey`: kotlin.ByteArray
+    ,
+    var `serverKeyId`: kotlin.UInt
+    ,
+    var `scope`: kotlin.String
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeServerTrustFfi: FfiConverterRustBuffer<ServerTrustFfi> {
+    override fun read(buf: ByteBuffer): ServerTrustFfi {
+        return ServerTrustFfi(
+            FfiConverterByteArray.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ServerTrustFfi) = (
+            FfiConverterByteArray.allocationSize(value.`serverPublicKey`) +
+            FfiConverterUInt.allocationSize(value.`serverKeyId`) +
+            FfiConverterString.allocationSize(value.`scope`)
+    )
+
+    override fun write(value: ServerTrustFfi, buf: ByteBuffer) {
+            FfiConverterByteArray.write(value.`serverPublicKey`, buf)
+            FfiConverterUInt.write(value.`serverKeyId`, buf)
+            FfiConverterString.write(value.`scope`, buf)
+    }
+}
+
+
+
+/**
  * One conversation interest for [`TinkleClient::subscribe`] /
  * [`TinkleClient::start`].
  *
@@ -5364,6 +8773,210 @@ public object FfiConverterTypeTargetSub: FfiConverterRustBuffer<TargetSub> {
             FfiConverterLong.write(value.`targetId`, buf)
     }
 }
+
+
+
+/**
+ * Authorization knowledge; Unknown must never be interpreted as retired.
+ */
+
+enum class AccountAuthorization {
+
+    /**
+     * Current server authorization cannot be established.
+     */
+    UNKNOWN,
+    /**
+     * This Returning channel authenticated successfully.
+     */
+    ACTIVE,
+    /**
+     * This coordinator is irreversibly signed out.
+     */
+    SIGNED_OUT;
+
+
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAccountAuthorization: FfiConverterRustBuffer<AccountAuthorization> {
+    override fun read(buf: ByteBuffer) = try {
+        AccountAuthorization.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: AccountAuthorization) = 4UL
+
+    override fun write(value: AccountAuthorization, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * Retained local cleanup progress, distinct from remote revocation confirmation.
+ */
+
+enum class AccountCleanup {
+
+    /**
+     * Local cleanup has not started.
+     */
+    NOT_STARTED,
+    /**
+     * Cleanup runs independently of host waiters.
+     */
+    PENDING,
+    /**
+     * Required local storage and cache work acknowledged completion.
+     */
+    COMPLETE,
+    /**
+     * Cleanup needs a retry; the coordinator remains signed out.
+     */
+    FAILED;
+
+
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAccountCleanup: FfiConverterRustBuffer<AccountCleanup> {
+    override fun read(buf: ByteBuffer) = try {
+        AccountCleanup.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: AccountCleanup) = 4UL
+
+    override fun write(value: AccountCleanup, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * Last independent enrollment observation; only Retired supplies negative evidence.
+ */
+
+enum class AccountEnrollmentObservation {
+
+    /**
+     * No observation has completed.
+     */
+    NOT_OBSERVED,
+    /**
+     * No usable permanent-retirement evidence was returned.
+     */
+    UNKNOWN,
+    /**
+     * Exact current retirement was accepted; inspect cleanup separately.
+     */
+    RETIRED,
+    /**
+     * A newer installation or protected namespace invalidated the observation.
+     */
+    SUPERSEDED,
+    /**
+     * The bounded request did not obtain a usable response.
+     */
+    UNAVAILABLE,
+    /**
+     * Endpoint proof is rejected or unverified pending explicit recovery.
+     */
+    PARKED,
+    /**
+     * Conditional host persistence is unsupported.
+     */
+    UNSUPPORTED;
+
+
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAccountEnrollmentObservation: FfiConverterRustBuffer<AccountEnrollmentObservation> {
+    override fun read(buf: ByteBuffer) = try {
+        AccountEnrollmentObservation.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: AccountEnrollmentObservation) = 4UL
+
+    override fun write(value: AccountEnrollmentObservation, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * Foreground transport availability, independent of account retirement.
+ */
+
+enum class AccountNetwork {
+
+    /**
+     * A live encrypted connection is available.
+     */
+    AVAILABLE,
+    /**
+     * No live encrypted connection is available.
+     */
+    UNAVAILABLE;
+
+
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAccountNetwork: FfiConverterRustBuffer<AccountNetwork> {
+    override fun read(buf: ByteBuffer) = try {
+        AccountNetwork.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: AccountNetwork) = 4UL
+
+    override fun write(value: AccountNetwork, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
 
 
 
@@ -6071,6 +9684,76 @@ public object FfiConverterTypeFfiSyncEvent : FfiConverterRustBuffer<FfiSyncEvent
 
 
 
+/**
+ * Exact atomic transaction requested of platform protected storage.
+ */
+
+enum class SecureEnrollmentWrite {
+
+    OPERATION,
+    CANDIDATE,
+    ACTIVE;
+
+
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSecureEnrollmentWrite: FfiConverterRustBuffer<SecureEnrollmentWrite> {
+    override fun read(buf: ByteBuffer) = try {
+        SecureEnrollmentWrite.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: SecureEnrollmentWrite) = 4UL
+
+    override fun write(value: SecureEnrollmentWrite, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalUShort: FfiConverterRustBuffer<kotlin.UShort?> {
+    override fun read(buf: ByteBuffer): kotlin.UShort? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterUShort.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.UShort?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterUShort.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.UShort?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterUShort.write(value, buf)
+        }
+    }
+}
+
+
+
 
 /**
  * @suppress
@@ -6203,6 +9886,70 @@ public object FfiConverterOptionalByteArray: FfiConverterRustBuffer<kotlin.ByteA
 /**
  * @suppress
  */
+public object FfiConverterOptionalTypeProtectedEnrollmentRecord: FfiConverterRustBuffer<ProtectedEnrollmentRecord?> {
+    override fun read(buf: ByteBuffer): ProtectedEnrollmentRecord? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeProtectedEnrollmentRecord.read(buf)
+    }
+
+    override fun allocationSize(value: ProtectedEnrollmentRecord?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeProtectedEnrollmentRecord.allocationSize(value)
+        }
+    }
+
+    override fun write(value: ProtectedEnrollmentRecord?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeProtectedEnrollmentRecord.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeProtectedEnrollmentNamespace: FfiConverterRustBuffer<ProtectedEnrollmentNamespace?> {
+    override fun read(buf: ByteBuffer): ProtectedEnrollmentNamespace? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeProtectedEnrollmentNamespace.read(buf)
+    }
+
+    override fun allocationSize(value: ProtectedEnrollmentNamespace?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeProtectedEnrollmentNamespace.allocationSize(value)
+        }
+    }
+
+    override fun write(value: ProtectedEnrollmentNamespace?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeProtectedEnrollmentNamespace.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalTypeFfiReconcileStatus: FfiConverterRustBuffer<FfiReconcileStatus?> {
     override fun read(buf: ByteBuffer): FfiReconcileStatus? {
         if (buf.get().toInt() == 0) {
@@ -6313,6 +10060,34 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeAccountSession: FfiConverterRustBuffer<List<AccountSession>> {
+    override fun read(buf: ByteBuffer): List<AccountSession> {
+        val len = buf.getInt()
+        return List<AccountSession>(len) {
+            FfiConverterTypeAccountSession.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<AccountSession>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeAccountSession.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<AccountSession>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeAccountSession.write(it, buf)
         }
     }
 }

@@ -44,10 +44,11 @@ final class SqliteStorageTests: XCTestCase {
         // Exercise the native SQLite client constructor with the same handle.
         let client = try TinkleClient.newSqlite(
             config: ClientConfigFfi(
-                url: "ws://127.0.0.1:9/syntra/v1/ws", allowInsecure: true,
-                userAgent: "TinkleSDKSqliteTests", grpcEndpoint: nil
+                clientInfo: fixtureClientInfo(),
+                host: "127.0.0.1", primaryPort: 9, fallbackPort: nil
             ),
-            credential: "local-smoke-test",
+            trustSource: try TrustSourceFfi.bootstrap(trust: ServerTrustFfi(
+                serverPublicKey: Data(repeating: 1, count: 32), serverKeyId: 7, scope: "test")),
             storage: storage
         )
         try await client.setPrincipalUserId(userId: 42)

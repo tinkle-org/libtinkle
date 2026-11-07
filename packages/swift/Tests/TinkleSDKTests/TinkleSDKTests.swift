@@ -3,6 +3,24 @@ import XCTest
 
 /// Tests the generated Swift API against the real Rust binary and a local gateway.
 final class TinkleSDKTests: XCTestCase {
+    func testEnrollmentCannotAdvanceBeforePlatformPersistenceAcknowledgement() async throws {
+        let client = try TinkleClient(config: ClientConfigFfi(clientInfo: fixtureClientInfo(),
+            host: "127.0.0.1", primaryPort: 9, fallbackPort: nil),
+            trustSource: try TrustSourceFfi.bootstrap(trust: ServerTrustFfi(
+                serverPublicKey: Data(repeating: 1, count: 32), serverKeyId: 7, scope: "fixture")),
+            store: MemoryCursorStore())
+        let secure = RejectingSecureStore()
+        do {
+            _ = try await client.prepareEnrollment(store: secure)
+            XCTFail("An unacknowledged secure write must not return an operation receipt")
+        } catch FfiError.Storage(let message) {
+            XCTAssertTrue(message.contains("protected enrollment storage"))
+            XCTAssertFalse(message.contains("host diagnostic"))
+        }
+        let calls = await secure.commits
+        XCTAssertEqual(calls, 1)
+        await client.shutdown()
+    }
     func testRuntimeInitializationAndRustStoreConstruction() {
         tinkleFfiInit()
         tinkleFfiInit()
@@ -35,22 +53,21 @@ final class TinkleSDKTests: XCTestCase {
     func testClientAsyncErrorsAndLifecycle() async throws {
         tinkleFfiInit()
         let store = MemoryCursorStore()
-        // Insecure WebSockets are rejected before opening any connection.
+        // A refused native dial is retryable without changing channel trust.
         let client = try TinkleClient(
             config: ClientConfigFfi(
-                url: "ws://127.0.0.1:9/syntra/v1/ws",
-                allowInsecure: false,
-                userAgent: "TinkleSDKTests",
-                grpcEndpoint: nil
+                clientInfo: fixtureClientInfo(),
+                host: "127.0.0.1", primaryPort: 9, fallbackPort: nil
             ),
-            credential: "local-smoke-test",
+            trustSource: try TrustSourceFfi.bootstrap(trust: ServerTrustFfi(
+                serverPublicKey: Data(repeating: 1, count: 32), serverKeyId: 7, scope: "test")),
             store: store
         )
         do {
             try await client.connect()
-            XCTFail("An insecure URL must be rejected")
+            XCTFail("A refused dial must fail")
         } catch FfiError.Retryable(let message) {
-            XCTAssertTrue(message.contains("insecure transport denied"))
+            XCTAssertTrue(message.contains("TCP unavailable"))
         }
         do {
             _ = try await client.sendMessage(targetKind: "room", targetId: 0, text: "", randomId: 1)
@@ -90,7 +107,7 @@ final class TinkleSDKTests: XCTestCase {
             // These are decoded wire requests, not the subscribe confirmation.
             // Rust must await Swift loadJournal() and lift optional Int64s to
             // send the principal- and target-specific acceptance positions.
-            XCTAssertEqual(gateway.targetChangesRequests, [
+            XCTAssertEqual(try gateway.targetChangesRequests, [
                 .init(targetKind: "room", targetId: 7, afterAcceptSeq: roomSeq),
                 .init(targetKind: "user", targetId: 7, afterAcceptSeq: 9),
             ])
@@ -130,7 +147,7 @@ final class TinkleSDKTests: XCTestCase {
             let reads = await store.loadCalls
             XCTAssertFalse(reads.isEmpty)
             XCTAssertTrue(reads.allSatisfy { $0.principal == "user:42" && $0.targetKey == "target:room:7" })
-            XCTAssertTrue(gateway.targetChangesRequests.isEmpty, "A failed load must prevent journal RPCs")
+            XCTAssertTrue(try gateway.targetChangesRequests.isEmpty, "A failed load must prevent journal RPCs")
 
             let received = expectation(description: "Rust reports the Swift async storage failure")
             let eventTask = Task {
@@ -160,15 +177,38 @@ final class TinkleSDKTests: XCTestCase {
     private func makeLoopbackClient(_ gateway: LoopbackGateway, store: MemoryCursorStore) throws -> TinkleClient {
         try TinkleClient(
             config: ClientConfigFfi(
-                url: "ws://127.0.0.1:\(gateway.port)/syntra/v1/ws",
-                allowInsecure: true,
-                userAgent: "TinkleSDKLoopbackTests",
-                grpcEndpoint: nil
+                clientInfo: fixtureClientInfo(),
+                host: "127.0.0.1", primaryPort: gateway.port, fallbackPort: nil
             ),
-            credential: "local-smoke-test",
+            trustSource: try gateway.trustSource(),
             store: store
         )
     }
+}
+
+/// Failure-only fixture: it deliberately never acknowledges secure persistence.
+private actor RejectingSecureStore: FfiSecureEnrollmentStore {
+    func beginRestore(incarnation: String, revision: String, active: ProtectedEnrollmentRecord, permitId: String) async throws -> Bool {
+        throw FfiError.Storage("restore exclusion unsupported by this failure-only fixture")
+    }
+    func endRestore(permitId: String) async throws { throw FfiError.Storage("restore exclusion unsupported") }
+    func namespaceSnapshot() async throws -> ProtectedEnrollmentNamespace? { nil }
+    func commitCurrent(expectedRevision: String, kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord) async throws -> String? {
+        throw FfiError.Storage("conditional storage unsupported by this failure-only fixture")
+    }
+    func beginClear(expectedRevision: String) async throws -> Bool { throw FfiError.Storage("conditional storage unsupported") }
+    func finishClear(expectedRevision: String) async throws -> Bool { throw FfiError.Storage("conditional storage unsupported") }
+    func clear() async throws { throw FfiError.Storage("secure clearing is not acknowledged by this failure-only fixture") }
+    private(set) var commits = 0
+    func commit(kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord) async throws {
+        await Task.yield()
+        commits += 1
+        var bytes = record.copyForSecureStorage()
+        bytes.resetBytes(in: 0..<bytes.count)
+        throw FfiError.Storage("host diagnostic must be sanitized")
+    }
+    func loadOperation(operationId: String) async throws -> ProtectedEnrollmentRecord? { nil }
+    func loadActive() async throws -> ProtectedEnrollmentRecord? { nil }
 }
 
 /// Conforms to the actual generated foreign-store protocol. Production apps

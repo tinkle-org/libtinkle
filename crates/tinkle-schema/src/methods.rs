@@ -1,8 +1,8 @@
 //! Canonical Syntra method identifiers for `tinkle.v1`.
 //!
 //! Each identifier is `/tinkle.v1.<Service>/<Method>` (SNTR-RPC-001).
-//! Generated from the BSR `tinkle-org/schema` service definitions;
-//! do not hand-edit method strings. Payload types are the prost request/
+//! Mirrored from the public `tinkle-org/schema` descriptors; the auth_contract
+//! test checks the complete method/type inventory. Payload types are the prost request/
 //! response messages in `proto.rs`. Failures use Syntra `RpcResult.error`.
 //! `UpdatesService/ObserveConnectivity` is server-streaming: observations
 //! are delivered over Syntra notifications; see `sync.rs`.
@@ -10,6 +10,36 @@
 /// All known Tinkle methods with request/response type names.
 /// `(method, request, response)`; descriptors for codegen.
 pub const ALL_METHODS: &[(&str, &str, &str)] = &[
+    (
+        "/tinkle.v1.ConnectionService/KeepAlive",
+        "KeepAliveRequest",
+        "KeepAliveResponse",
+    ),
+    (
+        "/tinkle.v1.ConnectionService/InitConnect",
+        "InitConnectRequest",
+        "InitConnectResponse",
+    ),
+    (
+        "/tinkle.v1.AuthService/ResumeEnrollment",
+        "ResumeEnrollmentRequest",
+        "ResumeEnrollmentResponse",
+    ),
+    (
+        "/tinkle.v1.AuthService/ActivateEnrollment",
+        "ActivateEnrollmentRequest",
+        "ActivateEnrollmentResponse",
+    ),
+    (
+        "/tinkle.v1.AuthService/RotateEnrollment",
+        "RotateEnrollmentRequest",
+        "RotateEnrollmentResponse",
+    ),
+    (
+        "/tinkle.v1.AuthService/GetEnrollmentDisposition",
+        "GetEnrollmentDispositionRequest",
+        "GetEnrollmentDispositionResponse",
+    ),
     (
         "/tinkle.v1.AccountService/ChangePhoneNumber",
         "ChangePhoneNumberRequest",
@@ -953,6 +983,14 @@ pub mod accountservice {
 
 /// `AuthService` methods.
 pub mod authservice {
+    /// Recover the exact operation delivery with its retained capability.
+    pub const RESUME_ENROLLMENT: &str = "/tinkle.v1.AuthService/ResumeEnrollment";
+    /// Activate the securely persisted proposed candidate over pinned Bootstrap.
+    pub const ACTIVATE_ENROLLMENT: &str = "/tinkle.v1.AuthService/ActivateEnrollment";
+    /// Stage a replacement on the current ACTIVE Returning connection.
+    pub const ROTATE_ENROLLMENT: &str = "/tinkle.v1.AuthService/RotateEnrollment";
+    /// Negative-only observation of one exact retained enrollment reference.
+    pub const GET_ENROLLMENT_DISPOSITION: &str = "/tinkle.v1.AuthService/GetEnrollmentDisposition";
     /// `/tinkle.v1.AuthService/SendCode`: `SendCodeRequest` → `SendCodeResponse`.
     pub const SEND_CODE: &str = "/tinkle.v1.AuthService/SendCode";
     /// `/tinkle.v1.AuthService/SignIn`: `SignInRequest` → `SignInResponse`.

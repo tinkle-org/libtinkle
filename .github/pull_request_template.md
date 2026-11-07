@@ -24,7 +24,7 @@
 <!-- Check all that apply. Apps must only depend on `libtinkle` / `tinkle-ffi` / `libtinkle-web`. -->
 
 - [ ] `syntra-core` (codec, state, handshake, ids, pending, timeouts, reconnect)
-- [ ] `syntra-ws` (`native` tokio-tungstenite / `wasm` ws_stream_wasm)
+- [ ] `syntra-net` (encrypted native TCP)
 - [ ] `tinkle-schema` (methods, realtime validation)
 - [ ] `libtinkle` (public `Client`, facades, `CursorStore`)
 - [ ] `tinkle-ffi` (UniFFI — iOS Swift / Android Kotlin)
@@ -34,12 +34,12 @@
 
 ## Platform impact
 
-<!-- This SDK ships one logical runtime to iOS, Android, and Web. Call out per-target behaviour. -->
+<!-- Native networking supports iOS/Android. Browser scope is portable schema checks. -->
 
 - [ ] No platform-specific behaviour (pure Rust core)
 - [ ] iOS (Swift via UniFFI: runtime threading, `Task.cancel()`, Core Data/GRDB/Keychain store, APNs `sync_after_wake`)
 - [ ] Android (Kotlin via UniFFI/JNI: coroutines, Room/EncryptedSharedPreferences, FCM/WorkManager/Doze)
-- [ ] Web / WASM (wasm-bindgen: `spawn_local`, `ws_stream_wasm`, IndexedDB cursors, no `Authorization` header, no secrets in `localStorage`)
+- [ ] Web / WASM portable schema checks (network unsupported)
 - [ ] `#[cfg(target_arch = "wasm32")]` boundary preserved (no browser APIs in native, no `std::net`/raw sockets in `wasm.rs`)
 
 ### Platform notes
@@ -56,13 +56,13 @@
 
 ## Security considerations
 
-<!-- See `docs/security.md`. Credential / TLS regressions must block merge. -->
+<!-- See `docs/security.md`. Trust/secret regressions must block merge. -->
 
 - [ ] No secrets in logs, errors, panics, `Debug`, URLs, query, headers, or event callbacks
-- [ ] `Credential` still redacted + `zeroize` on drop, cloned only for handshake write
+- [ ] Enrollment material remains redacted, zeroized and separate from application storage
 - [ ] No `ClientHello` / raw `Frame` bytes logged (prost `Debug` can leak)
-- [ ] Production path still requires `wss://` (no downgrade to `ws://`, no new `allow_insecure` default)
-- [ ] No new persistence of session tokens (Keychain/Keystore/EncryptedSharedPreferences only — never cleartext, `localStorage`, or URL params)
+- [ ] TCP 443/80 use the same pin/scope/key ID/mode; no fallback after socket selection
+- [ ] Authorization keys use protected platform storage only
 
 If any box cannot be checked, explain:
 
@@ -77,7 +77,7 @@ cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D w
 cargo test --locked --workspace --all-features --verbose
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 bash scripts/generate-bindings.sh --check
-cargo check --locked -p syntra-ws -p libtinkle-web --target wasm32-unknown-unknown
+cargo check --locked -p tinkle-schema -p libtinkle-web --target wasm32-unknown-unknown
 ```
 
 - [ ] `cargo fmt --all -- --check`
@@ -85,9 +85,9 @@ cargo check --locked -p syntra-ws -p libtinkle-web --target wasm32-unknown-unkno
 - [ ] `cargo test --locked --workspace --all-features --verbose` (incl. `client_integration` live mock gateway if touched)
 - [ ] `python3 -m unittest discover -s tests -p 'test_*.py' -v` (release, consumer preflight, and binding-patch tests)
 - [ ] `bash scripts/generate-bindings.sh --check` (bindings parity, if `tinkle-ffi` touched)
-- [ ] `cargo check --locked -p syntra-ws -p libtinkle-web --target wasm32-unknown-unknown` (if `syntra-ws` / web / `cfg(wasm32)` touched)
+- [ ] `cargo check --locked -p tinkle-schema -p libtinkle-web --target wasm32-unknown-unknown` (if portable schema/web touched)
 - [ ] UniFFI bindings regen / Swift+Kotlin smoke (if `tinkle-ffi` touched)
-- [ ] WASM browser smoke (if `libtinkle-web` touched)
+- [ ] Portable WASM schema checks (if `libtinkle-web` touched)
 
 ### Test evidence
 

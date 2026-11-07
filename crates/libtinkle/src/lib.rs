@@ -1,12 +1,11 @@
-//! `libtinkle`: Tinkle client runtime over Syntra + gRPC fallback.
+//! `libtinkle`: native Tinkle client runtime over encrypted Syntra TCP.
 //!
-//! The same logical client runtime is reusable across iOS, Android,
-//! and WebAssembly/browser. Platform adapters (FFI, UniFFI, wasm-bindgen)
-//! wrap this async core; they never reimplement protocol behavior.
+//! Native platform adapters wrap this async core. Browser networking is
+//! unsupported; portable schema checks live in `libtinkle-web`.
 //!
 //! Boundaries:
 //! - `syntra-core` owns framing, handshake, correlation, errors.
-//! - `syntra-ws` owns WSS/WS byte transport.
+//! - `syntra-net` owns encrypted TCP byte transport.
 //! - `tinkle-schema` owns Tinkle payload schemas + journal validation.
 //! - This crate owns connection lifecycle, typed RPC dispatch,
 //!   reconcile coordination, journal cursors, reconnect, and backoff.
@@ -20,31 +19,41 @@
 //! observations (`UpdatesService/ObserveConnectivity`) are ephemeral and
 //! never advance a cursor. History windows (`GetHistory.more_available`:
 //! `Some(true)` more, `Some(false)` done, `None` legacy window-edge
-//! heuristic) heal journal skips without moving the cursor. On `wasm32`
-//! the same entry point uses a checkpoint-only in-memory store and skips
-//! the SQLite history catch-up below, so there are no atomic journal
-//! commits there.
+//! heuristic) heal journal skips without moving the cursor.
 
-#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod authorization;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod cache_projector;
 pub(crate) mod client;
+pub(crate) mod client_info;
 pub(crate) mod config;
 pub(crate) mod cursor;
+pub(crate) mod enrollment;
 pub(crate) mod errors;
 pub(crate) mod files;
-pub(crate) mod grpc;
+pub(crate) mod liveness;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod logout;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod push;
 pub(crate) mod reconnect;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod retirement;
 pub(crate) mod services;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod session;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod sqlite_store;
 pub(crate) mod sync;
 
 pub use client::Client;
-pub use config::{ClientConfig, Credential, ReconnectPolicy};
+pub use client_info::{ClientInfo, ClientOptions};
+pub use config::{ClientConfig, Enrollment, ReconnectPolicy, ServerTrust, TrustSource};
 pub use cursor::{CursorStore, InMemoryCursorStore};
+pub use enrollment::{
+    DurableOperation, EnrollmentNamespaceSnapshot, PersistedEnrollment, SecretBlob,
+    SecureEnrollmentStore, SecureStoreError, SecureWrite, SignInDetails, SignInOutcome,
+};
 pub use errors::{RecoveryDecision, TinkleError};
 pub use files::{
     sha256, DownloadManager, FileManager, UploadManager, UploadParams,
@@ -56,7 +65,13 @@ pub use push::{
     PushOutcome, PushTokenKind, PUSH_ACCOUNT_JOB_KIND, PUSH_CLAIM_LEASE_SECS,
     PUSH_DEFAULT_BUDGET_SECS, PUSH_ENVELOPE_VERSION, PUSH_JOB_KIND, PUSH_MAX_MESSAGE_IDS,
 };
-pub use services::{Auth, Files, Messages, Updates};
+#[cfg(not(target_arch = "wasm32"))]
+pub use retirement::{
+    EnrollmentObservation, RETIREMENT_OBSERVATION_BUDGET, RETIREMENT_OBSERVATION_INTERVAL,
+};
+pub use services::{Account, Auth, Files, Messages, Updates};
+#[cfg(not(target_arch = "wasm32"))]
+pub use session::{SessionAuthorization, SessionCleanup, SessionNetwork, SessionStatus};
 #[cfg(not(target_arch = "wasm32"))]
 pub use sqlite_store::SqliteCursorStore;
 pub use sync::{ReconcileStatus, SyncEvent, SyncManager};

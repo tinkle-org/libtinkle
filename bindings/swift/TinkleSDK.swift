@@ -471,6 +471,22 @@ private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt16: FfiConverterPrimitive {
+    typealias FfiType = UInt16
+    typealias SwiftType = UInt16
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt16 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
@@ -619,6 +635,129 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
         writeBytes(&buf, value)
     }
 }
+
+
+
+
+/**
+ * Receipt for a durably retained operation/capability. No public constructor.
+ */
+public protocol EnrollmentOperationProtocol: AnyObject, Sendable {
+
+    func operationId()  -> String
+
+}
+/**
+ * Receipt for a durably retained operation/capability. No public constructor.
+ */
+open class EnrollmentOperation: EnrollmentOperationProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tinkle_ffi_fn_clone_enrollmentoperation(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tinkle_ffi_fn_free_enrollmentoperation(handle, $0) }
+    }
+
+
+
+
+open func operationId() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_enrollmentoperation_operation_id(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeEnrollmentOperation: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = EnrollmentOperation
+
+    public static func lift(_ handle: UInt64) throws -> EnrollmentOperation {
+        return EnrollmentOperation(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: EnrollmentOperation) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> EnrollmentOperation {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: EnrollmentOperation, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEnrollmentOperation_lift(_ handle: UInt64) throws -> EnrollmentOperation {
+    return try FfiConverterTypeEnrollmentOperation.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEnrollmentOperation_lower(_ value: EnrollmentOperation) -> UInt64 {
+    return FfiConverterTypeEnrollmentOperation.lower(value)
+}
+
+
 
 
 
@@ -1067,6 +1206,861 @@ public func FfiConverterTypeFfiCursorStore_lower(_ value: FfiCursorStore) -> UIn
 
 
 /**
+ * Implement over confidential, durable platform storage. Returning success from
+ * commit acknowledges durability, never an asynchronous enqueue. Operation is
+ * create-only; Candidate replaces only its operation; Active atomically installs
+ * both the active slot and operation record. Preserve prior active material
+ * until Active commits. No ordinary preferences/cache/SQLite implementation is
+ * provided. Failures are sanitized before they return to the Rust coordinator.
+ * clear is a full durable namespace invalidation, including all pending
+ * capabilities; it must prevent earlier writes from publishing afterward.
+ */
+public protocol FfiSecureEnrollmentStore: AnyObject, Sendable {
+
+    /**
+     * Atomically compare incarnation/revision and the entire ACTIVE record,
+     * reject cleanup markers, and exclude all namespace writes/clears/resets
+     * until endRestore. False grants no permission. No unchecked lease expiry.
+     * endRestore must cancel a late beginRestore with the same caller-owned ID.
+     */
+    func beginRestore(incarnation: String, revision: String, active: ProtectedEnrollmentRecord, permitId: String) async throws  -> Bool
+
+    /**
+     * Idempotently release/cancel this install permit, even if acquisition is
+     * still pending. A lost owner needs process-scoped release or blocked writes
+     * until host recovery; never allow late adoption after a silent expiry.
+     */
+    func endRestore(permitId: String) async throws
+
+    /**
+     * Return None for legacy storage, which cannot attest restart-safe cleanup.
+     */
+    func namespaceSnapshot() async throws  -> ProtectedEnrollmentNamespace?
+
+    /**
+     * Atomically compare revision, reject tombstones, commit, and advance revision.
+     * None means superseded with no write; never use an unconditional fallback.
+     */
+    func commitCurrent(expectedRevision: String, kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord) async throws  -> String?
+
+    /**
+     * Compare revision and persist a durable cleanup marker before acknowledging.
+     */
+    func beginClear(expectedRevision: String) async throws  -> Bool
+
+    /**
+     * Clear only under that matching marker; retain it to block restoration.
+     */
+    func finishClear(expectedRevision: String) async throws  -> Bool
+
+    /**
+     * Atomically invalidate ACTIVE and every operation/candidate/capability in
+     * this namespace. Return success only after durable clearing/tombstoning
+     * that also rejects pending old writes. Idempotent; failure is not an ack.
+     */
+    func clear() async throws
+
+    func commit(kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord) async throws
+
+    func loadOperation(operationId: String) async throws  -> ProtectedEnrollmentRecord?
+
+    func loadActive() async throws  -> ProtectedEnrollmentRecord?
+
+}
+/**
+ * Implement over confidential, durable platform storage. Returning success from
+ * commit acknowledges durability, never an asynchronous enqueue. Operation is
+ * create-only; Candidate replaces only its operation; Active atomically installs
+ * both the active slot and operation record. Preserve prior active material
+ * until Active commits. No ordinary preferences/cache/SQLite implementation is
+ * provided. Failures are sanitized before they return to the Rust coordinator.
+ * clear is a full durable namespace invalidation, including all pending
+ * capabilities; it must prevent earlier writes from publishing afterward.
+ */
+open class FfiSecureEnrollmentStoreImpl: FfiSecureEnrollmentStore, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tinkle_ffi_fn_clone_ffisecureenrollmentstore(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tinkle_ffi_fn_free_ffisecureenrollmentstore(handle, $0) }
+    }
+
+
+
+
+    /**
+     * Atomically compare incarnation/revision and the entire ACTIVE record,
+     * reject cleanup markers, and exclude all namespace writes/clears/resets
+     * until endRestore. False grants no permission. No unchecked lease expiry.
+     * endRestore must cancel a late beginRestore with the same caller-owned ID.
+     */
+open func beginRestore(incarnation: String, revision: String, active: ProtectedEnrollmentRecord, permitId: String)async throws  -> Bool  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_begin_restore(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(incarnation),FfiConverterString.lower(revision),FfiConverterTypeProtectedEnrollmentRecord_lower(active),FfiConverterString.lower(permitId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_i8,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_i8,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Idempotently release/cancel this install permit, even if acquisition is
+     * still pending. A lost owner needs process-scoped release or blocked writes
+     * until host recovery; never allow late adoption after a silent expiry.
+     */
+open func endRestore(permitId: String)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_end_restore(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(permitId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_void,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Return None for legacy storage, which cannot attest restart-safe cleanup.
+     */
+open func namespaceSnapshot()async throws  -> ProtectedEnrollmentNamespace?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_namespace_snapshot(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionTypeProtectedEnrollmentNamespace.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Atomically compare revision, reject tombstones, commit, and advance revision.
+     * None means superseded with no write; never use an unconditional fallback.
+     */
+open func commitCurrent(expectedRevision: String, kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord)async throws  -> String?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_commit_current(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(expectedRevision),FfiConverterTypeSecureEnrollmentWrite_lower(kind),FfiConverterString.lower(operationId),FfiConverterTypeProtectedEnrollmentRecord_lower(record)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionString.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Compare revision and persist a durable cleanup marker before acknowledging.
+     */
+open func beginClear(expectedRevision: String)async throws  -> Bool  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_begin_clear(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(expectedRevision)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_i8,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_i8,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Clear only under that matching marker; retain it to block restoration.
+     */
+open func finishClear(expectedRevision: String)async throws  -> Bool  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_finish_clear(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(expectedRevision)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_i8,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_i8,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Atomically invalidate ACTIVE and every operation/candidate/capability in
+     * this namespace. Return success only after durable clearing/tombstoning
+     * that also rejects pending old writes. Idempotent; failure is not an ack.
+     */
+open func clear()async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_clear(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_void,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+open func commit(kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_commit(
+                        self.uniffiCloneHandle(),FfiConverterTypeSecureEnrollmentWrite_lower(kind),FfiConverterString.lower(operationId),FfiConverterTypeProtectedEnrollmentRecord_lower(record)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_void,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+open func loadOperation(operationId: String)async throws  -> ProtectedEnrollmentRecord?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_load_operation(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(operationId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionTypeProtectedEnrollmentRecord.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+open func loadActive()async throws  -> ProtectedEnrollmentRecord?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_ffisecureenrollmentstore_load_active(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionTypeProtectedEnrollmentRecord.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+
+
+}
+
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceFfiSecureEnrollmentStore {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceFfiSecureEnrollmentStore = UniffiVTableCallbackInterfaceFfiSecureEnrollmentStore(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypeFfiSecureEnrollmentStore.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface FfiSecureEnrollmentStore: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypeFfiSecureEnrollmentStore.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface FfiSecureEnrollmentStore: handle missing in uniffiClone")
+            }
+        },
+        beginRestore: { (
+            uniffiHandle: UInt64,
+            incarnation: RustBuffer,
+            revision: RustBuffer,
+            active: UInt64,
+            permitId: RustBuffer,
+            uniffiFutureCallback: @escaping UniffiForeignFutureCompleteI8,
+            uniffiCallbackData: UInt64,
+            uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
+        ) in
+            let makeCall = {
+                () async throws -> Bool in
+                guard let uniffiObj = try? FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try await uniffiObj.beginRestore(
+                     incarnation: try FfiConverterString.lift(incarnation),
+                     revision: try FfiConverterString.lift(revision),
+                     active: try FfiConverterTypeProtectedEnrollmentRecord_lift(active),
+                     permitId: try FfiConverterString.lift(permitId)
+                )
+            }
+
+            let uniffiHandleSuccess = { (returnValue: Bool) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultI8(
+                        returnValue: FfiConverterBool.lower(returnValue),
+                        callStatus: RustCallStatus()
+                    )
+                )
+            }
+            let uniffiHandleError = { (statusCode, errorBuf) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultI8(
+                        returnValue: 0,
+                        callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
+                    )
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall: makeCall,
+                handleSuccess: uniffiHandleSuccess,
+                handleError: uniffiHandleError,
+                lowerError: FfiConverterTypeFfiError_lower,
+                droppedCallback: uniffiOutDroppedCallback
+            )
+        },
+        endRestore: { (
+            uniffiHandle: UInt64,
+            permitId: RustBuffer,
+            uniffiFutureCallback: @escaping UniffiForeignFutureCompleteVoid,
+            uniffiCallbackData: UInt64,
+            uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
+        ) in
+            let makeCall = {
+                () async throws -> () in
+                guard let uniffiObj = try? FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try await uniffiObj.endRestore(
+                     permitId: try FfiConverterString.lift(permitId)
+                )
+            }
+
+            let uniffiHandleSuccess = { (returnValue: ()) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultVoid(
+                        callStatus: RustCallStatus()
+                    )
+                )
+            }
+            let uniffiHandleError = { (statusCode, errorBuf) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultVoid(
+                        callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
+                    )
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall: makeCall,
+                handleSuccess: uniffiHandleSuccess,
+                handleError: uniffiHandleError,
+                lowerError: FfiConverterTypeFfiError_lower,
+                droppedCallback: uniffiOutDroppedCallback
+            )
+        },
+        namespaceSnapshot: { (
+            uniffiHandle: UInt64,
+            uniffiFutureCallback: @escaping UniffiForeignFutureCompleteRustBuffer,
+            uniffiCallbackData: UInt64,
+            uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
+        ) in
+            let makeCall = {
+                () async throws -> ProtectedEnrollmentNamespace? in
+                guard let uniffiObj = try? FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try await uniffiObj.namespaceSnapshot(
+                )
+            }
+
+            let uniffiHandleSuccess = { (returnValue: ProtectedEnrollmentNamespace?) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer(
+                        returnValue: FfiConverterOptionTypeProtectedEnrollmentNamespace.lower(returnValue),
+                        callStatus: RustCallStatus()
+                    )
+                )
+            }
+            let uniffiHandleError = { (statusCode, errorBuf) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer(
+                        returnValue: RustBuffer.empty(),
+                        callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
+                    )
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall: makeCall,
+                handleSuccess: uniffiHandleSuccess,
+                handleError: uniffiHandleError,
+                lowerError: FfiConverterTypeFfiError_lower,
+                droppedCallback: uniffiOutDroppedCallback
+            )
+        },
+        commitCurrent: { (
+            uniffiHandle: UInt64,
+            expectedRevision: RustBuffer,
+            kind: RustBuffer,
+            operationId: RustBuffer,
+            record: UInt64,
+            uniffiFutureCallback: @escaping UniffiForeignFutureCompleteRustBuffer,
+            uniffiCallbackData: UInt64,
+            uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
+        ) in
+            let makeCall = {
+                () async throws -> String? in
+                guard let uniffiObj = try? FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try await uniffiObj.commitCurrent(
+                     expectedRevision: try FfiConverterString.lift(expectedRevision),
+                     kind: try FfiConverterTypeSecureEnrollmentWrite_lift(kind),
+                     operationId: try FfiConverterString.lift(operationId),
+                     record: try FfiConverterTypeProtectedEnrollmentRecord_lift(record)
+                )
+            }
+
+            let uniffiHandleSuccess = { (returnValue: String?) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer(
+                        returnValue: FfiConverterOptionString.lower(returnValue),
+                        callStatus: RustCallStatus()
+                    )
+                )
+            }
+            let uniffiHandleError = { (statusCode, errorBuf) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer(
+                        returnValue: RustBuffer.empty(),
+                        callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
+                    )
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall: makeCall,
+                handleSuccess: uniffiHandleSuccess,
+                handleError: uniffiHandleError,
+                lowerError: FfiConverterTypeFfiError_lower,
+                droppedCallback: uniffiOutDroppedCallback
+            )
+        },
+        beginClear: { (
+            uniffiHandle: UInt64,
+            expectedRevision: RustBuffer,
+            uniffiFutureCallback: @escaping UniffiForeignFutureCompleteI8,
+            uniffiCallbackData: UInt64,
+            uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
+        ) in
+            let makeCall = {
+                () async throws -> Bool in
+                guard let uniffiObj = try? FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try await uniffiObj.beginClear(
+                     expectedRevision: try FfiConverterString.lift(expectedRevision)
+                )
+            }
+
+            let uniffiHandleSuccess = { (returnValue: Bool) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultI8(
+                        returnValue: FfiConverterBool.lower(returnValue),
+                        callStatus: RustCallStatus()
+                    )
+                )
+            }
+            let uniffiHandleError = { (statusCode, errorBuf) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultI8(
+                        returnValue: 0,
+                        callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
+                    )
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall: makeCall,
+                handleSuccess: uniffiHandleSuccess,
+                handleError: uniffiHandleError,
+                lowerError: FfiConverterTypeFfiError_lower,
+                droppedCallback: uniffiOutDroppedCallback
+            )
+        },
+        finishClear: { (
+            uniffiHandle: UInt64,
+            expectedRevision: RustBuffer,
+            uniffiFutureCallback: @escaping UniffiForeignFutureCompleteI8,
+            uniffiCallbackData: UInt64,
+            uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
+        ) in
+            let makeCall = {
+                () async throws -> Bool in
+                guard let uniffiObj = try? FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try await uniffiObj.finishClear(
+                     expectedRevision: try FfiConverterString.lift(expectedRevision)
+                )
+            }
+
+            let uniffiHandleSuccess = { (returnValue: Bool) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultI8(
+                        returnValue: FfiConverterBool.lower(returnValue),
+                        callStatus: RustCallStatus()
+                    )
+                )
+            }
+            let uniffiHandleError = { (statusCode, errorBuf) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultI8(
+                        returnValue: 0,
+                        callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
+                    )
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall: makeCall,
+                handleSuccess: uniffiHandleSuccess,
+                handleError: uniffiHandleError,
+                lowerError: FfiConverterTypeFfiError_lower,
+                droppedCallback: uniffiOutDroppedCallback
+            )
+        },
+        clear: { (
+            uniffiHandle: UInt64,
+            uniffiFutureCallback: @escaping UniffiForeignFutureCompleteVoid,
+            uniffiCallbackData: UInt64,
+            uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
+        ) in
+            let makeCall = {
+                () async throws -> () in
+                guard let uniffiObj = try? FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try await uniffiObj.clear(
+                )
+            }
+
+            let uniffiHandleSuccess = { (returnValue: ()) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultVoid(
+                        callStatus: RustCallStatus()
+                    )
+                )
+            }
+            let uniffiHandleError = { (statusCode, errorBuf) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultVoid(
+                        callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
+                    )
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall: makeCall,
+                handleSuccess: uniffiHandleSuccess,
+                handleError: uniffiHandleError,
+                lowerError: FfiConverterTypeFfiError_lower,
+                droppedCallback: uniffiOutDroppedCallback
+            )
+        },
+        commit: { (
+            uniffiHandle: UInt64,
+            kind: RustBuffer,
+            operationId: RustBuffer,
+            record: UInt64,
+            uniffiFutureCallback: @escaping UniffiForeignFutureCompleteVoid,
+            uniffiCallbackData: UInt64,
+            uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
+        ) in
+            let makeCall = {
+                () async throws -> () in
+                guard let uniffiObj = try? FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try await uniffiObj.commit(
+                     kind: try FfiConverterTypeSecureEnrollmentWrite_lift(kind),
+                     operationId: try FfiConverterString.lift(operationId),
+                     record: try FfiConverterTypeProtectedEnrollmentRecord_lift(record)
+                )
+            }
+
+            let uniffiHandleSuccess = { (returnValue: ()) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultVoid(
+                        callStatus: RustCallStatus()
+                    )
+                )
+            }
+            let uniffiHandleError = { (statusCode, errorBuf) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultVoid(
+                        callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
+                    )
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall: makeCall,
+                handleSuccess: uniffiHandleSuccess,
+                handleError: uniffiHandleError,
+                lowerError: FfiConverterTypeFfiError_lower,
+                droppedCallback: uniffiOutDroppedCallback
+            )
+        },
+        loadOperation: { (
+            uniffiHandle: UInt64,
+            operationId: RustBuffer,
+            uniffiFutureCallback: @escaping UniffiForeignFutureCompleteRustBuffer,
+            uniffiCallbackData: UInt64,
+            uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
+        ) in
+            let makeCall = {
+                () async throws -> ProtectedEnrollmentRecord? in
+                guard let uniffiObj = try? FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try await uniffiObj.loadOperation(
+                     operationId: try FfiConverterString.lift(operationId)
+                )
+            }
+
+            let uniffiHandleSuccess = { (returnValue: ProtectedEnrollmentRecord?) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer(
+                        returnValue: FfiConverterOptionTypeProtectedEnrollmentRecord.lower(returnValue),
+                        callStatus: RustCallStatus()
+                    )
+                )
+            }
+            let uniffiHandleError = { (statusCode, errorBuf) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer(
+                        returnValue: RustBuffer.empty(),
+                        callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
+                    )
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall: makeCall,
+                handleSuccess: uniffiHandleSuccess,
+                handleError: uniffiHandleError,
+                lowerError: FfiConverterTypeFfiError_lower,
+                droppedCallback: uniffiOutDroppedCallback
+            )
+        },
+        loadActive: { (
+            uniffiHandle: UInt64,
+            uniffiFutureCallback: @escaping UniffiForeignFutureCompleteRustBuffer,
+            uniffiCallbackData: UInt64,
+            uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
+        ) in
+            let makeCall = {
+                () async throws -> ProtectedEnrollmentRecord? in
+                guard let uniffiObj = try? FfiConverterTypeFfiSecureEnrollmentStore.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try await uniffiObj.loadActive(
+                )
+            }
+
+            let uniffiHandleSuccess = { (returnValue: ProtectedEnrollmentRecord?) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer(
+                        returnValue: FfiConverterOptionTypeProtectedEnrollmentRecord.lower(returnValue),
+                        callStatus: RustCallStatus()
+                    )
+                )
+            }
+            let uniffiHandleError = { (statusCode, errorBuf) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer(
+                        returnValue: RustBuffer.empty(),
+                        callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
+                    )
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall: makeCall,
+                handleSuccess: uniffiHandleSuccess,
+                handleError: uniffiHandleError,
+                lowerError: FfiConverterTypeFfiError_lower,
+                droppedCallback: uniffiOutDroppedCallback
+            )
+        }
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceFfiSecureEnrollmentStore> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceFfiSecureEnrollmentStore>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
+}
+
+private func uniffiCallbackInitFfiSecureEnrollmentStore() {
+    uniffi_tinkle_ffi_fn_init_callback_vtable_ffisecureenrollmentstore(UniffiCallbackInterfaceFfiSecureEnrollmentStore.vtablePtr)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiSecureEnrollmentStore: FfiConverter {
+    fileprivate static let handleMap = UniffiHandleMap<FfiSecureEnrollmentStore>()
+
+    typealias FfiType = UInt64
+    typealias SwiftType = FfiSecureEnrollmentStore
+
+    public static func lift(_ handle: UInt64) throws -> FfiSecureEnrollmentStore {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return FfiSecureEnrollmentStoreImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
+    }
+
+    public static func lower(_ value: FfiSecureEnrollmentStore) -> UInt64 {
+         if let rustImpl = value as? FfiSecureEnrollmentStoreImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSecureEnrollmentStore {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: FfiSecureEnrollmentStore, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSecureEnrollmentStore_lift(_ handle: UInt64) throws -> FfiSecureEnrollmentStore {
+    return try FfiConverterTypeFfiSecureEnrollmentStore.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSecureEnrollmentStore_lower(_ value: FfiSecureEnrollmentStore) -> UInt64 {
+    return FfiConverterTypeFfiSecureEnrollmentStore.lower(value)
+}
+
+
+
+
+
+
+/**
  * In-memory store for tests and ephemeral sessions. Wraps
  * [`libtinkle::InMemoryCursorStore`]; production apps implement
  * [`FfiCursorStore`] over SQLite/Keychain/DataStore instead.
@@ -1183,6 +2177,151 @@ public func FfiConverterTypeInMemoryFfiStore_lift(_ handle: UInt64) throws -> In
 #endif
 public func FfiConverterTypeInMemoryFfiStore_lower(_ value: InMemoryFfiStore) -> UInt64 {
     return FfiConverterTypeInMemoryFfiStore.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Opaque zeroizing Rust owner of a protected enrollment record. Foreign code
+ * may copy bytes only to encrypt/store them, must erase its copies, and release
+ * this handle after the platform transaction finishes. Never log these bytes.
+ */
+public protocol ProtectedEnrollmentRecordProtocol: AnyObject, Sendable {
+
+    /**
+     * Copy for the host's protected transaction only. No persistence occurs here.
+     */
+    func copyForSecureStorage()  -> Data
+
+}
+/**
+ * Opaque zeroizing Rust owner of a protected enrollment record. Foreign code
+ * may copy bytes only to encrypt/store them, must erase its copies, and release
+ * this handle after the platform transaction finishes. Never log these bytes.
+ */
+open class ProtectedEnrollmentRecord: ProtectedEnrollmentRecordProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tinkle_ffi_fn_clone_protectedenrollmentrecord(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tinkle_ffi_fn_free_protectedenrollmentrecord(handle, $0) }
+    }
+
+
+    /**
+     * Adopt decrypted bytes from Keychain/Keystore-protected storage.
+     */
+public static func fromSecureStorage(bytes: Data) -> ProtectedEnrollmentRecord  {
+    return try!  FfiConverterTypeProtectedEnrollmentRecord_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_constructor_protectedenrollmentrecord_from_secure_storage(
+        FfiConverterData.lower(bytes),uniffiCallStatus
+    )
+})
+}
+
+
+
+    /**
+     * Copy for the host's protected transaction only. No persistence occurs here.
+     */
+open func copyForSecureStorage() -> Data  {
+    return try!  FfiConverterData.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_protectedenrollmentrecord_copy_for_secure_storage(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProtectedEnrollmentRecord: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = ProtectedEnrollmentRecord
+
+    public static func lift(_ handle: UInt64) throws -> ProtectedEnrollmentRecord {
+        return ProtectedEnrollmentRecord(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: ProtectedEnrollmentRecord) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProtectedEnrollmentRecord {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: ProtectedEnrollmentRecord, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtectedEnrollmentRecord_lift(_ handle: UInt64) throws -> ProtectedEnrollmentRecord {
+    return try FfiConverterTypeProtectedEnrollmentRecord.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtectedEnrollmentRecord_lower(_ value: ProtectedEnrollmentRecord) -> UInt64 {
+    return FfiConverterTypeProtectedEnrollmentRecord.lower(value)
 }
 
 
@@ -1562,12 +2701,155 @@ public func FfiConverterTypeSqliteStorage_lower(_ value: SqliteStorage) -> UInt6
 
 
 /**
+ * Securely persisted candidate, never a Returning credential. No constructor.
+ */
+public protocol StoredEnrollmentProtocol: AnyObject, Sendable {
+
+    func status()  -> EnrollmentStatus
+
+}
+/**
+ * Securely persisted candidate, never a Returning credential. No constructor.
+ */
+open class StoredEnrollment: StoredEnrollmentProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tinkle_ffi_fn_clone_storedenrollment(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tinkle_ffi_fn_free_storedenrollment(handle, $0) }
+    }
+
+
+
+
+open func status() -> EnrollmentStatus  {
+    return try!  FfiConverterTypeEnrollmentStatus_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_storedenrollment_status(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeStoredEnrollment: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = StoredEnrollment
+
+    public static func lift(_ handle: UInt64) throws -> StoredEnrollment {
+        return StoredEnrollment(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: StoredEnrollment) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> StoredEnrollment {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: StoredEnrollment, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeStoredEnrollment_lift(_ handle: UInt64) throws -> StoredEnrollment {
+    return try FfiConverterTypeStoredEnrollment.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeStoredEnrollment_lower(_ value: StoredEnrollment) -> UInt64 {
+    return FfiConverterTypeStoredEnrollment.lower(value)
+}
+
+
+
+
+
+
+/**
  * UniFFI client object.
  */
 public protocol TinkleClientProtocol: AnyObject, Sendable {
 
     /**
-     * Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
+     * List active devices on the current authenticated channel.
+     */
+    func getSessions() async throws  -> [AccountSession]
+
+    /**
+     * Revoke every other device while retaining this device's enrollment.
+     */
+    func revokeOtherSessions() async throws  -> Bool
+
+    /**
+     * Revoke one neutral session UUID once; unknown outcomes are never replayed.
+     */
+    func revokeSession(sessionId: String) async throws  -> Bool
+
+    /**
+     * Query transport, authorization, and retained cleanup without network I/O.
+     */
+    func sessionStatus() async  -> AccountStatus
+
+    /**
+     * Foreground connect: encrypted TCP + Syntra handshake to ACTIVE.
      * Reissues the retained watch set on the fresh connection, so presence
      * observations survive reconnects.
      */
@@ -1687,6 +2969,12 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
     func isConnected() async  -> Bool
 
     /**
+     * True even if durable clearing failed. This Client cannot restore any
+     * credentials or reconnect after local logout; resolve clearing explicitly.
+     */
+    func isSignedOut()  -> Bool
+
+    /**
      * True while [`Self::suspend`] is in effect.
      */
     func isSuspended() async  -> Bool
@@ -1750,6 +3038,11 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
      * the fresh connection, so presence observations survive reconnects.
      */
     func reconnect() async throws
+
+    /**
+     * Install newly enrolled/rotated channel trust and retire the old channel.
+     */
+    func replaceTrustSource(source: TrustSourceFfi) async throws
 
     /**
      * Clear suspension set by [`Self::suspend`]. The supervisor resumes
@@ -1843,6 +3136,49 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
     func trackedTargets() async  -> [String]
 
     /**
+     * No acknowledgement can be sent without a StoredEnrollment receipt. Uses
+     * pinned Bootstrap and the retained capability; persists ACTIVE before fresh Returning.
+     */
+    func activateEnrollment(candidate: StoredEnrollment) async throws  -> EnrollmentStatus
+
+    /**
+     * Register a namespace for full acknowledged logout invalidation without
+     * restoring credentials. Normal enrollment/restore calls bind automatically.
+     */
+    func bindSecureEnrollmentStore(store: FfiSecureEnrollmentStore) async throws
+
+    /**
+     * Recover pending flow after an ambiguous result/process restart, without SMS reuse.
+     */
+    func loadEnrollmentOperation(store: FfiSecureEnrollmentStore, operationId: String) async throws  -> EnrollmentOperation
+
+    /**
+     * Persist the operation UUID/capability before SignIn or rotation can run.
+     */
+    func prepareEnrollment(store: FfiSecureEnrollmentStore) async throws  -> EnrollmentOperation
+
+    /**
+     * Observe conditional retained metadata before restoring an unexpired ACTIVE key.
+     * Exact retirement fences and awaits local clearing. Expired keys are never
+     * installed; UNKNOWN grants no admission. Inspect sessionStatus for cleanup acknowledgement.
+     */
+    func restoreActiveEnrollment(store: FfiSecureEnrollmentStore) async throws  -> EnrollmentStatus
+
+    func resumeEnrollment(operation: EnrollmentOperation) async throws  -> StoredEnrollment
+
+    func rotateEnrollment(operation: EnrollmentOperation) async throws  -> StoredEnrollment
+
+    /**
+     * First public request is automatically InitConnect-wrapped on this connection.
+     */
+    func sendCode(phoneNumber: String, langCode: String) async throws  -> CodeDelivery
+
+    /**
+     * Deliver on pinned Bootstrap, then await atomic candidate persistence.
+     */
+    func signIn(phoneNumber: String, code: String, verificationId: String, operation: EnrollmentOperation) async throws  -> EnrollmentSignInResult
+
+    /**
      * Bounded push wake: parse-then-commit without the foreground
      * supervisor or socket.
      *
@@ -1860,11 +3196,11 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
     func handlePushWake(envelope: FfiPushEnvelope, timeoutSecs: UInt64) async throws  -> FfiPushOutcome
 
     /**
-     * Logout + local cleanup: best-effort `AccountService/Logout`, then
-     * wipes the principal's SQLite rows, drops catch-up demand, and
-     * resets the session so in-flight push/reconcile work fences out.
-     * Returns the server's `logged_out` flag (`false` when the RPC was
-     * skipped or failed; the local wipe still happened).
+     * Permanently sign this Client out, retire keys/channel/liveness work and
+     * require acknowledged full secure-store clearing. True confirms remote
+     * revocation; false leaves it unconfirmed after successful local clearing.
+     * A cleanup error never reverses isSignedOut and never claims durability;
+     * resolve host clearing before permitting restoration on a new Client.
      */
     func logout() async throws  -> Bool
 
@@ -1940,21 +3276,18 @@ open class TinkleClient: TinkleClientProtocol, @unchecked Sendable {
         return try! rustCall { uniffi_tinkle_ffi_fn_clone_tinkleclient(self.handle, $0) }
     }
     /**
-     * Create a client. `credential` is the opaque session token;
+     * Create a client with explicit bootstrap/returning channel trust;
      * `store` is the foreign (or in-memory) durable cursor store.
      *
-     * Fails fast with [`FfiError::Internal`] on an invalid non-blank
-     * `grpc_endpoint` (missing scheme, non-`https` without
-     * `allow_insecure`) instead of surfacing a retried network failure
-     * at reconciliation time.
+     * Consumes the one-use trust source. Invalid configuration fails fast.
      */
-public convenience init(config: ClientConfigFfi, credential: String, store: FfiCursorStore)throws  {
+public convenience init(config: ClientConfigFfi, trustSource: TrustSourceFfi, store: FfiCursorStore)throws  {
     let handle =
         try rustCallWithError(FfiConverterTypeFfiError_lift) {
         uniffiCallStatus in
     uniffi_tinkle_ffi_fn_constructor_tinkleclient_new(
         FfiConverterTypeClientConfigFfi_lower(config),
-        FfiConverterString.lower(credential),
+        FfiConverterTypeTrustSourceFfi_lower(trustSource),
         FfiConverterTypeFfiCursorStore_lower(store),uniffiCallStatus
     )
 }
@@ -1976,14 +3309,14 @@ public convenience init(config: ClientConfigFfi, credential: String, store: FfiC
      * journals and commits cache + accept positions atomically, then emits
      * `ConversationChanged`/`MessagesChanged`; UI reads the shared cache.
      *
-     * Fails fast on invalid `grpc_endpoint` like [`Self::new`].
+     * Consumes the one-use trust source like [`Self::new`].
      */
-public static func newSqlite(config: ClientConfigFfi, credential: String, storage: SqliteStorage)throws  -> TinkleClient  {
+public static func newSqlite(config: ClientConfigFfi, trustSource: TrustSourceFfi, storage: SqliteStorage)throws  -> TinkleClient  {
     return try  FfiConverterTypeTinkleClient_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
         uniffiCallStatus in
     uniffi_tinkle_ffi_fn_constructor_tinkleclient_new_sqlite(
         FfiConverterTypeClientConfigFfi_lower(config),
-        FfiConverterString.lower(credential),
+        FfiConverterTypeTrustSourceFfi_lower(trustSource),
         FfiConverterTypeSqliteStorage_lower(storage),uniffiCallStatus
     )
 })
@@ -1992,7 +3325,84 @@ public static func newSqlite(config: ClientConfigFfi, credential: String, storag
 
 
     /**
-     * Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
+     * List active devices on the current authenticated channel.
+     */
+open func getSessions()async throws  -> [AccountSession]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_get_sessions(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeAccountSession.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Revoke every other device while retaining this device's enrollment.
+     */
+open func revokeOtherSessions()async throws  -> Bool  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_revoke_other_sessions(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_i8,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_i8,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Revoke one neutral session UUID once; unknown outcomes are never replayed.
+     */
+open func revokeSession(sessionId: String)async throws  -> Bool  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_revoke_session(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(sessionId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_i8,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_i8,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Query transport, authorization, and retained cleanup without network I/O.
+     */
+open func sessionStatus()async  -> AccountStatus  {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_session_status(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeAccountStatus_lift,
+            errorHandler: nil
+
+        )
+}
+
+    /**
+     * Foreground connect: encrypted TCP + Syntra handshake to ACTIVE.
      * Reissues the retained watch set on the fresh connection, so presence
      * observations survive reconnects.
      */
@@ -2295,6 +3705,19 @@ open func isConnected()async  -> Bool  {
 }
 
     /**
+     * True even if durable clearing failed. This Client cannot restore any
+     * credentials or reconnect after local logout; resolve clearing explicitly.
+     */
+open func isSignedOut() -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_tinkleclient_is_signed_out(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+    /**
      * True while [`Self::suspend`] is in effect.
      */
 open func isSuspended()async  -> Bool  {
@@ -2450,6 +3873,25 @@ open func reconnect()async throws   {
             rustFutureFunc: {
                 uniffi_tinkle_ffi_fn_method_tinkleclient_reconnect(
                         self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_void,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Install newly enrolled/rotated channel trust and retire the old channel.
+     */
+open func replaceTrustSource(source: TrustSourceFfi)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_replace_trust_source(
+                        self.uniffiCloneHandle(),FfiConverterTypeTrustSourceFfi_lower(source)
                 )
             },
             pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
@@ -2713,6 +4155,175 @@ open func trackedTargets()async  -> [String]  {
 }
 
     /**
+     * No acknowledgement can be sent without a StoredEnrollment receipt. Uses
+     * pinned Bootstrap and the retained capability; persists ACTIVE before fresh Returning.
+     */
+open func activateEnrollment(candidate: StoredEnrollment)async throws  -> EnrollmentStatus  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_activate_enrollment(
+                        self.uniffiCloneHandle(),FfiConverterTypeStoredEnrollment_lower(candidate)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeEnrollmentStatus_lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Register a namespace for full acknowledged logout invalidation without
+     * restoring credentials. Normal enrollment/restore calls bind automatically.
+     */
+open func bindSecureEnrollmentStore(store: FfiSecureEnrollmentStore)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_bind_secure_enrollment_store(
+                        self.uniffiCloneHandle(),FfiConverterTypeFfiSecureEnrollmentStore_lower(store)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_void,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_void,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Recover pending flow after an ambiguous result/process restart, without SMS reuse.
+     */
+open func loadEnrollmentOperation(store: FfiSecureEnrollmentStore, operationId: String)async throws  -> EnrollmentOperation  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_load_enrollment_operation(
+                        self.uniffiCloneHandle(),FfiConverterTypeFfiSecureEnrollmentStore_lower(store),FfiConverterString.lower(operationId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeEnrollmentOperation_lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Persist the operation UUID/capability before SignIn or rotation can run.
+     */
+open func prepareEnrollment(store: FfiSecureEnrollmentStore)async throws  -> EnrollmentOperation  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_prepare_enrollment(
+                        self.uniffiCloneHandle(),FfiConverterTypeFfiSecureEnrollmentStore_lower(store)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeEnrollmentOperation_lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Observe conditional retained metadata before restoring an unexpired ACTIVE key.
+     * Exact retirement fences and awaits local clearing. Expired keys are never
+     * installed; UNKNOWN grants no admission. Inspect sessionStatus for cleanup acknowledgement.
+     */
+open func restoreActiveEnrollment(store: FfiSecureEnrollmentStore)async throws  -> EnrollmentStatus  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_restore_active_enrollment(
+                        self.uniffiCloneHandle(),FfiConverterTypeFfiSecureEnrollmentStore_lower(store)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeEnrollmentStatus_lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+open func resumeEnrollment(operation: EnrollmentOperation)async throws  -> StoredEnrollment  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_resume_enrollment(
+                        self.uniffiCloneHandle(),FfiConverterTypeEnrollmentOperation_lower(operation)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeStoredEnrollment_lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+open func rotateEnrollment(operation: EnrollmentOperation)async throws  -> StoredEnrollment  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_rotate_enrollment(
+                        self.uniffiCloneHandle(),FfiConverterTypeEnrollmentOperation_lower(operation)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeStoredEnrollment_lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * First public request is automatically InitConnect-wrapped on this connection.
+     */
+open func sendCode(phoneNumber: String, langCode: String)async throws  -> CodeDelivery  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_send_code(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(phoneNumber),FfiConverterString.lower(langCode)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeCodeDelivery_lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Deliver on pinned Bootstrap, then await atomic candidate persistence.
+     */
+open func signIn(phoneNumber: String, code: String, verificationId: String, operation: EnrollmentOperation)async throws  -> EnrollmentSignInResult  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_sign_in(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(phoneNumber),FfiConverterString.lower(code),FfiConverterString.lower(verificationId),FfiConverterTypeEnrollmentOperation_lower(operation)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeEnrollmentSignInResult_lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
      * Bounded push wake: parse-then-commit without the foreground
      * supervisor or socket.
      *
@@ -2744,11 +4355,11 @@ open func handlePushWake(envelope: FfiPushEnvelope, timeoutSecs: UInt64)async th
 }
 
     /**
-     * Logout + local cleanup: best-effort `AccountService/Logout`, then
-     * wipes the principal's SQLite rows, drops catch-up demand, and
-     * resets the session so in-flight push/reconcile work fences out.
-     * Returns the server's `logged_out` flag (`false` when the RPC was
-     * skipped or failed; the local wipe still happened).
+     * Permanently sign this Client out, retire keys/channel/liveness work and
+     * require acknowledged full secure-store clearing. True confirms remote
+     * revocation; false leaves it unconfirmed after successful local clearing.
+     * A cleanup error never reverses isSignedOut and never claims durability;
+     * resolve host clearing before permitting restoration on a new Client.
      */
 open func logout()async throws  -> Bool  {
     return
@@ -2884,56 +4495,413 @@ public func FfiConverterTypeTinkleClient_lower(_ value: TinkleClient) -> UInt64 
 
 
 
+
+
 /**
- * Record mirrored into [`libtinkle::ClientConfig`]. All fields owned.
- *
- * `grpc_endpoint` enables the direct-unary gRPC fallback for reconciliation
- * RPCs (`GetMessages`/`GetTargetChanges`). Syntra stays primary on the live
- * connection; when set, retryable Syntra failures fall back to this endpoint
- * automatically. It is validated fail-fast by [`TinkleClient::new`] and
- * [`TinkleClient::new_sqlite`]: a non-blank-but-invalid endpoint (missing
- * scheme, non-`https` without `allow_insecure`) returns
- * [`FfiError::Internal`] at construction instead of surfacing as a retried
- * network failure at reconciliation time. `None` (or blank, treated as
- * unset for backward compatibility) keeps Syntra-only reconciliation.
+ * One-use Bootstrap trust owner. Returning is installed only through validated
+ * ACTIVE secure-store restoration or the acknowledged enrollment coordinator.
  */
-public struct ClientConfigFfi: Equatable, Hashable {
+public protocol TrustSourceFfiProtocol: AnyObject, Sendable {
+
+}
+/**
+ * One-use Bootstrap trust owner. Returning is installed only through validated
+ * ACTIVE secure-store restoration or the acknowledged enrollment coordinator.
+ */
+open class TrustSourceFfi: TrustSourceFfiProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tinkle_ffi_fn_clone_trustsourceffi(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tinkle_ffi_fn_free_trustsourceffi(handle, $0) }
+    }
+
+
+public static func bootstrap(trust: ServerTrustFfi)throws  -> TrustSourceFfi  {
+    return try  FfiConverterTypeTrustSourceFfi_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_constructor_trustsourceffi_bootstrap(
+        FfiConverterTypeServerTrustFfi_lower(trust),uniffiCallStatus
+    )
+})
+}
+
+
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTrustSourceFfi: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = TrustSourceFfi
+
+    public static func lift(_ handle: UInt64) throws -> TrustSourceFfi {
+        return TrustSourceFfi(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: TrustSourceFfi) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TrustSourceFfi {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: TrustSourceFfi, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTrustSourceFfi_lift(_ handle: UInt64) throws -> TrustSourceFfi {
+    return try FfiConverterTypeTrustSourceFfi.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTrustSourceFfi_lower(_ value: TrustSourceFfi) -> UInt64 {
+    return FfiConverterTypeTrustSourceFfi.lower(value)
+}
+
+
+
+
+/**
+ * One active device; identifiers and descriptive labels are not credentials.
+ */
+public struct AccountSession: Equatable, Hashable {
     /**
-     * Gateway URL, e.g. `wss://gateway.example.com/syntra/v1/ws`.
+     * Neutral session UUID used for display and revocation.
      */
-    public var url: String
+    public var id: String
     /**
-     * Allow `ws://` (development loopback/isolated nets only).
+     * Client-reported device model.
      */
-    public var allowInsecure: Bool
+    public var deviceModel: String
     /**
-     * Optional user-agent string.
+     * Client-reported platform.
      */
-    public var userAgent: String?
+    public var platform: String
     /**
-     * Direct-unary gRPC base endpoint for reconciliation RPCs.
+     * Client-reported operating system version.
      */
-    public var grpcEndpoint: String?
+    public var systemVersion: String
+    /**
+     * Client-reported application version.
+     */
+    public var appVersion: String
+    /**
+     * Application build identifier, preserving leading zeroes.
+     */
+    public var appBuild: String
+    /**
+     * Creation time in Unix seconds.
+     */
+    public var createdDate: Int64
+    /**
+     * Last activity time in Unix seconds.
+     */
+    public var activeDate: Int64
+    /**
+     * Server-reported address; hosts must treat this as personal data.
+     */
+    public var ip: String
+    /**
+     * Country code, empty when unknown.
+     */
+    public var country: String
+    /**
+     * Region, empty when unknown.
+     */
+    public var region: String
+    /**
+     * Whether this session issued the listing request.
+     */
+    public var current: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
     public init(
         /**
-         * Gateway URL, e.g. `wss://gateway.example.com/syntra/v1/ws`.
-         */url: String,
+         * Neutral session UUID used for display and revocation.
+         */id: String,
         /**
-         * Allow `ws://` (development loopback/isolated nets only).
-         */allowInsecure: Bool,
+         * Client-reported device model.
+         */deviceModel: String,
         /**
-         * Optional user-agent string.
-         */userAgent: String?,
+         * Client-reported platform.
+         */platform: String,
         /**
-         * Direct-unary gRPC base endpoint for reconciliation RPCs.
-         */grpcEndpoint: String?) {
-        self.url = url
-        self.allowInsecure = allowInsecure
-        self.userAgent = userAgent
-        self.grpcEndpoint = grpcEndpoint
+         * Client-reported operating system version.
+         */systemVersion: String,
+        /**
+         * Client-reported application version.
+         */appVersion: String,
+        /**
+         * Application build identifier, preserving leading zeroes.
+         */appBuild: String,
+        /**
+         * Creation time in Unix seconds.
+         */createdDate: Int64,
+        /**
+         * Last activity time in Unix seconds.
+         */activeDate: Int64,
+        /**
+         * Server-reported address; hosts must treat this as personal data.
+         */ip: String,
+        /**
+         * Country code, empty when unknown.
+         */country: String,
+        /**
+         * Region, empty when unknown.
+         */region: String,
+        /**
+         * Whether this session issued the listing request.
+         */current: Bool) {
+        self.id = id
+        self.deviceModel = deviceModel
+        self.platform = platform
+        self.systemVersion = systemVersion
+        self.appVersion = appVersion
+        self.appBuild = appBuild
+        self.createdDate = createdDate
+        self.activeDate = activeDate
+        self.ip = ip
+        self.country = country
+        self.region = region
+        self.current = current
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension AccountSession: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountSession: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountSession {
+        return
+            try AccountSession(
+                id: FfiConverterString.read(from: &buf),
+                deviceModel: FfiConverterString.read(from: &buf),
+                platform: FfiConverterString.read(from: &buf),
+                systemVersion: FfiConverterString.read(from: &buf),
+                appVersion: FfiConverterString.read(from: &buf),
+                appBuild: FfiConverterString.read(from: &buf),
+                createdDate: FfiConverterInt64.read(from: &buf),
+                activeDate: FfiConverterInt64.read(from: &buf),
+                ip: FfiConverterString.read(from: &buf),
+                country: FfiConverterString.read(from: &buf),
+                region: FfiConverterString.read(from: &buf),
+                current: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AccountSession, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.deviceModel, into: &buf)
+        FfiConverterString.write(value.platform, into: &buf)
+        FfiConverterString.write(value.systemVersion, into: &buf)
+        FfiConverterString.write(value.appVersion, into: &buf)
+        FfiConverterString.write(value.appBuild, into: &buf)
+        FfiConverterInt64.write(value.createdDate, into: &buf)
+        FfiConverterInt64.write(value.activeDate, into: &buf)
+        FfiConverterString.write(value.ip, into: &buf)
+        FfiConverterString.write(value.country, into: &buf)
+        FfiConverterString.write(value.region, into: &buf)
+        FfiConverterBool.write(value.current, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountSession_lift(_ buf: RustBuffer) throws -> AccountSession {
+    return try FfiConverterTypeAccountSession.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountSession_lower(_ value: AccountSession) -> RustBuffer {
+    return FfiConverterTypeAccountSession.lower(value)
+}
+
+
+/**
+ * Account lifecycle query, separate from contact connectivity observations.
+ */
+public struct AccountStatus: Equatable, Hashable {
+    /**
+     * Current encrypted transport availability.
+     */
+    public var network: AccountNetwork
+    /**
+     * Current authorization knowledge.
+     */
+    public var authorization: AccountAuthorization
+    /**
+     * Retained local cleanup status.
+     */
+    public var cleanup: AccountCleanup
+    /**
+     * Restart-safe completion additionally requires cleanup == Complete.
+     */
+    public var restartSafeStore: Bool
+    /**
+     * Negative-only observation, never confirmation of a Logout invocation.
+     */
+    public var enrollmentObservation: AccountEnrollmentObservation
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Current encrypted transport availability.
+         */network: AccountNetwork,
+        /**
+         * Current authorization knowledge.
+         */authorization: AccountAuthorization,
+        /**
+         * Retained local cleanup status.
+         */cleanup: AccountCleanup,
+        /**
+         * Restart-safe completion additionally requires cleanup == Complete.
+         */restartSafeStore: Bool,
+        /**
+         * Negative-only observation, never confirmation of a Logout invocation.
+         */enrollmentObservation: AccountEnrollmentObservation) {
+        self.network = network
+        self.authorization = authorization
+        self.cleanup = cleanup
+        self.restartSafeStore = restartSafeStore
+        self.enrollmentObservation = enrollmentObservation
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension AccountStatus: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountStatus: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountStatus {
+        return
+            try AccountStatus(
+                network: FfiConverterTypeAccountNetwork.read(from: &buf),
+                authorization: FfiConverterTypeAccountAuthorization.read(from: &buf),
+                cleanup: FfiConverterTypeAccountCleanup.read(from: &buf),
+                restartSafeStore: FfiConverterBool.read(from: &buf),
+                enrollmentObservation: FfiConverterTypeAccountEnrollmentObservation.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AccountStatus, into buf: inout [UInt8]) {
+        FfiConverterTypeAccountNetwork.write(value.network, into: &buf)
+        FfiConverterTypeAccountAuthorization.write(value.authorization, into: &buf)
+        FfiConverterTypeAccountCleanup.write(value.cleanup, into: &buf)
+        FfiConverterBool.write(value.restartSafeStore, into: &buf)
+        FfiConverterTypeAccountEnrollmentObservation.write(value.enrollmentObservation, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountStatus_lift(_ buf: RustBuffer) throws -> AccountStatus {
+    return try FfiConverterTypeAccountStatus.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountStatus_lower(_ value: AccountStatus) -> RustBuffer {
+    return FfiConverterTypeAccountStatus.lower(value)
+}
+
+
+/**
+ * Both ports use one host and the exact same pin, scope and channel mode.
+ */
+public struct ClientConfigFfi: Equatable, Hashable {
+    public var clientInfo: ClientInfoFfi
+    public var host: String
+    public var primaryPort: UInt16
+    public var fallbackPort: UInt16?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(clientInfo: ClientInfoFfi, host: String, primaryPort: UInt16, fallbackPort: UInt16?) {
+        self.clientInfo = clientInfo
+        self.host = host
+        self.primaryPort = primaryPort
+        self.fallbackPort = fallbackPort
     }
 
 
@@ -2952,18 +4920,18 @@ public struct FfiConverterTypeClientConfigFfi: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ClientConfigFfi {
         return
             try ClientConfigFfi(
-                url: FfiConverterString.read(from: &buf),
-                allowInsecure: FfiConverterBool.read(from: &buf),
-                userAgent: FfiConverterOptionString.read(from: &buf),
-                grpcEndpoint: FfiConverterOptionString.read(from: &buf)
+                clientInfo: FfiConverterTypeClientInfoFfi.read(from: &buf),
+                host: FfiConverterString.read(from: &buf),
+                primaryPort: FfiConverterUInt16.read(from: &buf),
+                fallbackPort: FfiConverterOptionUInt16.read(from: &buf)
         )
     }
 
     public static func write(_ value: ClientConfigFfi, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.url, into: &buf)
-        FfiConverterBool.write(value.allowInsecure, into: &buf)
-        FfiConverterOptionString.write(value.userAgent, into: &buf)
-        FfiConverterOptionString.write(value.grpcEndpoint, into: &buf)
+        FfiConverterTypeClientInfoFfi.write(value.clientInfo, into: &buf)
+        FfiConverterString.write(value.host, into: &buf)
+        FfiConverterUInt16.write(value.primaryPort, into: &buf)
+        FfiConverterOptionUInt16.write(value.fallbackPort, into: &buf)
     }
 }
 
@@ -2980,6 +4948,363 @@ public func FfiConverterTypeClientConfigFfi_lift(_ buf: RustBuffer) throws -> Cl
 #endif
 public func FfiConverterTypeClientConfigFfi_lower(_ value: ClientConfigFfi) -> RustBuffer {
     return FfiConverterTypeClientConfigFfi.lower(value)
+}
+
+
+/**
+ * All five device/application labels are required before any native connection.
+ */
+public struct ClientInfoFfi: Equatable, Hashable {
+    public var deviceModel: String
+    public var platform: String
+    public var osVersion: String
+    public var appVersion: String
+    public var appBuild: String
+    public var options: ClientOptionsFfi
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(deviceModel: String, platform: String, osVersion: String, appVersion: String, appBuild: String, options: ClientOptionsFfi) {
+        self.deviceModel = deviceModel
+        self.platform = platform
+        self.osVersion = osVersion
+        self.appVersion = appVersion
+        self.appBuild = appBuild
+        self.options = options
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ClientInfoFfi: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeClientInfoFfi: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ClientInfoFfi {
+        return
+            try ClientInfoFfi(
+                deviceModel: FfiConverterString.read(from: &buf),
+                platform: FfiConverterString.read(from: &buf),
+                osVersion: FfiConverterString.read(from: &buf),
+                appVersion: FfiConverterString.read(from: &buf),
+                appBuild: FfiConverterString.read(from: &buf),
+                options: FfiConverterTypeClientOptionsFfi.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ClientInfoFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.deviceModel, into: &buf)
+        FfiConverterString.write(value.platform, into: &buf)
+        FfiConverterString.write(value.osVersion, into: &buf)
+        FfiConverterString.write(value.appVersion, into: &buf)
+        FfiConverterString.write(value.appBuild, into: &buf)
+        FfiConverterTypeClientOptionsFfi.write(value.options, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeClientInfoFfi_lift(_ buf: RustBuffer) throws -> ClientInfoFfi {
+    return try FfiConverterTypeClientInfoFfi.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeClientInfoFfi_lower(_ value: ClientInfoFfi) -> RustBuffer {
+    return FfiConverterTypeClientInfoFfi.lower(value)
+}
+
+
+/**
+ * Entire optional descriptive snapshot; missing labels are explicitly empty.
+ */
+public struct ClientOptionsFfi: Equatable, Hashable {
+    public var agent: String
+    public var deviceId: String
+    public var installId: String
+    public var acceptLanguage: String
+    public var timeZone: String
+    public var userAgent: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(agent: String, deviceId: String, installId: String, acceptLanguage: String, timeZone: String, userAgent: String) {
+        self.agent = agent
+        self.deviceId = deviceId
+        self.installId = installId
+        self.acceptLanguage = acceptLanguage
+        self.timeZone = timeZone
+        self.userAgent = userAgent
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ClientOptionsFfi: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeClientOptionsFfi: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ClientOptionsFfi {
+        return
+            try ClientOptionsFfi(
+                agent: FfiConverterString.read(from: &buf),
+                deviceId: FfiConverterString.read(from: &buf),
+                installId: FfiConverterString.read(from: &buf),
+                acceptLanguage: FfiConverterString.read(from: &buf),
+                timeZone: FfiConverterString.read(from: &buf),
+                userAgent: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ClientOptionsFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.agent, into: &buf)
+        FfiConverterString.write(value.deviceId, into: &buf)
+        FfiConverterString.write(value.installId, into: &buf)
+        FfiConverterString.write(value.acceptLanguage, into: &buf)
+        FfiConverterString.write(value.timeZone, into: &buf)
+        FfiConverterString.write(value.userAgent, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeClientOptionsFfi_lift(_ buf: RustBuffer) throws -> ClientOptionsFfi {
+    return try FfiConverterTypeClientOptionsFfi.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeClientOptionsFfi_lower(_ value: ClientOptionsFfi) -> RustBuffer {
+    return FfiConverterTypeClientOptionsFfi.lower(value)
+}
+
+
+/**
+ * Verification flow metadata. Treat the identifier as private flow state.
+ */
+public struct CodeDelivery: Equatable, Hashable {
+    public var verificationId: String
+    public var codeType: Int32
+    public var expiresAtSeconds: Int64?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(verificationId: String, codeType: Int32, expiresAtSeconds: Int64?) {
+        self.verificationId = verificationId
+        self.codeType = codeType
+        self.expiresAtSeconds = expiresAtSeconds
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension CodeDelivery: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCodeDelivery: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CodeDelivery {
+        return
+            try CodeDelivery(
+                verificationId: FfiConverterString.read(from: &buf),
+                codeType: FfiConverterInt32.read(from: &buf),
+                expiresAtSeconds: FfiConverterOptionInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CodeDelivery, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.verificationId, into: &buf)
+        FfiConverterInt32.write(value.codeType, into: &buf)
+        FfiConverterOptionInt64.write(value.expiresAtSeconds, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCodeDelivery_lift(_ buf: RustBuffer) throws -> CodeDelivery {
+    return try FfiConverterTypeCodeDelivery.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCodeDelivery_lower(_ value: CodeDelivery) -> RustBuffer {
+    return FfiConverterTypeCodeDelivery.lower(value)
+}
+
+
+/**
+ * SignIn's account projection plus a persisted staged receipt; no AK/capability.
+ */
+public struct EnrollmentSignInResult {
+    public var userProto: Data?
+    public var isNewUser: Bool
+    public var enrollment: StoredEnrollment
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(userProto: Data?, isNewUser: Bool, enrollment: StoredEnrollment) {
+        self.userProto = userProto
+        self.isNewUser = isNewUser
+        self.enrollment = enrollment
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension EnrollmentSignInResult: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeEnrollmentSignInResult: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> EnrollmentSignInResult {
+        return
+            try EnrollmentSignInResult(
+                userProto: FfiConverterOptionData.read(from: &buf),
+                isNewUser: FfiConverterBool.read(from: &buf),
+                enrollment: FfiConverterTypeStoredEnrollment.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: EnrollmentSignInResult, into buf: inout [UInt8]) {
+        FfiConverterOptionData.write(value.userProto, into: &buf)
+        FfiConverterBool.write(value.isNewUser, into: &buf)
+        FfiConverterTypeStoredEnrollment.write(value.enrollment, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEnrollmentSignInResult_lift(_ buf: RustBuffer) throws -> EnrollmentSignInResult {
+    return try FfiConverterTypeEnrollmentSignInResult.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEnrollmentSignInResult_lower(_ value: EnrollmentSignInResult) -> RustBuffer {
+    return FfiConverterTypeEnrollmentSignInResult.lower(value)
+}
+
+
+/**
+ * Secret-free projection of the exact tuple acknowledged by the server.
+ */
+public struct EnrollmentStatus: Equatable, Hashable {
+    public var operationId: String
+    public var sessionId: String
+    public var handle: Data
+    public var enrollmentEpoch: UInt64
+    public var scope: Int32
+    public var expiresAtSeconds: Int64
+    public var expiresAtNanos: Int32
+    public var state: Int32
+    public var userId: Int64
+    public var accountAuthEpoch: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(operationId: String, sessionId: String, handle: Data, enrollmentEpoch: UInt64, scope: Int32, expiresAtSeconds: Int64, expiresAtNanos: Int32, state: Int32, userId: Int64, accountAuthEpoch: UInt64) {
+        self.operationId = operationId
+        self.sessionId = sessionId
+        self.handle = handle
+        self.enrollmentEpoch = enrollmentEpoch
+        self.scope = scope
+        self.expiresAtSeconds = expiresAtSeconds
+        self.expiresAtNanos = expiresAtNanos
+        self.state = state
+        self.userId = userId
+        self.accountAuthEpoch = accountAuthEpoch
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension EnrollmentStatus: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeEnrollmentStatus: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> EnrollmentStatus {
+        return
+            try EnrollmentStatus(
+                operationId: FfiConverterString.read(from: &buf),
+                sessionId: FfiConverterString.read(from: &buf),
+                handle: FfiConverterData.read(from: &buf),
+                enrollmentEpoch: FfiConverterUInt64.read(from: &buf),
+                scope: FfiConverterInt32.read(from: &buf),
+                expiresAtSeconds: FfiConverterInt64.read(from: &buf),
+                expiresAtNanos: FfiConverterInt32.read(from: &buf),
+                state: FfiConverterInt32.read(from: &buf),
+                userId: FfiConverterInt64.read(from: &buf),
+                accountAuthEpoch: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: EnrollmentStatus, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.operationId, into: &buf)
+        FfiConverterString.write(value.sessionId, into: &buf)
+        FfiConverterData.write(value.handle, into: &buf)
+        FfiConverterUInt64.write(value.enrollmentEpoch, into: &buf)
+        FfiConverterInt32.write(value.scope, into: &buf)
+        FfiConverterInt64.write(value.expiresAtSeconds, into: &buf)
+        FfiConverterInt32.write(value.expiresAtNanos, into: &buf)
+        FfiConverterInt32.write(value.state, into: &buf)
+        FfiConverterInt64.write(value.userId, into: &buf)
+        FfiConverterUInt64.write(value.accountAuthEpoch, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEnrollmentStatus_lift(_ buf: RustBuffer) throws -> EnrollmentStatus {
+    return try FfiConverterTypeEnrollmentStatus.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEnrollmentStatus_lower(_ value: EnrollmentStatus) -> RustBuffer {
+    return FfiConverterTypeEnrollmentStatus.lower(value)
 }
 
 
@@ -3456,6 +5781,167 @@ public func FfiConverterTypeFfiSubscribeResponse_lower(_ value: FfiSubscribeResp
 
 
 /**
+ * Atomic protected-store snapshot. Tokens are nonsecret and must never be reused
+ * after a namespace reset. The active record stays opaque and zeroizing.
+ */
+public struct ProtectedEnrollmentNamespace {
+    /**
+     * Stable namespace incarnation, shared by app/extension callback wrappers.
+     */
+    public var incarnation: String
+    /**
+     * Revision advanced atomically by every operation/candidate/active write.
+     */
+    public var revision: String
+    /**
+     * Durable tombstone blocking restoration and late writes.
+     */
+    public var cleanupPending: Bool
+    /**
+     * Complete active slot captured in the same storage transaction.
+     */
+    public var active: ProtectedEnrollmentRecord?
+    /**
+     * Recoverable pending work exists besides the active slot.
+     */
+    public var hasPending: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Stable namespace incarnation, shared by app/extension callback wrappers.
+         */incarnation: String,
+        /**
+         * Revision advanced atomically by every operation/candidate/active write.
+         */revision: String,
+        /**
+         * Durable tombstone blocking restoration and late writes.
+         */cleanupPending: Bool,
+        /**
+         * Complete active slot captured in the same storage transaction.
+         */active: ProtectedEnrollmentRecord?,
+        /**
+         * Recoverable pending work exists besides the active slot.
+         */hasPending: Bool) {
+        self.incarnation = incarnation
+        self.revision = revision
+        self.cleanupPending = cleanupPending
+        self.active = active
+        self.hasPending = hasPending
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ProtectedEnrollmentNamespace: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProtectedEnrollmentNamespace: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProtectedEnrollmentNamespace {
+        return
+            try ProtectedEnrollmentNamespace(
+                incarnation: FfiConverterString.read(from: &buf),
+                revision: FfiConverterString.read(from: &buf),
+                cleanupPending: FfiConverterBool.read(from: &buf),
+                active: FfiConverterOptionTypeProtectedEnrollmentRecord.read(from: &buf),
+                hasPending: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ProtectedEnrollmentNamespace, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.incarnation, into: &buf)
+        FfiConverterString.write(value.revision, into: &buf)
+        FfiConverterBool.write(value.cleanupPending, into: &buf)
+        FfiConverterOptionTypeProtectedEnrollmentRecord.write(value.active, into: &buf)
+        FfiConverterBool.write(value.hasPending, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtectedEnrollmentNamespace_lift(_ buf: RustBuffer) throws -> ProtectedEnrollmentNamespace {
+    return try FfiConverterTypeProtectedEnrollmentNamespace.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtectedEnrollmentNamespace_lower(_ value: ProtectedEnrollmentNamespace) -> RustBuffer {
+    return FfiConverterTypeProtectedEnrollmentNamespace.lower(value)
+}
+
+
+/**
+ * Provisioned public server identity, independent of the transport address.
+ */
+public struct ServerTrustFfi: Equatable, Hashable {
+    public var serverPublicKey: Data
+    public var serverKeyId: UInt32
+    public var scope: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(serverPublicKey: Data, serverKeyId: UInt32, scope: String) {
+        self.serverPublicKey = serverPublicKey
+        self.serverKeyId = serverKeyId
+        self.scope = scope
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ServerTrustFfi: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeServerTrustFfi: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ServerTrustFfi {
+        return
+            try ServerTrustFfi(
+                serverPublicKey: FfiConverterData.read(from: &buf),
+                serverKeyId: FfiConverterUInt32.read(from: &buf),
+                scope: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ServerTrustFfi, into buf: inout [UInt8]) {
+        FfiConverterData.write(value.serverPublicKey, into: &buf)
+        FfiConverterUInt32.write(value.serverKeyId, into: &buf)
+        FfiConverterString.write(value.scope, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeServerTrustFfi_lift(_ buf: RustBuffer) throws -> ServerTrustFfi {
+    return try FfiConverterTypeServerTrustFfi.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeServerTrustFfi_lower(_ value: ServerTrustFfi) -> RustBuffer {
+    return FfiConverterTypeServerTrustFfi.lower(value)
+}
+
+
+/**
  * One conversation interest for [`TinkleClient::subscribe`] /
  * [`TinkleClient::start`].
  *
@@ -3515,6 +6001,386 @@ public func FfiConverterTypeTargetSub_lift(_ buf: RustBuffer) throws -> TargetSu
 public func FfiConverterTypeTargetSub_lower(_ value: TargetSub) -> RustBuffer {
     return FfiConverterTypeTargetSub.lower(value)
 }
+
+
+/**
+ * Authorization knowledge; Unknown must never be interpreted as retired.
+ */
+
+public enum AccountAuthorization: Equatable, Hashable {
+
+    /**
+     * Current server authorization cannot be established.
+     */
+    case unknown
+    /**
+     * This Returning channel authenticated successfully.
+     */
+    case active
+    /**
+     * This coordinator is irreversibly signed out.
+     */
+    case signedOut
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension AccountAuthorization: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountAuthorization: FfiConverterRustBuffer {
+    typealias SwiftType = AccountAuthorization
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountAuthorization {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .unknown
+
+        case 2: return .active
+
+        case 3: return .signedOut
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: AccountAuthorization, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .unknown:
+            writeInt(&buf, Int32(1))
+
+
+        case .active:
+            writeInt(&buf, Int32(2))
+
+
+        case .signedOut:
+            writeInt(&buf, Int32(3))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountAuthorization_lift(_ buf: RustBuffer) throws -> AccountAuthorization {
+    return try FfiConverterTypeAccountAuthorization.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountAuthorization_lower(_ value: AccountAuthorization) -> RustBuffer {
+    return FfiConverterTypeAccountAuthorization.lower(value)
+}
+
+
+
+/**
+ * Retained local cleanup progress, distinct from remote revocation confirmation.
+ */
+
+public enum AccountCleanup: Equatable, Hashable {
+
+    /**
+     * Local cleanup has not started.
+     */
+    case notStarted
+    /**
+     * Cleanup runs independently of host waiters.
+     */
+    case pending
+    /**
+     * Required local storage and cache work acknowledged completion.
+     */
+    case complete
+    /**
+     * Cleanup needs a retry; the coordinator remains signed out.
+     */
+    case failed
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension AccountCleanup: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountCleanup: FfiConverterRustBuffer {
+    typealias SwiftType = AccountCleanup
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountCleanup {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .notStarted
+
+        case 2: return .pending
+
+        case 3: return .complete
+
+        case 4: return .failed
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: AccountCleanup, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .notStarted:
+            writeInt(&buf, Int32(1))
+
+
+        case .pending:
+            writeInt(&buf, Int32(2))
+
+
+        case .complete:
+            writeInt(&buf, Int32(3))
+
+
+        case .failed:
+            writeInt(&buf, Int32(4))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountCleanup_lift(_ buf: RustBuffer) throws -> AccountCleanup {
+    return try FfiConverterTypeAccountCleanup.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountCleanup_lower(_ value: AccountCleanup) -> RustBuffer {
+    return FfiConverterTypeAccountCleanup.lower(value)
+}
+
+
+
+/**
+ * Last independent enrollment observation; only Retired supplies negative evidence.
+ */
+
+public enum AccountEnrollmentObservation: Equatable, Hashable {
+
+    /**
+     * No observation has completed.
+     */
+    case notObserved
+    /**
+     * No usable permanent-retirement evidence was returned.
+     */
+    case unknown
+    /**
+     * Exact current retirement was accepted; inspect cleanup separately.
+     */
+    case retired
+    /**
+     * A newer installation or protected namespace invalidated the observation.
+     */
+    case superseded
+    /**
+     * The bounded request did not obtain a usable response.
+     */
+    case unavailable
+    /**
+     * Endpoint proof is rejected or unverified pending explicit recovery.
+     */
+    case parked
+    /**
+     * Conditional host persistence is unsupported.
+     */
+    case unsupported
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension AccountEnrollmentObservation: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountEnrollmentObservation: FfiConverterRustBuffer {
+    typealias SwiftType = AccountEnrollmentObservation
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountEnrollmentObservation {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .notObserved
+
+        case 2: return .unknown
+
+        case 3: return .retired
+
+        case 4: return .superseded
+
+        case 5: return .unavailable
+
+        case 6: return .parked
+
+        case 7: return .unsupported
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: AccountEnrollmentObservation, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .notObserved:
+            writeInt(&buf, Int32(1))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(2))
+
+
+        case .retired:
+            writeInt(&buf, Int32(3))
+
+
+        case .superseded:
+            writeInt(&buf, Int32(4))
+
+
+        case .unavailable:
+            writeInt(&buf, Int32(5))
+
+
+        case .parked:
+            writeInt(&buf, Int32(6))
+
+
+        case .unsupported:
+            writeInt(&buf, Int32(7))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountEnrollmentObservation_lift(_ buf: RustBuffer) throws -> AccountEnrollmentObservation {
+    return try FfiConverterTypeAccountEnrollmentObservation.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountEnrollmentObservation_lower(_ value: AccountEnrollmentObservation) -> RustBuffer {
+    return FfiConverterTypeAccountEnrollmentObservation.lower(value)
+}
+
+
+
+/**
+ * Foreground transport availability, independent of account retirement.
+ */
+
+public enum AccountNetwork: Equatable, Hashable {
+
+    /**
+     * A live encrypted connection is available.
+     */
+    case available
+    /**
+     * No live encrypted connection is available.
+     */
+    case unavailable
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension AccountNetwork: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountNetwork: FfiConverterRustBuffer {
+    typealias SwiftType = AccountNetwork
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountNetwork {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .available
+
+        case 2: return .unavailable
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: AccountNetwork, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .available:
+            writeInt(&buf, Int32(1))
+
+
+        case .unavailable:
+            writeInt(&buf, Int32(2))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountNetwork_lift(_ buf: RustBuffer) throws -> AccountNetwork {
+    return try FfiConverterTypeAccountNetwork.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountNetwork_lower(_ value: AccountNetwork) -> RustBuffer {
+    return FfiConverterTypeAccountNetwork.lower(value)
+}
+
 
 
 /**
@@ -4085,6 +6951,106 @@ public func FfiConverterTypeFfiSyncEvent_lower(_ value: FfiSyncEvent) -> RustBuf
 }
 
 
+
+/**
+ * Exact atomic transaction requested of platform protected storage.
+ */
+
+public enum SecureEnrollmentWrite: Equatable, Hashable {
+
+    case operation
+    case candidate
+    case active
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SecureEnrollmentWrite: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSecureEnrollmentWrite: FfiConverterRustBuffer {
+    typealias SwiftType = SecureEnrollmentWrite
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SecureEnrollmentWrite {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .operation
+
+        case 2: return .candidate
+
+        case 3: return .active
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SecureEnrollmentWrite, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .operation:
+            writeInt(&buf, Int32(1))
+
+
+        case .candidate:
+            writeInt(&buf, Int32(2))
+
+
+        case .active:
+            writeInt(&buf, Int32(3))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSecureEnrollmentWrite_lift(_ buf: RustBuffer) throws -> SecureEnrollmentWrite {
+    return try FfiConverterTypeSecureEnrollmentWrite.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSecureEnrollmentWrite_lower(_ value: SecureEnrollmentWrite) -> RustBuffer {
+    return FfiConverterTypeSecureEnrollmentWrite.lower(value)
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionUInt16: FfiConverterRustBuffer {
+    typealias SwiftType = UInt16?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt16.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt16.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
@@ -4184,6 +7150,54 @@ fileprivate struct FfiConverterOptionData: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeProtectedEnrollmentRecord: FfiConverterRustBuffer {
+    typealias SwiftType = ProtectedEnrollmentRecord?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeProtectedEnrollmentRecord.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeProtectedEnrollmentRecord.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeProtectedEnrollmentNamespace: FfiConverterRustBuffer {
+    typealias SwiftType = ProtectedEnrollmentNamespace?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeProtectedEnrollmentNamespace.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeProtectedEnrollmentNamespace.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeFfiReconcileStatus: FfiConverterRustBuffer {
     typealias SwiftType = FfiReconcileStatus?
 
@@ -4274,6 +7288,31 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeAccountSession: FfiConverterRustBuffer {
+    typealias SwiftType = [AccountSession]
+
+    public static func write(_ value: [AccountSession], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeAccountSession.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [AccountSession] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [AccountSession]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeAccountSession.read(from: &buf))
         }
         return seq
     }
@@ -4581,7 +7620,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_func_tinkle_ffi_init() != 34048) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_connect() != 57683) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_get_sessions() != 52916) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_revoke_other_sessions() != 6069) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_revoke_session() != 47284) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_session_status() != 59367) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_connect() != 42477) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_abort_upload() != 34739) {
@@ -4620,6 +7671,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_is_connected() != 22480) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_is_signed_out() != 36053) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_is_suspended() != 47511) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4639,6 +7693,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect() != 32861) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_replace_trust_source() != 50093) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_resume() != 27994) {
@@ -4674,10 +7731,37 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_tracked_targets() != 47873) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_activate_enrollment() != 43136) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_bind_secure_enrollment_store() != 7806) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_load_enrollment_operation() != 4266) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_prepare_enrollment() != 34565) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_restore_active_enrollment() != 34764) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_resume_enrollment() != 16014) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_rotate_enrollment() != 55365) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_send_code() != 30274) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_sign_in() != 24766) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_handle_push_wake() != 20979) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_logout() != 58830) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_logout() != 22012) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_open_push_notification() != 18901) {
@@ -4687,6 +7771,45 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_unregister_push() != 33025) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_enrollmentoperation_operation_id() != 1256) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_begin_restore() != 28725) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_end_restore() != 7264) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_namespace_snapshot() != 16665) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_commit_current() != 53640) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_begin_clear() != 48419) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_finish_clear() != 58217) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_clear() != 25367) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_commit() != 2601) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_load_operation() != 18449) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_load_active() != 64614) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_protectedenrollmentrecord_copy_for_secure_storage() != 33978) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_storedenrollment_status() != 16456) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_clear_principal() != 7934) {
@@ -4725,10 +7848,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_fficursorstore_clear_principal() != 37263) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new() != 37854) {
+    if (uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new() != 19386) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite() != 8694) {
+    if (uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite() != 4956) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_constructor_trustsourceffi_bootstrap() != 27011) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_constructor_protectedenrollmentrecord_from_secure_storage() != 51245) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open() != 43150) {
@@ -4745,6 +7874,7 @@ private let initializationResult: InitializationResult = {
     }
 
     uniffiCallbackInitFfiCursorStore()
+    uniffiCallbackInitFfiSecureEnrollmentStore()
     return InitializationResult.ok
 }()
 
