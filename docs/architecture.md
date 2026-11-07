@@ -75,8 +75,10 @@ durable namespace revisions fence stale responses, pending activation and
 cross-Client writes. Stop/suspend cancel and drain host-owned observations as
 well as the periodic task; foreground Returning admission stays parked until
 status-first work settles. Exact retirement invokes retained local-only cleanup.
-Current source uses the unpublished disposition contract through isolated
-candidate checks until a published artifact and reviewed consumer repin exist.
+The disposition contract is published in BSR prost artifact
+`0.5.0-20261107080548-dc41c2199c76.2` following schema #57. Release qualification
+uses the published Cargo pin and ordinary `--locked` workspace checks; required
+CI needs neither Buf nor schema-candidate generation.
 
 ## Application data
 

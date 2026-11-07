@@ -454,9 +454,7 @@ fn validate_status_structure(status: &DeviceEnrollmentStatus) -> Result<(), Tink
         || status.handle.len() != 8
         || status.handle.as_ref() == [0; 8]
         || status.enrollment_epoch == 0
-        || status.enrollment_epoch > i64::MAX as u64
         || status.account_auth_epoch == 0
-        || status.account_auth_epoch > i64::MAX as u64
         || status.user_id <= 0
         || status.scope != DeviceKeyScope::Account as i32
         || ![

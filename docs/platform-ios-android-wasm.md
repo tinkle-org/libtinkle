@@ -32,6 +32,20 @@ bounded authoritative fetch/reconciliation through the existing durable job and
 scope-fencing pipeline. Application cache and cursors survive process death;
 channel state and in-flight requests do not.
 
+Check and regenerate bindings from the original workspace against the published
+BSR prost artifact `0.5.0-20261107080548-dc41c2199c76.2`, including schema #57's
+enrollment-disposition contract:
+
+```sh
+bash scripts/generate-bindings.sh --check
+bash scripts/generate-bindings.sh --write
+```
+
+`--check` verifies parity; `--write` updates checked-in Swift/Kotlin bindings.
+Required CI uses the published Cargo pin without Buf or schema-candidate
+generation. Optional future-schema development is described in
+[device enrollment](device-enrollment.md#published-schema-checks).
+
 ## Native consumer fixtures
 
 Run `python3 scripts/with-native-fixture.py <consumer command...>` from this
@@ -47,6 +61,10 @@ control. All application channel proof, encryption and RPC framing use the
 published SDK. Rust integration tests exercise transport/trust boundaries and
 the full application cache/history contracts.
 
+```sh
+python3 scripts/with-native-fixture.py cargo test --locked -p libtinkle --test mobile_fixture -- --ignored
+```
+
 ## Browser
 
 Browser networking is unsupported. `libtinkle-web` is a portable schema-check
@@ -56,8 +74,5 @@ credentials. `validate_connectivity` and `tinkle-schema` validation remain usefu
 without a connection.
 
 ```sh
-./scripts/test-schema-candidate.sh --output /absolute/temp/candidate
-./scripts/test-schema-candidate.sh --output /absolute/temp/candidate -- \
-  cargo check --locked -p tinkle-schema -p libtinkle-web --target wasm32-unknown-unknown
-./scripts/test-schema-candidate.sh --output /absolute/temp/candidate --bindings
+cargo check --locked -p libtinkle-web -p tinkle-schema --target wasm32-unknown-unknown
 ```

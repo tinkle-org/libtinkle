@@ -98,7 +98,7 @@ Rust's default snapshot returns None for legacy hosts. Foreign implementations
 must explicitly return nil/null for that mode and reject the conditional
 callbacks. Such hosts keep the legacy acknowledged-clear behavior but report
 `session_status().restart_safe_store == false`: they cannot claim restart-safe
-cleanup or enable the planned retirement observer. There is no default durable
+cleanup or enable the retirement observer. There is no default durable
 host implementation.
 
 `load_operation` and `load_active` return the complete opaque record. Records
@@ -225,8 +225,9 @@ enrollment can progress; there is no implicit persistence acknowledgement.
 
 ## Permanent retirement observation
 
-The observer uses the exact unpublished `AuthService/GetEnrollmentDisposition`
-API through the isolated schema candidate. The request contains one reference:
+The observer uses the published `AuthService/GetEnrollmentDisposition` API from
+schema #57, available in BSR prost artifact
+`0.5.0-20261107080548-dc41c2199c76.2`. The request contains one reference:
 session UUID, handle, enrollment epoch, scope and original account-auth epoch.
 The response must echo all fields and contain RETIRED. Correlation belongs to
 the channel/RPC; there is no application query identifier. An authenticated
@@ -281,36 +282,30 @@ responses during rotation and a separate-process restart reading a fsynced
 test-only private-file namespace. That fixture proves CAS/tombstone persistence,
 not platform Keychain/Keystore security or production authority acceptance.
 
-## Unpublished schema candidate
+## Published schema checks
 
-Run from libtinkle, with Buf and the pinned Rust toolchain installed:
+Run from the original libtinkle workspace with the pinned Rust toolchain and
+published Cargo dependency. Required CI uses ordinary `--locked` checks without
+Buf or schema-candidate generation:
 
 ```sh
-./scripts/test-schema-candidate.sh --output /absolute/temp/candidate
-./scripts/test-schema-candidate.sh --output /absolute/temp/candidate -- \
-  cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings
-./scripts/test-schema-candidate.sh --output /absolute/temp/candidate --bindings
+cargo test --locked --workspace --all-features --verbose
+cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings
+bash scripts/generate-bindings.sh --check
 ```
 
-The script uses remote `community/neoeinstein-prost:v0.5.0`, revision 2, with
-`bytes=.`; exports a descriptor and generates a temporary crate with the current
-BSR package name. It copies the Rust workspace to the output directory and uses
-`[patch.buf]` only there. Cargo metadata must prove the patch was selected. The
-root manifest pins and lockfile are not rewritten by this script. The matching
-base version is only a local replacement key, not an unpublished release
-coordinate. `candidate.json` records descriptor SHA-256 and exact generator.
+Regenerate checked-in Swift/Kotlin bindings with
+`bash scripts/generate-bindings.sh --write`, then rerun `--check`.
 
-The published enrollment/session/initialization baseline passed before this
-continuation. Current source requires the new disposition API and is validated
-with the candidate until publication; it does not compile unpatched against the
-retained published pin. An isolated pass does not authorize changing that pin.
-No generated protobuf source or vendored `.proto` enters production directories.
+`scripts/test-schema-candidate.sh` remains optional for future-schema development,
+not release qualification. See [public pinning](../PROTO_PINNING.md) for that
+workflow. No generated protobuf source or vendored `.proto` enters production
+directories.
 
-To exercise the shared mobile fixture in the candidate workspace:
+To exercise the shared mobile fixture in the original workspace:
 
 ```sh
-./scripts/test-schema-candidate.sh --output /absolute/temp/candidate -- \
-  python3 scripts/with-native-fixture.py cargo test --locked -p libtinkle \
+python3 scripts/with-native-fixture.py cargo test --locked -p libtinkle \
   --test mobile_fixture -- --ignored
 ```
 
@@ -325,8 +320,7 @@ Set `TINKLE_E2E_HOST`, `TINKLE_E2E_PORT`, `TINKLE_E2E_SERVER_PIN` (64 hex),
 `TINKLE_E2E_PHONE` / `TINKLE_E2E_LANG_CODE`. Then run:
 
 ```sh
-./scripts/test-schema-candidate.sh --output /absolute/temp/candidate -- \
-  cargo test --locked -p libtinkle --test client_api_external -- --ignored
+cargo test --locked -p libtinkle --test client_api_external -- --ignored
 ```
 
 This opt-in lane checks pinned Bootstrap, InitConnect-wrapped SendCode, and a

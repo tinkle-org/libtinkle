@@ -89,27 +89,18 @@ class SdkWorkflowTests(unittest.TestCase):
                 prefixes.append(prefix)
         self.assertNotEqual(*prefixes)  # Caller and callee must not cancel each other.
 
-    def test_compiling_checks_use_candidate_workspace_including_release_gate(self):
-        header = self.workflows["ci"].split("\njobs:\n", 1)[0]
-        self.assertIn("SCHEMA_CANDIDATE_REF: ${{ vars.SCHEMA_CANDIDATE_REF }}", header)
-        for name in ("clippy", "test", "wasm", "msrv"):
-            with self.subTest(job=name):
-                job_steps = steps(self.ci[name])
-                installs = [step for step in job_steps if "npm install --global @bufbuild/buf@1.75.0" in step]
-                prepares = [step for step in job_steps if 'sdk-ci.py schema-candidate --output "$RUNNER_TEMP/schema-candidate"' in step]
-                self.assertEqual(len(installs), 1)
-                self.assertEqual(len(prepares), 1)
-                self.assertIn('echo "CARGO_TARGET_DIR=$RUNNER_TEMP/schema-candidate/target" >> "$GITHUB_ENV"', prepares[0])
-                self.assertLess(job_steps.index(installs[0]), job_steps.index(prepares[0]))
-                for step in job_steps:
-                    if any(command in step for command in ("run: cargo ", "with-native-fixture.py",
-                                                           "generate-bindings.sh", "import json, re, subprocess")):
-                        self.assertLess(job_steps.index(prepares[0]), job_steps.index(step))
-                        self.assertEqual(values(step, "working-directory", 8),
-                                         ["${{ runner.temp }}/schema-candidate/workspace"])
-                python_tests = [step for step in job_steps if "unittest discover" in step]
-                for step in python_tests:
-                    self.assertEqual(values(step, "working-directory", 8), [])
+    def test_required_checks_and_native_builds_use_the_published_dependency_graph(self):
+        for name in ("ci", "native-sdk"):
+            with self.subTest(workflow=name):
+                content = self.workflows[name]
+                self.assertNotIn("SCHEMA_CANDIDATE_REF", content)
+                self.assertNotIn("schema-candidate", content)
+                self.assertNotIn("[patch.", content)
+                self.assertNotIn("@bufbuild/buf", content)
+                # Build from the pinned checkout, not a patched workspace copy.
+                self.assertEqual(values(content, "working-directory", 8), [])
+        self.assertIn("bash scripts/build-ios.sh", self.native["ios"])
+        self.assertIn("bash scripts/build-android.sh", self.native["android"])
         msrv = self.ci["msrv"]
         self.assertIn("['cargo', 'fetch', '--locked']", msrv)
         self.assertIn("['rustup', 'toolchain', 'install', version, '--profile', 'minimal']", msrv)

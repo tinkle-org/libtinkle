@@ -136,6 +136,8 @@ struct State {
     active: Option<DeviceEnrollment>,
     additional_active: Vec<DeviceEnrollment>,
     sign_in_account: Option<i64>,
+    /// Synthetic delivery epochs exercise the full unsigned public contract.
+    sign_in_epochs: Option<(u64, u64)>,
     events: Arc<Mutex<Vec<&'static str>>>,
     initializations: Vec<(Mode, String, ClientInfo)>,
     lost_sign_in: bool,
@@ -294,9 +296,9 @@ fn application(state: &mut State, mode: Mode, method: &str, bytes: &[u8]) -> Han
                             value.session_id = "78e5c289-656b-4428-a091-2dddf6828465".into()
                         }
                         "handle" => value.handle = vec![99; 8].into(),
-                        "epoch" => value.enrollment_epoch += 1,
+                        "epoch" => value.enrollment_epoch ^= 2,
                         "scope" => value.scope = 99,
-                        "account" => value.account_auth_epoch += 1,
+                        "account" => value.account_auth_epoch ^= 2,
                         _ => unreachable!(),
                     }
                 }
@@ -379,6 +381,10 @@ fn application(state: &mut State, mode: Mode, method: &str, bytes: &[u8]) -> Han
             assert!(state.events.lock().unwrap().contains(&"operation-durable"));
             state.events.lock().unwrap().push("sign-in");
             let mut enrollment = staged(req.operation_id.clone(), 1);
+            if let Some((enrollment_epoch, account_auth_epoch)) = state.sign_in_epochs {
+                enrollment.enrollment_epoch = enrollment_epoch;
+                enrollment.account_auth_epoch = account_auth_epoch;
+            }
             if let Some(user_id) = state.sign_in_account {
                 enrollment.user_id = user_id;
                 enrollment.session_id = "78e5c289-656b-4428-a091-2dddf6828465".into();
@@ -875,6 +881,153 @@ async fn enrolled_fenced(fixture: &Fixture) -> (Client, Arc<FencedStore>) {
         .await
         .unwrap();
     (client, store)
+}
+
+/// Delivery, protected-record decoding and status-first restore preserve both unsigned epochs.
+#[tokio::test]
+async fn full_range_epochs_survive_delivery_persistence_and_reference_query() {
+    let boundaries = [1, i64::MAX as u64, i64::MAX as u64 + 1, u64::MAX];
+    for enrollment_epoch in boundaries {
+        for account_auth_epoch in boundaries {
+            let fixture = Fixture::new().await;
+            fixture.state.lock().unwrap().sign_in_epochs =
+                Some((enrollment_epoch, account_auth_epoch));
+            let client = fixture.client();
+            let store = FencedStore::new(fixture.store.clone());
+            let operation = client.prepare_enrollment(store.clone()).await.unwrap();
+            let delivered = client.auth().sign_in(details(), &operation).await.unwrap();
+            let staged = delivered.enrollment.status().clone();
+            assert_eq!(staged.enrollment_epoch, enrollment_epoch);
+            assert_eq!(staged.account_auth_epoch, account_auth_epoch);
+            let operation = client
+                .load_enrollment_operation(store.clone(), operation.operation_id())
+                .await
+                .unwrap();
+            let resumed = client.auth().resume_enrollment(&operation).await.unwrap();
+            assert_eq!(resumed.status(), &staged);
+            let active = client.auth().activate_enrollment(&resumed).await.unwrap();
+            let mut expected = staged;
+            expected.state = DeviceEnrollmentState::Active as i32;
+            assert_eq!(active, expected);
+            client.stop().await;
+
+            let before = store.namespace_snapshot().await.unwrap().unwrap();
+            let restored = fixture.client();
+            assert_eq!(
+                restored
+                    .restore_active_enrollment(store.clone())
+                    .await
+                    .unwrap(),
+                expected
+            );
+            assert_eq!(
+                fixture.state.lock().unwrap().queries,
+                [DeviceEnrollmentReference {
+                    session_id: expected.session_id,
+                    handle: expected.handle,
+                    enrollment_epoch,
+                    scope: expected.scope,
+                    account_auth_epoch,
+                }]
+            );
+            assert_eq!(
+                restored.session_status().await.enrollment_observation,
+                libtinkle::EnrollmentObservation::Unknown
+            );
+            restored.account().get_sessions().await.unwrap();
+            let after = store.namespace_snapshot().await.unwrap().unwrap();
+            assert_eq!(after.incarnation, before.incarnation);
+            assert_eq!(after.revision, before.revision);
+            assert!(!after.cleanup_pending);
+            assert_eq!(
+                after.active.unwrap().expose_secret(),
+                before.active.unwrap().expose_secret()
+            );
+            assert_eq!(fixture.store.clears.load(Ordering::SeqCst), 0);
+            restored.stop().await;
+        }
+    }
+}
+
+/// Zero remains invalid independently and jointly before candidate persistence or activation.
+#[tokio::test]
+async fn full_range_epochs_still_reject_zero_delivery() {
+    for epochs in [(0, 1), (1, 0), (0, 0), (0, u64::MAX), (u64::MAX, 0)] {
+        let fixture = Fixture::new().await;
+        fixture.state.lock().unwrap().sign_in_epochs = Some(epochs);
+        let client = fixture.client();
+        let operation = client
+            .prepare_enrollment(fixture.store.clone())
+            .await
+            .unwrap();
+        assert!(matches!(
+            client.auth().sign_in(details(), &operation).await,
+            Err(libtinkle::TinkleError::Codec(_))
+        ));
+        assert!(!fixture
+            .store
+            .events
+            .lock()
+            .unwrap()
+            .contains(&"candidate-durable"));
+        assert!(fixture.store.load_active().await.unwrap().is_none());
+        let state = fixture.state.lock().unwrap();
+        assert_eq!(state.activations, 0);
+        assert_eq!(state.returning_attempts, 0);
+    }
+}
+
+/// Upper-half references cannot turn unknown, mismatched or future replies into cleanup.
+#[tokio::test]
+async fn full_range_epochs_unknown_mismatch_and_future_never_erase() {
+    for high in [i64::MAX as u64 + 1, u64::MAX] {
+        for epochs in [(high, 1), (1, high), (high, high)] {
+            let fixture = Fixture::new().await;
+            fixture.state.lock().unwrap().sign_in_epochs = Some(epochs);
+            let (old, store) = enrolled_fenced(&fixture).await;
+            old.stop().await;
+            let expected = retire_current(&fixture);
+            let before = store.namespace_snapshot().await.unwrap().unwrap();
+            for reply in [
+                ProbeReply::Unknown,
+                ProbeReply::Mismatch("epoch"),
+                ProbeReply::Mismatch("account"),
+                ProbeReply::Future,
+            ] {
+                {
+                    let mut state = fixture.state.lock().unwrap();
+                    state.queries.clear();
+                    state.probe_reply = reply;
+                }
+                let restored = fixture.client();
+                let status = restored
+                    .restore_active_enrollment(store.clone())
+                    .await
+                    .unwrap();
+                assert_eq!((status.enrollment_epoch, status.account_auth_epoch), epochs);
+                assert_eq!(
+                    fixture.state.lock().unwrap().queries.as_slice(),
+                    std::slice::from_ref(&expected)
+                );
+                assert_eq!(
+                    restored.session_status().await.enrollment_observation,
+                    libtinkle::EnrollmentObservation::Unknown
+                );
+                assert!(!restored.is_signed_out());
+                let after = store.namespace_snapshot().await.unwrap().unwrap();
+                assert_eq!(after.incarnation, before.incarnation);
+                assert_eq!(after.revision, before.revision);
+                assert!(!after.cleanup_pending);
+                assert_eq!(
+                    after.active.unwrap().expose_secret(),
+                    before.active.as_ref().unwrap().expose_secret()
+                );
+                assert_eq!(fixture.store.clears.load(Ordering::SeqCst), 0);
+                assert_eq!(fixture.state.lock().unwrap().logouts, 0);
+                restored.stop().await;
+            }
+        }
+    }
 }
 
 /// Status-first restore retires only an exact committed negative, without Returning or Logout.

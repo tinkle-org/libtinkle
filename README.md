@@ -69,13 +69,13 @@ SignIn/rotation; persist the delivered candidate through the acknowledged secure
 store; activate explicitly over pinned Bootstrap; then establish fresh Returning.
 The first public unary call on every connection is InitConnect-wrapped. See
 [device enrollment](docs/device-enrollment.md) for the exact staged API, storage
-contract, recovery path and runnable candidate checks.
+contract, recovery path and runnable checks.
 
-The enrollment/session/initialization baseline passed normal unpatched checks
-with the published BSR artifact; see [public pins](PROTO_PINNING.md). Current
-source also implements the unpublished enrollment-disposition contract and
-requires the isolated candidate workflow until publication and consumer repinning.
-The production BSR pin remains unchanged.
+Schema #57 merged at `2b15bb6db2e282f8f962742a800cab1f15ab54c5` and includes the
+enrollment-disposition contract in the published BSR prost artifact
+`0.5.0-20261107080548-dc41c2199c76.2`. Release qualification uses the published
+Cargo pin and ordinary `--locked` checks in this workspace, without Buf or a
+schema-candidate dependency in required CI. See [public pins](PROTO_PINNING.md).
 
 `client.account().get_sessions()`, `revoke_session(session_id)` and
 `revoke_other_sessions()` expose device-session management. UniFFI exports the
@@ -125,8 +125,9 @@ opaque `EnrollmentOperation` and `StoredEnrollment` objects guard the staged
 flow. Activation or `restoreActiveEnrollment` installs Returning only from
 validated ACTIVE records. Hosts must erase their foreign secret byte copies.
 
-Bindings are regenerated against the schema candidate with
-`./scripts/test-schema-candidate.sh --bindings`. See [platform integration](docs/platform-ios-android-wasm.md).
+Check binding parity with `bash scripts/generate-bindings.sh --check`; regenerate
+with `bash scripts/generate-bindings.sh --write` against the published schema pin.
+See [platform integration](docs/platform-ios-android-wasm.md).
 
 ## Logout
 
@@ -149,13 +150,15 @@ checks remain available in `tinkle-schema`.
 ## Checks
 
 ```sh
-./scripts/test-schema-candidate.sh --output /absolute/temp/candidate
-./scripts/test-schema-candidate.sh --output /absolute/temp/candidate -- \
-  cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings
+cargo test --locked --workspace --all-features --verbose
+cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings
 cargo fmt --all -- --check
-./scripts/test-schema-candidate.sh --output /absolute/temp/candidate -- \
-  cargo check --locked -p libtinkle-web -p tinkle-schema --target wasm32-unknown-unknown
+bash scripts/generate-bindings.sh --check
+cargo check --locked -p libtinkle-web -p tinkle-schema --target wasm32-unknown-unknown
 ```
+
+`scripts/test-schema-candidate.sh` is optional tooling for future-schema
+development, not release qualification. See [public pinning](PROTO_PINNING.md).
 
 Rust integration fixtures use the published SDK for encrypted native TCP,
 including trust failures and configurable primary/fallback ports. Swift/Kotlin
@@ -163,6 +166,10 @@ consumer tests use the host-only `native-fixture` example, also built on that
 SDK. `scripts/with-native-fixture.py <consumer command...>` starts it on the host
 and cleans it up. Its separate loopback JSON control socket allocates fixtures
 and reads application request logs; it is test harness code only.
+
+```sh
+python3 scripts/with-native-fixture.py cargo test --locked -p libtinkle --test mobile_fixture -- --ignored
+```
 
 The native examples `send-message` and `subscribe` require `TINKLE_HOST`,
 `TINKLE_SERVER_PIN` (64 hex characters), `TINKLE_SERVER_KEY_ID`, `TINKLE_SCOPE`,
