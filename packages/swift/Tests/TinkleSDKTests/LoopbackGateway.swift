@@ -53,12 +53,17 @@ final class LoopbackGateway: @unchecked Sendable {
     }
 
     private static func control(_ request: [String: Any]) throws -> [String: Any] {
+        let op = request["op"] as? String ?? "unknown"
         let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw FixtureError("control socket failed") }
+        guard fd >= 0 else { throw FixtureError("control \(op) socket failed errno=\(errno) bytes=0") }
         defer { Darwin.close(fd) }
         var timeout = timeval(tv_sec: 5, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        guard setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)) == 0 else {
+            throw FixtureError("control \(op) SO_RCVTIMEO failed errno=\(errno) bytes=0")
+        }
+        guard setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)) == 0 else {
+            throw FixtureError("control \(op) SO_SNDTIMEO failed errno=\(errno) bytes=0")
+        }
         var address = sockaddr_in()
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         address.sin_family = sa_family_t(AF_INET)
@@ -69,25 +74,58 @@ final class LoopbackGateway: @unchecked Sendable {
                 Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
-        guard connected == 0 else { throw FixtureError("start cargo run --locked -p libtinkle --example native-fixture before mobile tests") }
+        guard connected == 0 else { throw FixtureError("control \(op) connect failed errno=\(errno) bytes=0; start cargo run --locked -p libtinkle --example native-fixture before mobile tests") }
         let bytes = try JSONSerialization.data(withJSONObject: request) + Data([10])
+        try sendAll(bytes, fd: fd, op: op)
+        let response = try readLine(fd: fd, op: op)
+        return try JSONSerialization.jsonObject(with: response) as! [String: Any]
+    }
+
+    static func sendAll(_ bytes: Data, fd: Int32, op: String,
+        send: (Int32, UnsafeRawPointer?, Int, Int32) -> Int = Darwin.send) throws {
         var offset = 0
         while offset < bytes.count {
-            let sent = bytes.withUnsafeBytes { Darwin.send(fd, $0.baseAddress!.advanced(by: offset), bytes.count - offset, 0) }
-            guard sent > 0 else { throw FixtureError("control send failed") }
+            let sent = bytes.withUnsafeBytes { send(fd, $0.baseAddress!.advanced(by: offset), bytes.count - offset, 0) }
+            if sent < 0 {
+                let code = errno
+                if code == EINTR { continue }
+                throw ioError(op: op, action: "send", code: code, bytes: offset)
+            }
+            guard sent > 0 else { throw FixtureError("control \(op) send made no progress bytes=\(offset)") }
             offset += sent
         }
+    }
+
+    static func readLine(fd: Int32, op: String,
+        recv: (Int32, UnsafeMutableRawPointer?, Int, Int32) -> Int = Darwin.recv) throws -> Data {
         var response = Data()
-        while response.last != 10 {
-            var byte: UInt8 = 0
-            guard Darwin.recv(fd, &byte, 1, 0) == 1, response.count < 65536 else { throw FixtureError("control response failed") }
-            response.append(byte)
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while response.count < 65536 {
+            let capacity = min(buffer.count, 65536 - response.count)
+            let received = buffer.withUnsafeMutableBytes { recv(fd, $0.baseAddress, capacity, 0) }
+            if received < 0 {
+                let code = errno
+                if code == EINTR { continue }
+                throw ioError(op: op, action: "recv", code: code, bytes: response.count)
+            }
+            guard received > 0 else { throw FixtureError("control \(op) recv EOF before newline bytes=\(response.count)") }
+            if let newline = buffer[..<received].firstIndex(of: 10) {
+                response.append(contentsOf: buffer[...newline])
+                return response
+            }
+            response.append(contentsOf: buffer[..<received])
         }
-        return try JSONSerialization.jsonObject(with: response) as! [String: Any]
+        throw FixtureError("control \(op) recv oversized response limit=65536 bytes=\(response.count)")
+    }
+
+    private static func ioError(op: String, action: String, code: Int32, bytes: Int) -> FixtureError {
+        let kind = code == EAGAIN || code == EWOULDBLOCK || code == ETIMEDOUT ? "timeout" : "system error"
+        return FixtureError("control \(op) \(action) \(kind) errno=\(code) bytes=\(bytes)")
     }
 }
 
-private struct FixtureError: Error {
+private struct FixtureError: Error, CustomStringConvertible {
     let message: String
     init(_ message: String) { self.message = message }
+    var description: String { message }
 }

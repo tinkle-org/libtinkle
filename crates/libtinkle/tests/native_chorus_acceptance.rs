@@ -451,13 +451,16 @@ async fn reject_old_returning(store: Arc<RetainedReturningStore>) {
     tokio::time::sleep(Duration::from_millis(600)).await;
     let before = closures().await;
     let rejected = client("native-retained-negative");
-    let error = rejected.restore_active_enrollment(store).await.unwrap_err();
+    // Installing a local ACTIVE record does not prove server admission.
+    let active = rejected.restore_active_enrollment(store).await.unwrap();
+    assert_eq!(active.state, DeviceEnrollmentState::Active as i32);
     assert!(
-        matches!(
-            error,
-            TinkleError::TrustRejected | TinkleError::EstablishmentFailed
-        ),
+        !rejected.is_connected().await,
         "old Returning must fail before ready"
+    );
+    assert_eq!(
+        rejected.session_status().await.authorization,
+        SessionAuthorization::Unknown
     );
     rejected.close().await;
     let after = closures().await;

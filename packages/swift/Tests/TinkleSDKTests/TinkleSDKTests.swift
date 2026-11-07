@@ -1,8 +1,119 @@
+import Darwin
 import TinkleSDK
 import XCTest
 
 /// Tests the generated Swift API against the real Rust binary and a local gateway.
 final class TinkleSDKTests: XCTestCase {
+    func testControlReadRetriesInterruptionsAcrossJSONChunks() throws {
+        let chunks = [Data("{\"after_accept_seq\":1099".utf8), Data("511627776}\n".utf8)]
+        var calls = 0
+        let response = try LoopbackGateway.readLine(fd: -1, op: "requests") { _, buffer, capacity, _ in
+            defer { calls += 1 }
+            if calls == 0 || calls == 2 {
+                errno = EINTR
+                return -1
+            }
+            let chunk = chunks[calls == 1 ? 0 : 1]
+            XCTAssertLessThanOrEqual(chunk.count, capacity)
+            chunk.withUnsafeBytes { buffer!.copyMemory(from: $0.baseAddress!, byteCount: chunk.count) }
+            return chunk.count
+        }
+        let json = try JSONSerialization.jsonObject(with: response) as! [String: NSNumber]
+        XCTAssertEqual(json["after_accept_seq"]?.int64Value, Int64(1) << 40)
+        XCTAssertEqual(response, chunks[0] + chunks[1])
+        XCTAssertEqual(calls, 4)
+    }
+
+    func testControlSendRetriesInterruptionsWithoutDuplicatingPartialWrites() throws {
+        let bytes = Data("{\"op\":\"requests\"}\n".utf8)
+        let results = [-1, 3, -1, 2, bytes.count - 5]
+        var calls = 0
+        var written = Data()
+        try LoopbackGateway.sendAll(bytes, fd: -1, op: "requests") { _, buffer, count, _ in
+            defer { calls += 1 }
+            XCTAssertEqual(Data(bytes: buffer!, count: count), Data(bytes.dropFirst(written.count)))
+            let result = results[calls]
+            if result < 0 {
+                errno = EINTR
+            } else {
+                written.append(contentsOf: UnsafeRawBufferPointer(start: buffer!, count: result))
+            }
+            return result
+        }
+        XCTAssertEqual(written, bytes)
+        XCTAssertEqual(calls, results.count)
+    }
+
+    func testControlReadDiagnosesEOFTimeoutAndSystemErrorAfterPartialResponse() {
+        for (result, code, expected) in [
+            (0, Int32(0), "EOF before newline"),
+            (-1, EAGAIN, "timeout"),
+            (-1, ETIMEDOUT, "timeout"),
+            (-1, ECONNRESET, "system error"),
+        ] {
+            var calls = 0
+            XCTAssertThrowsError(try LoopbackGateway.readLine(fd: -1, op: "requests") { _, buffer, _, _ in
+                defer { calls += 1 }
+                if calls == 0 {
+                    Data("abc".utf8).withUnsafeBytes { buffer!.copyMemory(from: $0.baseAddress!, byteCount: 3) }
+                    return 3
+                }
+                errno = code
+                return result
+            }) { error in
+                let message = String(describing: error)
+                XCTAssertTrue(message.contains("control requests recv \(expected)"), message)
+                XCTAssertTrue(message.contains("bytes=3"), message)
+                if result < 0 { XCTAssertTrue(message.contains("errno=\(code)"), message) }
+            }
+            XCTAssertEqual(calls, 2)
+        }
+    }
+
+    func testControlReadEnforcesCapIncludingNewline() throws {
+        for length in [65536, 65537] {
+            let bytes = Data(repeating: 120, count: length - 1) + Data([10])
+            var offset = 0
+            let recv: (Int32, UnsafeMutableRawPointer?, Int, Int32) -> Int = { _, buffer, capacity, _ in
+                let count = min(capacity, bytes.count - offset)
+                bytes.withUnsafeBytes { buffer!.copyMemory(from: $0.baseAddress!.advanced(by: offset), byteCount: count) }
+                offset += count
+                return count
+            }
+            if length == 65536 {
+                XCTAssertEqual(try LoopbackGateway.readLine(fd: -1, op: "requests", recv: recv), bytes)
+            } else {
+                XCTAssertThrowsError(try LoopbackGateway.readLine(fd: -1, op: "requests", recv: recv)) { error in
+                    let message = String(describing: error)
+                    XCTAssertTrue(message.contains("control requests recv oversized response"), message)
+                    XCTAssertTrue(message.contains("limit=65536 bytes=65536"), message)
+                }
+            }
+            XCTAssertEqual(offset, 65536)
+        }
+    }
+
+    func testControlSendDoesNotRetryNonInterruptFailures() {
+        for code in [EAGAIN, ETIMEDOUT, EPIPE] {
+            var calls = 0
+            XCTAssertThrowsError(try LoopbackGateway.sendAll(Data("request\n".utf8), fd: -1, op: "close") { _, _, _, _ in
+                defer { calls += 1 }
+                if calls == 0 { return 2 }
+                errno = code
+                return -1
+            }) { error in
+                let message = String(describing: error)
+                let kind = code == EPIPE ? "system error" : "timeout"
+                XCTAssertTrue(message.contains("control close send \(kind)"), message)
+                XCTAssertTrue(message.contains("errno=\(code) bytes=2"), message)
+            }
+            XCTAssertEqual(calls, 2)
+        }
+        XCTAssertThrowsError(try LoopbackGateway.sendAll(Data([1]), fd: -1, op: "close", send: { _, _, _, _ in 0 })) { error in
+            XCTAssertTrue(String(describing: error).contains("control close send made no progress bytes=0"))
+        }
+    }
+
     func testEnrollmentCannotAdvanceBeforePlatformPersistenceAcknowledgement() async throws {
         let client = try TinkleClient(config: ClientConfigFfi(clientInfo: fixtureClientInfo(),
             host: "127.0.0.1", primaryPort: 9, fallbackPort: nil),

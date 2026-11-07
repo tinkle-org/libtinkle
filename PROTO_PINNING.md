@@ -73,9 +73,14 @@ All post-change checks above passed with zero failures.
 
 The mobile fixture is a host-only Rust SDK/server harness. These results do not
 establish installed iOS/Android consumer acceptance, Keychain/Keystore durability,
-or actual Chorus production-handler acceptance. The external client-api and
-Chorus acceptance tests remained ignored; no cross-repo Go/Bazel fixture was
-started while the parent was running Chorus builds/tests.
+or actual Chorus production-handler acceptance. External acceptance tests remained
+ignored in the ordinary workspace run above. The parent subsequently ran the
+separate published-only Chorus production-handler lane: **PASSED**, 2026-11-07
+08:52:05–08:52:38 UTC, invocation `ca7630bb-35ae-4054-a7bd-5958e5200ca4`.
+[Chorus evidence](../chorus/src/controllers/client-api/SYNTRA_E2E.md#published-application-acceptance-2026-11-07)
+records the first attempt's stale probe assertion, fixture-only correction, raw
+pins/checksums, and passing rerun. Mobile OS storage, network/trust, capacity,
+production deployment, and the operator authn-restore gate remain separate.
 
 ## Optional future-schema development
 
