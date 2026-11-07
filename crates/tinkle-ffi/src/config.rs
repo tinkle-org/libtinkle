@@ -1,77 +1,137 @@
-//! FFI-safe client configuration.
+//! Native TCP configuration and one-use secret trust objects for FFI.
 
 use crate::FfiError;
+use std::sync::{Arc, Mutex};
 
-/// Record mirrored into [`libtinkle::ClientConfig`]. All fields owned.
-///
-/// `grpc_endpoint` enables the direct-unary gRPC fallback for reconciliation
-/// RPCs (`GetMessages`/`GetTargetChanges`). Syntra stays primary on the live
-/// connection; when set, retryable Syntra failures fall back to this endpoint
-/// automatically. It is validated fail-fast by [`TinkleClient::new`] and
-/// [`TinkleClient::new_sqlite`]: a non-blank-but-invalid endpoint (missing
-/// scheme, non-`https` without `allow_insecure`) returns
-/// [`FfiError::Internal`] at construction instead of surfacing as a retried
-/// network failure at reconciliation time. `None` (or blank, treated as
-/// unset for backward compatibility) keeps Syntra-only reconciliation.
+/// Both ports use one host and the exact same pin, scope and channel mode.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct ClientConfigFfi {
-    /// Gateway URL, e.g. `wss://gateway.example.com/syntra/v1/ws`.
-    pub url: String,
-    /// Allow `ws://` (development loopback/isolated nets only).
-    pub allow_insecure: bool,
-    /// Optional user-agent string.
-    pub user_agent: Option<String>,
-    /// Direct-unary gRPC base endpoint for reconciliation RPCs.
-    pub grpc_endpoint: Option<String>,
+    pub client_info: ClientInfoFfi,
+    pub host: String,
+    pub primary_port: u16,
+    pub fallback_port: Option<u16>,
 }
 
-impl ClientConfigFfi {
-    /// Validate `grpc_endpoint` fail-fast, mirroring
-    /// [`libtinkle::ClientConfig::validate_grpc_endpoint`]. Returns the
-    /// trimmed endpoint when set and valid, `None` when unset/blank.
-    pub(crate) fn validated_grpc_endpoint(
-        &self,
-        allow_insecure: bool,
-    ) -> Result<Option<String>, FfiError> {
-        match &self.grpc_endpoint {
-            None => Ok(None),
-            Some(ep) => {
-                let trimmed = ep.trim().to_string();
-                if trimmed.is_empty() {
-                    // Backward compatible: blank means unset (client falls
-                    // back to Syntra unary reconciliation).
-                    return Ok(None);
-                }
-                libtinkle::ClientConfig::validate_grpc_endpoint(&trimmed, allow_insecure)
-                    .map_err(FfiError::from)?;
-                Ok(Some(trimmed))
-            }
-        }
+/// Entire optional descriptive snapshot; missing labels are explicitly empty.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ClientOptionsFfi {
+    pub agent: String,
+    pub device_id: String,
+    pub install_id: String,
+    pub accept_language: String,
+    pub time_zone: String,
+    pub user_agent: String,
+}
+
+/// All five device/application labels are required before any native connection.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ClientInfoFfi {
+    pub device_model: String,
+    pub platform: String,
+    pub os_version: String,
+    pub app_version: String,
+    pub app_build: String,
+    pub options: ClientOptionsFfi,
+}
+
+impl ClientInfoFfi {
+    fn core(self) -> Result<libtinkle::ClientInfo, FfiError> {
+        libtinkle::ClientInfo::new(
+            self.device_model,
+            self.platform,
+            self.os_version,
+            self.app_version,
+            self.app_build,
+            libtinkle::ClientOptions {
+                agent: self.options.agent,
+                device_id: self.options.device_id,
+                install_id: self.options.install_id,
+                accept_language: self.options.accept_language,
+                time_zone: self.options.time_zone,
+                user_agent: self.options.user_agent,
+            },
+        )
+        .map_err(Into::into)
     }
 }
 
-/// Fail-fast conversion: validates `grpc_endpoint` (missing scheme,
-/// non-`https` without `allow_insecure`, blank handling) and returns
-/// [`FfiError::Internal`] on misconfig instead of silently dropping the
-/// endpoint. Used by [`crate::TinkleClient::new`] and
-/// [`crate::TinkleClient::new_sqlite`].
+/// Provisioned public server identity, independent of the transport address.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ServerTrustFfi {
+    pub server_public_key: Vec<u8>,
+    pub server_key_id: u32,
+    pub scope: String,
+}
+
+impl ServerTrustFfi {
+    fn core(self) -> Result<libtinkle::ServerTrust, FfiError> {
+        let trust = libtinkle::ServerTrust {
+            server_public_key: self
+                .server_public_key
+                .try_into()
+                .map_err(|_| FfiError::Internal("server pin must be 32 bytes".into()))?,
+            server_key_id: self.server_key_id,
+            scope: self.scope,
+        };
+        trust.validate().map_err(FfiError::from)?;
+        Ok(trust)
+    }
+}
+
+/// One-use Bootstrap trust owner. Returning is installed only through validated
+/// ACTIVE secure-store restoration or the acknowledged enrollment coordinator.
+#[derive(uniffi::Object)]
+pub struct TrustSourceFfi(Mutex<Option<libtinkle::TrustSource>>);
+
+#[uniffi::export]
+impl TrustSourceFfi {
+    #[uniffi::constructor]
+    pub fn bootstrap(trust: ServerTrustFfi) -> Result<Arc<Self>, FfiError> {
+        Ok(Arc::new(Self(Mutex::new(Some(
+            libtinkle::TrustSource::Bootstrap(trust.core()?),
+        )))))
+    }
+}
+
+impl TrustSourceFfi {
+    pub(crate) fn take(&self) -> Result<libtinkle::TrustSource, FfiError> {
+        self.0
+            .lock()
+            .map_err(|_| FfiError::Internal("trust source unavailable".into()))?
+            .take()
+            .ok_or_else(|| FfiError::Internal("trust source already consumed".into()))
+    }
+}
+
 pub(crate) fn validated_core_config(
     c: ClientConfigFfi,
 ) -> Result<libtinkle::ClientConfig, FfiError> {
-    let allow_insecure = c.allow_insecure;
-    // Validate before building so misconfig fails fast here.
-    let grpc_endpoint = ClientConfigFfi {
-        url: c.url.clone(),
-        allow_insecure,
-        user_agent: c.user_agent.clone(),
-        grpc_endpoint: c.grpc_endpoint.clone(),
-    }
-    .validated_grpc_endpoint(allow_insecure)?;
-    let mut cfg = libtinkle::ClientConfig::new(c.url);
-    if allow_insecure {
-        cfg = cfg.insecure_dev();
-    }
-    cfg.user_agent = c.user_agent;
-    cfg.grpc_endpoint = grpc_endpoint;
+    let mut cfg = libtinkle::ClientConfig::new(c.host, c.client_info.core()?);
+    cfg.primary_port = c.primary_port;
+    cfg.fallback_port = c.fallback_port;
+    cfg.validate().map_err(FfiError::from)?;
     Ok(cfg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn trust() -> ServerTrustFfi {
+        ServerTrustFfi {
+            server_public_key: vec![1; 32],
+            server_key_id: 7,
+            scope: "ffi-test".into(),
+        }
+    }
+
+    #[test]
+    fn trust_objects_transfer_ownership_once() {
+        let source = TrustSourceFfi::bootstrap(trust()).unwrap();
+        assert!(matches!(
+            source.take().unwrap(),
+            libtinkle::TrustSource::Bootstrap(_)
+        ));
+        assert!(source.take().is_err());
+    }
 }

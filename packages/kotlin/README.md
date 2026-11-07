@@ -60,7 +60,7 @@ generated object handles with `close()`/`destroy()` when their owner finishes.
 
 Rust owns protocol handling, subscriptions, per-target journals, reconciliation,
 and persistence. Prefer `SqliteStorage.openAsync(path)` with
-`TinkleClient.newSqlite(config, credential, storage)` for the shared native
+`TinkleClient.newSqlite(config, trustSource, storage)` for the shared native
 database. SQLite commits cache changes and journal positions atomically. Stop
 clients before `clearPrincipal`, and reopen/reconcile before resuming them.
 Alternatively implement the asynchronous `FfiCursorStore` callbacks
@@ -68,6 +68,22 @@ Alternatively implement the asynchronous `FfiCursorStore` callbacks
 are `target:user:<id>` and `target:room:<id>`, scoped by `user:<principal-id>`;
 positions are signed `Long`, with zero as the initial position. The in-memory
 Rust store is for ephemeral sessions/testing.
+
+Use `ClientConfigFfi(clientInfo, host, 443u, 80u)` with bare native TCP addresses.
+`ClientInfoFfi` requires device model, platform, OS version, host app version/build
+and the entire `ClientOptionsFfi`; Rust keeps an immutable snapshot and wraps the
+first unary call on every connection in InitConnect. Supply public trust through
+`ServerTrustFfi` and construct `TrustSourceFfi.bootstrap(trust)`.
+
+Implement `FfiSecureEnrollmentStore` over confidential durable platform storage.
+`prepareEnrollment` acknowledges durable operation/capability storage before
+SignIn; `signIn` or `resumeEnrollment` returns a `StoredEnrollment` only after
+atomic candidate persistence. Explicit `activateEnrollment` uses pinned Bootstrap,
+verifies ACTIVE, persists it atomically, and then installs fresh Returning.
+Use `restoreActiveEnrollment` after process restart. A commit callback must not
+return success merely because a write was scheduled. Protected-record handles
+and foreign byte copies must be released/erased after persistence. Keys never
+belong in the application database. See core `docs/device-enrollment.md`.
 
 ## Build a staged package
 
@@ -115,8 +131,8 @@ redirects to GitHub release hosts. Manifest-free bootstrap is restricted to
 ```sh
 # Independent archive/provenance rejection tests; no native runtime needed.
 bash gradlew -p buildSrc test
-# Wire-level gateway regression tests; JDK 17 only, no Android SDK or native build.
-bash gradlew --no-daemon -p fixture-tests test
+# Encrypted transport and application fixture regressions run in the core Rust suite.
+# cargo test --locked -p libtinkle
 python3 -m unittest discover -s tests -v
 
 # Build the exact final AAR from staged inputs, then consume those bytes.
@@ -134,6 +150,12 @@ bash gradlew publishReleasePublicationToSmokeRepository
 bash gradlew :sample:connectedDebugAndroidTest
 ```
 
+Run installed consumer tests under the core repository's
+`scripts/with-native-fixture.py` wrapper, which starts the host Rust fixture.
+The fixture serves encrypted application TCP using the published SDK.
+The emulator reaches its host-only control socket at
+`10.0.2.2:48080`; the sample contains no channel cryptography or wire codec.
+
 Keep the staged artifact properties/environment available during producer tasks.
 The file-AAR sample adapter explicitly supplies JNA and coroutines because an AAR
 alone has no dependency metadata. The sample never depends on the library source
@@ -144,7 +166,7 @@ reflected structures, and callback ABI; only four desktop AWT types are
 suppressed, without disabling shrinking or checksum validation.
 
 The installed target APK initializes twice, constructs/releases a Rust store,
-then connects a real Rust client to a test-only loopback gateway. It proves
+then connects a real Rust client to the host Rust fixture. It proves
 suspending Kotlin journal loads/saves from Rust, principal/target isolation,
 successful checkpoint events, and typed foreign load/save failure diagnostics.
 Empty pages cannot fabricate journal progress. A Rust-owned on-disk SQLite
@@ -153,8 +175,8 @@ resumes from the persisted cursor, round-trips user/chat protobufs, rejects a
 mismatched embedded ID, and verifies durable principal-scoped clearing.
 SQLite reconciliation also issues `GetHistory` after journal paging; the fixture
 returns an empty, explicitly terminal history window without moving the journal
-cursor. JVM wire tests exercise both RPC shapes before Android assembly, using a
-test-only shim for Android Base64 that never enters the AAR or APK.
+cursor. The core Rust fixture regression exercises both RPC shapes before
+Android assembly.
 
 Core CI retains instrumentation XML/HTML, R8 mappings, APKs, AAR identity, and
 bounded device exception logcat even when instrumentation fails. Fixture failures

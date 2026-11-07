@@ -208,7 +208,7 @@ jobs:
           python3 scripts/sdk-ci.py sync-package --sdk swift --destination /tmp/swift-consumer
           python3 scripts/sdk-ci.py stage --sdk swift --destination /tmp/swift-consumer --artifacts artifacts --candidate
       - name: Packaged simulator consumer (deployment target 15; current runtime only)
-        run: python3 scripts/sdk-ci.py swift-test --destination /tmp/swift-consumer
+        run: python3 scripts/with-native-fixture.py python3 scripts/sdk-ci.py swift-test --destination /tmp/swift-consumer
       - name: Preserve simulator test results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -268,7 +268,7 @@ jobs:
           target: ${{ matrix.target }}
           arch: x86_64
           disable-animations: true
-          script: python3 scripts/sdk-ci.py android-test --destination /tmp/kotlin-consumer --artifacts artifacts --api-level ${{ matrix.api }} --page-size ${{ matrix.pages }}
+          script: python3 scripts/with-native-fixture.py python3 scripts/sdk-ci.py android-test --destination /tmp/kotlin-consumer --artifacts artifacts --api-level ${{ matrix.api }} --page-size ${{ matrix.pages }}
       - name: Preserve installed-consumer test evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -276,8 +276,6 @@ jobs:
           name: kotlin-consumer-${{ matrix.api }}-${{ matrix.pages }}
           path: |
             /tmp/kotlin-consumer/build/diagnostics
-            /tmp/kotlin-consumer/fixture-tests/build/test-results
-            /tmp/kotlin-consumer/fixture-tests/build/reports/tests
             /tmp/kotlin-consumer/buildSrc/build/test-results
             /tmp/kotlin-consumer/buildSrc/build/reports/tests
             /tmp/kotlin-consumer/build/sdk-ci-aar.json

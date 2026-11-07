@@ -8,16 +8,13 @@
 //! new-message push with an EMPTY mutation journal produces a durable
 //! SQLite message).
 
-use futures_util::{SinkExt, StreamExt};
+mod support;
 use prost::Message;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
-use syntra_core::proto::{
-    frame::Body, rpc_result::Outcome, Frame, Notification, RpcRequest, RpcResult,
-};
-use syntra_core::{decode_frame, encode_frame, ConnectionState, ValidationContext};
+use syntra_core::proto::{frame::Body, rpc_result::Outcome, Frame, RpcRequest, RpcResult};
 use tinkle_schema::proto::{
     target, GetHistoryRequest, GetHistoryResponse, GetMessagesRequest, GetMessagesResponse,
     GetTargetChangesRequest, GetTargetChangesResponse, LogoutResponse, RegisterPushResponse,
@@ -163,99 +160,15 @@ async fn mock_gateway(listener: TcpListener) {
             Err(_) => return,
         };
         tokio::spawn(async move {
-            use tokio_tungstenite::tungstenite::handshake::server::ErrorResponse;
-            use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
-            #[allow(clippy::result_large_err)]
-            let callback = |req: &Request, mut resp: Response| -> Result<Response, ErrorResponse> {
-                let offered = req
-                    .headers()
-                    .get("sec-websocket-protocol")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("");
-                if offered
-                    .split(',')
-                    .map(|s| s.trim())
-                    .any(|s| s == "syntra.v1")
-                {
-                    resp.headers_mut()
-                        .insert("sec-websocket-protocol", "syntra.v1".parse().unwrap());
+            let handle = support::accept(stream, |req, _host| async move {
+                handle_mock_request(1, req).await
+            })
+            .await;
+            if let Ok(handle) = handle {
+                while !handle.is_closed() {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                 }
-                Ok(resp)
-            };
-            let ws = match tokio_tungstenite::accept_hdr_async(stream, callback).await {
-                Ok(w) => w,
-                Err(_) => return,
-            };
-            let (mut write, mut read) = ws.split();
-            let hello_msg = match read.next().await {
-                Some(Ok(m)) => m,
-                _ => return,
-            };
-            let bytes = hello_msg.into_data();
-            let frame = match decode_frame(
-                &bytes,
-                ValidationContext::pre_handshake(ConnectionState::Connected),
-            ) {
-                Ok(f) => f,
-                Err(_) => return,
-            };
-            if !matches!(frame.body, Some(Body::Hello(_))) {
-                return;
-            }
-            let ready = Frame {
-                version: 1,
-                request_id: 0,
-                body: Some(Body::Ready(syntra_core::proto::ServerReady {
-                    connection_id: format!("mock-push-{}", rand::random::<u32>()),
-                })),
-            };
-            let buf = encode_frame(
-                &ready,
-                ValidationContext::pre_handshake(ConnectionState::Authenticating),
-            )
-            .unwrap();
-            if write
-                .send(tokio_tungstenite::tungstenite::Message::Binary(buf.into()))
-                .await
-                .is_err()
-            {
-                return;
-            }
-            loop {
-                let msg = match read.next().await {
-                    Some(Ok(m)) => m,
-                    _ => break,
-                };
-                if msg.is_close() {
-                    break;
-                }
-                if msg.is_ping() || msg.is_pong() || msg.is_text() {
-                    continue;
-                }
-                let data = msg.into_data();
-                if data.is_empty() {
-                    continue;
-                }
-                let frame = match decode_frame(&data, ValidationContext::active(1)) {
-                    Ok(f) => f,
-                    Err(_) => continue,
-                };
-                let (id, req) = match frame.body {
-                    Some(Body::Request(r)) => (frame.request_id, r),
-                    _ => continue,
-                };
-                // Opaque notifications are never sent here; the push path
-                // does not depend on them.
-                let _ = Notification { payload: vec![] };
-                let resp_frame = handle_mock_request(id, req).await;
-                let out = encode_frame(&resp_frame, ValidationContext::active(1)).unwrap();
-                if write
-                    .send(tokio_tungstenite::tungstenite::Message::Binary(out.into()))
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
+                handle.close().await;
             }
         });
     }
@@ -269,12 +182,8 @@ async fn start_mock() -> SocketAddr {
 }
 
 fn push_client(addr: SocketAddr, storage: Arc<tinkle_storage::Storage>) -> libtinkle::Client {
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
-    libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage,
-    )
+    let cfg = support::config(addr);
+    libtinkle::Client::new_sqlite(cfg, support::source(), storage)
 }
 
 fn push_envelope(event: &str, ids: Vec<i64>) -> libtinkle::PushEnvelope {
@@ -478,13 +387,8 @@ async fn push_logged_out_wakes_do_not_self_resurrect() {
 async fn push_deadline_expiry_defers() {
     let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
     // No connection: the expired deadline must win before any dial.
-    let cfg =
-        libtinkle::ClientConfig::new("ws://127.0.0.1:1/syntra/v1/ws".to_string()).insecure_dev();
-    let c = libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage.clone(),
-    );
+    let cfg = support::config("127.0.0.1:1".parse().unwrap());
+    let c = libtinkle::Client::new_sqlite(cfg, support::source(), storage.clone());
     c.set_principal_user_id(42).await;
 
     let mgr = libtinkle::PushManager::new(c.clone());
@@ -593,6 +497,8 @@ async fn push_token_lifecycle_round_trip() {
         .await
         .unwrap();
     assert!(removed);
-    assert!(c.logout().await.unwrap());
+    // This cache fixture is Bootstrap-only, so remote authenticated revocation
+    // is unconfirmed even though local cleanup must succeed.
+    assert!(!c.logout().await.unwrap());
     c.close().await;
 }

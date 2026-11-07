@@ -17,8 +17,7 @@ body:
       multiple: true
       options:
         - syntra-core (codec, state, handshake, ids, pending, timeouts, reconnect)
-        - syntra-ws native (tokio-tungstenite, TLS)
-        - syntra-ws wasm (ws_stream_wasm, browser transport)
+        - syntra-net (encrypted native TCP)
         - tinkle-schema (methods, realtime validation)
         - libtinkle (Client, facades, CursorStore)
         - tinkle-ffi iOS/Android (UniFFI Swift/Kotlin)
@@ -60,8 +59,8 @@ body:
       placeholder: |
         ```rust
         let client = libtinkle::Client::new(
-          libtinkle::ClientConfig::new("wss://gateway.test.example.com/syntra/v1/ws"),
-          libtinkle::Credential::from_session_token("<redacted>"),
+          libtinkle::ClientConfig::new("gateway.test.example.com"),
+          provisioned_trust_source,
           libtinkle::InMemoryCursorStore::new(),
         );
         client.connect().await?;

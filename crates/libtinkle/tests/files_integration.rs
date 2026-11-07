@@ -2,7 +2,7 @@
 //! path over an in-process Syntra mock gateway (mirrors
 //! `client_integration.rs`).
 
-use futures_util::{SinkExt, StreamExt};
+mod support;
 use prost::Message;
 use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
@@ -11,10 +11,8 @@ use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 
 use syntra_core::proto::{
-    frame::Body, rpc_result::Outcome, Frame, Notification, RpcError as ProtoRpcError, RpcRequest,
-    RpcResult,
+    frame::Body, rpc_result::Outcome, Frame, RpcError as ProtoRpcError, RpcRequest, RpcResult,
 };
-use syntra_core::{decode_frame, encode_frame, ConnectionState, ValidationContext};
 use tinkle_schema::proto::{
     AbortUploadRequest, AbortUploadResponse, BeginUploadRequest, BeginUploadResponse,
     CompleteUploadRequest, CompleteUploadResponse, DownloadPartRequest, DownloadPartResponse,
@@ -381,124 +379,36 @@ async fn mock_gateway(listener: TcpListener, state: Shared) {
         };
         let task_state = state.clone();
         tokio::spawn(async move {
-            use tokio_tungstenite::tungstenite::handshake::server::ErrorResponse;
-            use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
-            #[allow(clippy::result_large_err)]
-            let callback = |req: &Request, mut resp: Response| -> Result<Response, ErrorResponse> {
-                let offered = req
-                    .headers()
-                    .get("sec-websocket-protocol")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("");
-                if offered
-                    .split(',')
-                    .map(|s| s.trim())
-                    .any(|s| s == "syntra.v1")
-                {
-                    resp.headers_mut()
-                        .insert("sec-websocket-protocol", "syntra.v1".parse().unwrap());
-                }
-                Ok(resp)
-            };
-            let ws = match tokio_tungstenite::accept_hdr_async(stream, callback).await {
-                Ok(w) => w,
-                Err(_) => return,
-            };
-            let (mut write, mut read) = ws.split();
-            let hello_msg = match read.next().await {
-                Some(Ok(m)) => m,
-                _ => return,
-            };
-            let bytes = hello_msg.into_data();
-            let frame = match decode_frame(
-                &bytes,
-                ValidationContext::pre_handshake(ConnectionState::Connected),
-            ) {
-                Ok(f) => f,
-                Err(_) => return,
-            };
-            if !matches!(frame.body, Some(Body::Hello(_))) {
-                return;
-            }
-            let ready = Frame {
-                version: 1,
-                request_id: 0,
-                body: Some(Body::Ready(syntra_core::proto::ServerReady {
-                    connection_id: format!("mock-files-{}", rand::random::<u32>()),
-                })),
-            };
-            let buf = encode_frame(
-                &ready,
-                ValidationContext::pre_handshake(ConnectionState::Authenticating),
-            )
-            .unwrap();
-            if write
-                .send(tokio_tungstenite::tungstenite::Message::Binary(buf.into()))
-                .await
-                .is_err()
-            {
-                return;
-            }
-            loop {
-                let msg = match read.next().await {
-                    Some(Ok(m)) => m,
-                    _ => break,
-                };
-                if msg.is_close() {
-                    break;
-                }
-                if msg.is_ping() || msg.is_pong() || msg.is_text() {
-                    continue;
-                }
-                let data = msg.into_data();
-                if data.is_empty() {
-                    continue;
-                }
-                let frame = match decode_frame(&data, ValidationContext::active(1)) {
-                    Ok(f) => f,
-                    Err(_) => continue,
-                };
-                let (id, req) = match frame.body {
-                    Some(Body::Request(r)) => (frame.request_id, r),
-                    Some(Body::Cancel(_)) => continue,
-                    _ => continue,
-                };
-                // Keep the notification pump alive shape: after every Files
-                // response, also emit an opaque hint.
-                let is_download_part =
-                    req.method.as_str() == "/tinkle.v1.FilesService/DownloadPart";
-                let resp_frame = handle_files(id, req, &task_state);
-                // Deterministic mid-flight pause: the first DownloadPart
-                // response waits for the test's release. This runs outside
-                // `handle_files`, so the state mutex is never held across
-                // the wait.
-                if is_download_part {
-                    let gate = task_state.lock().unwrap().download_gate.clone();
-                    if let Some(g) = gate {
-                        if !g.entered.swap(true, Ordering::SeqCst) {
-                            g.release.notified().await;
+            let handle = support::accept(stream, move |req, host| {
+                let task_state = task_state.clone();
+                async move {
+                    // Keep the notification pump alive shape: after every Files
+                    // response, also emit an opaque hint.
+                    let is_download_part =
+                        req.method.as_str() == "/tinkle.v1.FilesService/DownloadPart";
+                    let resp_frame = handle_files(1, req, &task_state);
+                    // Deterministic mid-flight pause: the first DownloadPart
+                    // response waits for the test's release. This runs outside
+                    // `handle_files`, so the state mutex is never held across
+                    // the wait.
+                    if is_download_part {
+                        let gate = task_state.lock().unwrap().download_gate.clone();
+                        if let Some(g) = gate {
+                            if !g.entered.swap(true, Ordering::SeqCst) {
+                                g.release.notified().await;
+                            }
                         }
                     }
+                    let _ = host.notify(b"hint".to_vec()).await;
+                    resp_frame
                 }
-                let out = encode_frame(&resp_frame, ValidationContext::active(1)).unwrap();
-                if write
-                    .send(tokio_tungstenite::tungstenite::Message::Binary(out.into()))
-                    .await
-                    .is_err()
-                {
-                    break;
+            })
+            .await;
+            if let Ok(handle) = handle {
+                while !handle.is_closed() {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                 }
-                let nf = Frame {
-                    version: 1,
-                    request_id: 0,
-                    body: Some(Body::Notification(Notification {
-                        payload: b"hint".to_vec(),
-                    })),
-                };
-                let nbuf = encode_frame(&nf, ValidationContext::active(1)).unwrap();
-                let _ = write
-                    .send(tokio_tungstenite::tungstenite::Message::Binary(nbuf.into()))
-                    .await;
+                handle.close().await;
             }
         });
     }
@@ -517,10 +427,10 @@ async fn start_mock_logged() -> (SocketAddr, Shared) {
 }
 
 fn test_client(addr: SocketAddr) -> libtinkle::Client {
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
+    let cfg = support::config(addr);
     libtinkle::Client::new(
         cfg,
-        libtinkle::Credential::from_session_token("test-token"),
+        support::source(),
         libtinkle::InMemoryCursorStore::new(),
     )
 }

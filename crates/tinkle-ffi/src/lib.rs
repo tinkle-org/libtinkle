@@ -12,13 +12,19 @@
 //! - No Syntra, prost, or `tinkle-schema` types in exported signatures.
 //!   (`tinkle-schema` is used internally to build the single write path.)
 //! - No cancellation tokens cross FFI. Dropping the foreign future/suspend
-//!   task cancels the Rust future, which is then dropped.
+//!   task cancels the Rust future, which is then dropped. Retained logout cleanup
+//!   continues independently of its foreign waiter.
 //! - Async methods run under Tokio (`async_runtime = "tokio"`); the host
 //!   app must call `tinkle_ffi_init()` once at startup so `libtinkle`'s
 //!   background tasks (`tokio::spawn`) have a process-wide runtime.
 
 uniffi::setup_scaffolding!();
 
+mod account;
+pub use account::AccountEnrollmentObservation;
+pub use account::{
+    AccountAuthorization, AccountCleanup, AccountNetwork, AccountSession, AccountStatus,
+};
 pub mod client;
 pub mod config;
 pub mod error;
@@ -31,7 +37,15 @@ pub use client::{
     FfiDialogsRequest, FfiHistoryRequest, FfiLoadPolicy, FfiReconcileStatus, FfiSubscribeResponse,
     FfiSyncEvent, TargetSub, TinkleClient,
 };
-pub use config::ClientConfigFfi;
+pub use config::{
+    ClientConfigFfi, ClientInfoFfi, ClientOptionsFfi, ServerTrustFfi, TrustSourceFfi,
+};
+mod enrollment;
+pub use enrollment::{
+    CodeDelivery, EnrollmentOperation, EnrollmentSignInResult, EnrollmentStatus,
+    FfiSecureEnrollmentStore, ProtectedEnrollmentNamespace, ProtectedEnrollmentRecord,
+    SecureEnrollmentWrite, StoredEnrollment,
+};
 pub use error::FfiError;
 pub use push::{
     parse_push_payload, push_recover_stale_jobs, push_target_key, FfiPushEnvelope, FfiPushOutcome,

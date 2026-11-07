@@ -1135,40 +1135,20 @@ impl Client {
         Ok(resp.removed)
     }
 
-    /// Logout + local cleanup: best-effort `AccountService/Logout` RPC,
-    /// then wipes the principal's SQLite rows (messages, jobs, transfers),
-    /// drops in-memory catch-up demand, clears tracked interests, and
-    /// resets the principal to unknown (fencing in-flight push/reconcile
-    /// work). Returns the server's `logged_out` flag (`false` when the RPC
-    /// was skipped/failed; local wipe still happened).
+    /// Irreversible local sign-out, acknowledged protected-store invalidation,
+    /// and cache cleanup. True confirms remote revocation; false means remote
+    /// revocation is unconfirmed (offline/error/outcome unknown). Either Ok value
+    /// requires local durable clearing. Err never reverses in-memory sign-out
+    /// and never claims durable clearing. A new Client is required to sign in.
     ///
     /// Recommended host order: `unregister_push(token)` → `logout()`.
+    /// Dropped waiters leave a retained task running. Later callers join it;
+    /// failed local steps can be retried without repeating remote revocation.
     pub async fn logout(&self) -> Result<bool, TinkleError> {
-        let principal = self.principal().await;
-        let mut logged_out = false;
-        if self.is_connected().await && principal != crate::sync::UNKNOWN_PRINCIPAL {
-            let req = tinkle_schema::proto::LogoutRequest {};
-            let attempt: Result<tinkle_schema::proto::LogoutResponse, TinkleError> =
-                crate::services::call_typed(
-                    self,
-                    tinkle_schema::methods::accountservice::LOGOUT,
-                    &req,
-                    30_000,
-                )
-                .await;
-            if let Ok(resp) = attempt {
-                logged_out = resp.logged_out;
-            }
-        }
-        if principal != crate::sync::UNKNOWN_PRINCIPAL {
-            // Wipe + reset under one checkpoint-save hold so an in-flight
-            // ingest cannot commit between them (see logout_wipe_and_reset).
-            self.logout_wipe_and_reset(&principal).await?;
-        } else {
-            // Nothing durable to wipe; still drop interests/watch/demand.
-            self.reset_session_for_logout().await;
-        }
-        Ok(logged_out)
+        // Synchronous shared fence erases all registered secret cells and
+        // cancels provisioning RPCs before awaiting locks, network or storage.
+        self.begin_signed_out();
+        self.logout_cleanup.join(self.background_clone()).await
     }
 }
 

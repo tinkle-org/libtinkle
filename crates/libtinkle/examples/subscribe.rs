@@ -1,33 +1,15 @@
 //! Subscribe to conversation journals and print reconcile events.
 //!
-//! ```sh
-//! TINKLE_URL=wss://gateway.test.example.com/syntra/v1/ws \
-//! TINKLE_TOKEN=<session-token> \
-//! cargo run -p libtinkle --example subscribe
-//! ```
+//! Uses encrypted native TCP; see `support::client` for provisioned inputs.
 
-use libtinkle::{Client, ClientConfig, Credential, InMemoryCursorStore};
+mod support;
 use tinkle_schema::proto::{target, Target};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let url =
-        std::env::var("TINKLE_URL").unwrap_or_else(|_| "ws://127.0.0.1:8080/syntra/v1/ws".into());
-    let token = std::env::var("TINKLE_TOKEN").unwrap_or_else(|_| "dev-token".into());
-
-    let mut cfg = ClientConfig::new(url);
-    if std::env::var("TINKLE_INSECURE").is_ok() {
-        cfg = cfg.insecure_dev();
-    }
-    let client = Client::new(
-        cfg,
-        Credential::from_session_token(&token),
-        InMemoryCursorStore::new(),
-    );
+    let client = support::client().await?;
     client.connect().await?;
-    // Example: track room 7. Principal must be set (via sign_in or
-    // set_principal_user_id) before subscribing in real apps.
-    client.set_principal_user_id(42).await;
+    // Example: track room 7 under the restored ACTIVE account scope.
     client
         .subscribe(vec![Target {
             kind: Some(target::Kind::ChatId(7)),
