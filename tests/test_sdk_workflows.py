@@ -89,6 +89,15 @@ class SdkWorkflowTests(unittest.TestCase):
                 prefixes.append(prefix)
         self.assertNotEqual(*prefixes)  # Caller and callee must not cancel each other.
 
+    def test_host_fixture_uses_an_allocated_port_without_changing_mobile_consumers(self):
+        """Host tests must not claim a fixed port in Linux's ephemeral range."""
+        command = ("python3 scripts/with-native-fixture.py --port 0 cargo test --locked "
+                   "-p libtinkle --test mobile_fixture -- --ignored")
+        self.assertIn(command, self.ci["test"])
+        for name in ("swift-consumer", "kotlin-consumer"):
+            self.assertIn("python3 scripts/with-native-fixture.py python3 scripts/sdk-ci.py", self.native[name])
+            self.assertNotIn("--port 0", self.native[name])
+
     def test_required_checks_and_native_builds_use_the_published_dependency_graph(self):
         for name in ("ci", "native-sdk"):
             with self.subTest(workflow=name):

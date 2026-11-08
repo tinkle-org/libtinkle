@@ -61,9 +61,17 @@ generation. Optional future-schema development is described in
 
 Run `python3 scripts/with-native-fixture.py <consumer command...>` from this
 repository. It builds a host-only Rust example, never substitutes packaged SDK
-artifacts, starts its loopback control socket at port 48080 and stops it after
-the consumer exits. Swift simulator fixtures control it at `127.0.0.1`; Android
-emulator fixtures use the host-loopback alias `10.0.2.2`.
+artifacts, starts its loopback control socket and stops it after the consumer
+exits. The default control port remains 48080 for Swift/Kotlin native-distribution
+consumers. Swift simulator fixtures control it at `127.0.0.1`; Android emulator
+fixtures use the host-loopback alias `10.0.2.2`.
+
+For host tests, pass `--port 0` to request an OS-assigned control port and avoid
+fixed-port collisions in Linux's ephemeral range. The wrapper reads the fixture's
+actual bound port and passes it to the consumer in
+`TINKLE_NATIVE_FIXTURE_CONTROL_PORT`. `crates/libtinkle/tests/mobile_fixture.rs`
+reads that variable, falling back to 48080 when unset. Swift/Kotlin fixtures use
+fixed port 48080, so omit `--port` for those consumers.
 
 The harness allocates independent encrypted app listeners, generates server
 pins through the SDK, serves schema-encoded journal/history pages and exposes
@@ -73,7 +81,7 @@ published SDK. Rust integration tests exercise transport/trust boundaries and
 the full application cache/history contracts.
 
 ```sh
-python3 scripts/with-native-fixture.py cargo test --locked -p libtinkle --test mobile_fixture -- --ignored
+python3 scripts/with-native-fixture.py --port 0 cargo test --locked -p libtinkle --test mobile_fixture -- --ignored
 ```
 
 ## Browser

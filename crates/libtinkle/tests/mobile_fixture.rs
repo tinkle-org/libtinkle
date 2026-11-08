@@ -4,8 +4,19 @@ use serde_json::{json, Value};
 use tinkle_schema::proto::{target, GetHistoryRequest, Target};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
+/// Resolve the runner's allocated port, retaining the mobile harness default.
+fn control_address() -> String {
+    let port = std::env::var("TINKLE_NATIVE_FIXTURE_CONTROL_PORT")
+        .unwrap_or_else(|_| "48080".into())
+        .parse::<u16>()
+        .expect("fixture control port must be a TCP port");
+    assert_ne!(port, 0, "fixture must report its bound control port");
+    format!("127.0.0.1:{port}")
+}
+
+/// Send harness commands to the runner-owned loopback listener.
 async fn control(request: Value) -> Value {
-    let stream = tokio::net::TcpStream::connect("127.0.0.1:48080")
+    let stream = tokio::net::TcpStream::connect(control_address())
         .await
         .unwrap();
     let mut stream = BufReader::new(stream);
@@ -23,7 +34,7 @@ async fn control(request: Value) -> Value {
 #[ignore = "run via scripts/with-native-fixture.py cargo test -p libtinkle --test mobile_fixture -- --ignored"]
 async fn mobile_fixture_survives_faulty_control_requests() {
     for input in [&b""[..], b"\n", b"not json\n", b"\xff\n", b"{"] {
-        let mut stream = tokio::net::TcpStream::connect("127.0.0.1:48080")
+        let mut stream = tokio::net::TcpStream::connect(control_address())
             .await
             .unwrap();
         stream.write_all(input).await.unwrap();

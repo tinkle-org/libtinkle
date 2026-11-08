@@ -336,7 +336,7 @@ directories.
 To exercise the shared mobile fixture in the original workspace:
 
 ```sh
-python3 scripts/with-native-fixture.py cargo test --locked -p libtinkle \
+python3 scripts/with-native-fixture.py --port 0 cargo test --locked -p libtinkle \
   --test mobile_fixture -- --ignored
 ```
 

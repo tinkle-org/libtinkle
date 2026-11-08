@@ -177,8 +177,14 @@ SDK. `scripts/with-native-fixture.py <consumer command...>` starts it on the hos
 and cleans it up. Its separate loopback JSON control socket allocates fixtures
 and reads application request logs; it is test harness code only.
 
+For host tests, use `--port 0` to avoid fixed-port collisions in Linux's ephemeral
+range. The wrapper passes the OS-assigned control port to the consumer through
+`TINKLE_NATIVE_FIXTURE_CONTROL_PORT`, which `crates/libtinkle/tests/mobile_fixture.rs`
+reads. Omit `--port` for Swift/Kotlin native-distribution consumers, which retain
+the fixed default 48080; see [native consumer fixtures](docs/platform-ios-android-wasm.md#native-consumer-fixtures).
+
 ```sh
-python3 scripts/with-native-fixture.py cargo test --locked -p libtinkle --test mobile_fixture -- --ignored
+python3 scripts/with-native-fixture.py --port 0 cargo test --locked -p libtinkle --test mobile_fixture -- --ignored
 ```
 
 The native examples `send-message` and `subscribe` require `TINKLE_HOST`,

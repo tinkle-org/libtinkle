@@ -48,7 +48,7 @@ cargo test --locked --workspace --all-features --verbose
 cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings
 bash scripts/generate-bindings.sh --check
 cargo check --locked -p libtinkle-web -p tinkle-schema --target wasm32-unknown-unknown
-python3 scripts/with-native-fixture.py cargo test --locked -p libtinkle --test mobile_fixture -- --ignored
+python3 scripts/with-native-fixture.py --port 0 cargo test --locked -p libtinkle --test mobile_fixture -- --ignored
 ```
 
 Use the separate [Chorus actual-application lane](../chorus/src/controllers/client-api/tests/native_acceptance/README.md#run)
