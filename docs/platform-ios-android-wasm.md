@@ -3,8 +3,10 @@
 ## iOS and Android
 
 `TinkleClient` wraps the native Rust client on a shared process-wide Tokio
-runtime. Both platforms use encrypted TCP from the exact published Syntra rc.3
-SDK. Configuration is `ClientConfigFfi(host, primary_port, fallback_port)`;
+runtime. Both platforms use encrypted TCP with exact rc.4 SDK pins;
+[dependency pinning](../PROTO_PINNING.md#sdk-pins-and-qualification)
+owns crate-specific release links and scoped paired qualification.
+Configuration is `ClientConfigFfi(host, primary_port, fallback_port)`;
 production defaults in Rust are 443/80. Both ports have identical trust checks.
 The configuration also requires `ClientInfoFfi`: all five device/app labels and
 the entire immutable optional snapshot.
@@ -18,6 +20,15 @@ acknowledges durable candidate storage. Activation uses Bootstrap; validated
 ACTIVE storage precedes fresh Returning. Existing sessions use
 `restoreActiveEnrollment`. Foreign byte copies remain host-owned and must be
 erased. The complete callback and recovery contract is in `device-enrollment.md`.
+
+`TinkleClient.logout` follows the
+[high-level Logout contract](device-enrollment.md#local-sign-out-and-remote-revocation):
+one nonrenewable entry-time budget limits remote eligibility, while acknowledged
+local durable clearing may take longer. Do not impose a three-second cutoff on
+host invalidation or equate an unknown remote result with rollback. The
+[scoped paired result](../PROTO_PINNING.md#sdk-pins-and-qualification) qualifies the
+tested native consumer implementation/published pins, not Keychain/Keystore or
+installed mobile-consumer acceptance.
 
 The application surface retains `start`, `connect`, `subscribe`, typed/raw calls,
 `loadHistory`, `loadDialogs`, `getMessages`, `getTargetChanges`, file transfers,

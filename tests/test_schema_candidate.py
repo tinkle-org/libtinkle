@@ -47,7 +47,7 @@ class CandidateBindingsTests(unittest.TestCase):
     def bindings(self):
         return {name: (self.root / "bindings" / name).read_bytes() for name in BINDINGS}
 
-    def generate(self, missing=None, directory=False):
+    def generate(self, missing=None, directory=False, syntra_version="1.0.0-rc.4"):
         def run(command, **kwargs):
             if command[:2] == ["buf", "build"]:
                 Path(command[-1]).write_bytes(b"descriptor")
@@ -68,7 +68,7 @@ class CandidateBindingsTests(unittest.TestCase):
 
         packages = [{"name": "tinkle-org_schema_community_neoeinstein-prost",
                      "manifest_path": str(self.output / "prost-candidate/Cargo.toml")}]
-        packages += [{"name": name, "id": name, "version": "1.0.0-rc.3",
+        packages += [{"name": name, "id": name, "version": syntra_version,
                       "source": "registry+https://github.com/rust-lang/crates.io-index"}
                      for name in ("syntra-core", "syntra-runtime", "syntra-net")]
         metadata = {"packages": packages, "resolve": {"nodes": [{"id": "syntra-net", "features": ["tcp"]}]}}
@@ -97,6 +97,13 @@ class CandidateBindingsTests(unittest.TestCase):
         self.assertEqual(self.bindings(), {name: ("candidate " + name).encode() for name in BINDINGS})
         for name, content in originals.items():
             self.assertEqual((self.root / name).read_bytes(), content)
+
+    def test_previous_syntra_release_is_rejected(self):
+        """Candidate metadata must keep the exact published RC4 pin."""
+        original = self.bindings()
+        with self.assertRaisesRegex(SystemExit, "exact published Syntra rc.4"):
+            self.generate(syntra_version="1.0.0-rc.3")
+        self.assertEqual(self.bindings(), original)
 
 
 class CandidateCiTests(unittest.TestCase):

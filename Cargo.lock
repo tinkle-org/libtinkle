@@ -1201,9 +1201,9 @@ dependencies = [
 
 [[package]]
 name = "syntra-core"
-version = "1.0.0-rc.3"
+version = "1.0.0-rc.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5270ed806c620aedc8e6076334e945fe64269f50c5c68a45ac9c64fe3d71818e"
+checksum = "686d1160b0b18091e01b2e6245f14850230842ea87b73249aab7f97bf014c4c8"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1221,9 +1221,9 @@ dependencies = [
 
 [[package]]
 name = "syntra-net"
-version = "1.0.0-rc.3"
+version = "1.0.0-rc.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87351be8761a5eb5a9dd2ca9f972bbf9f6f4c6d64aa4dbc597b4fcf443c89841"
+checksum = "8fa44bbf3e5bce44d6eff8e413763ccda168e206193a5b3e54faee63e6957809"
 dependencies = [
  "futures-util",
  "prost",
@@ -1237,9 +1237,9 @@ dependencies = [
 
 [[package]]
 name = "syntra-runtime"
-version = "1.0.0-rc.3"
+version = "1.0.0-rc.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c429f81b2202107833be5b90f919fb5d74a5645ceab59de8bd70cefc0241e3fc"
+checksum = "2b38b7ef6ffdba2ccf4f7f94229f6f6301925100a2638a2d0d2a02d90e291504"
 dependencies = [
  "bytes",
  "futures-util",

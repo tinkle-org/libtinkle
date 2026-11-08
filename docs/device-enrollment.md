@@ -94,6 +94,15 @@ namespace. UniFFI uses the same callbacks with `ProtectedEnrollmentNamespace`.
   superseded. A failed finish leaves the marker in force. Explicit host recovery
   creates a new incarnation; the old coordinator cannot clear or write into it.
 
+Conditional ACTIVE installation additionally requires `begin_restore` /
+`end_restore` from `crates/libtinkle/src/enrollment.rs`. Atomically compare the
+incarnation, revision, and complete ACTIVE record, reject cleanup markers, and
+exclude writes, clearing, and namespace reset until the matching permit releases.
+The exclusion applies across Clients/processes. Idempotent release/cancellation
+must dominate late acquisition; a lost owner releases through process-owned
+resources or leaves mutations blocked for host recovery. Two separate reads or
+an unchecked expiring lease do not satisfy this contract.
+
 Rust's default snapshot returns None for legacy hosts. Foreign implementations
 must explicitly return nil/null for that mode and reject the conditional
 callbacks. Such hosts keep the legacy acknowledged-clear behavior but report
@@ -130,6 +139,28 @@ principal. An activation or persistence failure must be recovered with the
 retained operation, rather than by inventing a new operation or repeating SMS.
 
 ## Local sign-out and remote revocation
+
+`crates/libtinkle/src/{logout,client,push}.rs` capture one remote-eligibility
+budget of `min(3s, config.connection.max_rpc_timeout)` at high-level Logout entry, before the irreversible
+fence and before lifecycle, connection, or initialization waits, retaining it with
+the first cleanup cause. Concurrent callers join that owner; neither joining,
+waiter cancellation, local cleanup retry, nor a later Logout renews the budget or
+changes a retirement-only cause into remote Logout. The remote mutation is
+attempted only on the captured Returning generation while positive time remains, passing
+only floored remaining milliseconds through initialization and runtime handoff.
+
+The budget limits eligibility for the remote attempt, **not durable local
+clearing or total `logout()` wall time**. Always retain/join local cleanup even
+when the remote budget expires; host persistence and acknowledged invalidation
+may outlast three seconds. Expiry/loss can leave the remote outcome unknown and
+does not prove rollback. Raw request APIs keep their selected timeout rather than
+implicitly using this high-level policy; see
+[request-budget integration](architecture.md#request-budget-integration-contract).
+
+`crates/libtinkle/src/logout.rs` attaches the retained budget to the first cleanup
+cause; `client.rs` consumes it without restarting the call budget after lifecycle
+waits. See the [scoped paired qualification](../../chorus/src/controllers/client-api/tests/native_acceptance/README.md#current-qualification)
+for tested behavior and limits.
 
 `Client::logout()` first irreversibly fences this Client's authorization
 generation, cancels provisioning requests, and erases registered SDK-owned AK
@@ -311,6 +342,15 @@ python3 scripts/with-native-fixture.py cargo test --locked -p libtinkle \
 
 ## External client-api acceptance entry point
 
+For full production-handler application acceptance with PostgreSQL, Vault, Redis,
+and private workload mTLS, use the separate
+[Chorus runner](../../chorus/src/controllers/client-api/tests/native_acceptance/README.md#run).
+Its file-host adapter does not qualify platform protected storage. The
+[scoped paired result](../../chorus/src/controllers/client-api/tests/native_acceptance/README.md#current-qualification)
+covers the tested consumer implementation/published pins, not broader standalone
+checks or production rollout. Paired regression code and reproduction commands
+remain in the linked local evidence bundle, not this repository.
+
 Parent integration must start the actual Go client-api and provide trusted pin
 configuration independently. This SDK never starts or builds Go fixtures.
 Set `TINKLE_E2E_HOST`, `TINKLE_E2E_PORT`, `TINKLE_E2E_SERVER_PIN` (64 hex),
@@ -325,4 +365,5 @@ cargo test --locked -p libtinkle --test client_api_external -- --ignored
 
 This opt-in lane checks pinned Bootstrap, InitConnect-wrapped SendCode, and a
 nonempty verification identifier. It does not claim full real-service enrollment
-acceptance. That later lane must exercise the actual authn/protected-store path.
+acceptance. Use the Chorus runner above for that separate authn/protected-store
+fixture boundary, without treating its existence as a recorded execution.

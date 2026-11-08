@@ -1,4 +1,4 @@
-# Public schema pinning
+# Public dependency pinning
 
 The SDK uses prost data bindings from the public BSR Cargo index:
 
@@ -11,7 +11,54 @@ There is no tonic dependency, local production protobuf build, or vendored
 `.proto` tree. `tinkle-schema::proto` re-exports the prost artifact; canonical
 method inventory and descriptor checks validate the application boundary.
 
-## Current published pin
+## SDK pins and qualification
+
+The coordinated pins are exact crates.io `=1.0.0-rc.4` for all three
+Syntra crates, retaining `default-features = false, features = ["tcp"]` for
+`syntra-net`. The companion gateway uses published Go `v1.0.0-rc.3`.
+Read `Cargo.toml` / `Cargo.lock` for exact installed versions/checksums.
+
+| Authority | Published reference |
+| --- | --- |
+| Protocol and Go integration | [Go rc.3 README](https://github.com/tinkle-org/syntra-go/blob/v1.0.0-rc.3/README.md) and [connections](https://github.com/tinkle-org/syntra-go/blob/v1.0.0-rc.3/CONNECTION.md) |
+| Rust core release | [syntra-core-v1.0.0-rc.4](https://github.com/tinkle-org/syntra-rs/tree/syntra-core-v1.0.0-rc.4) |
+| Rust runtime release | [syntra-runtime-v1.0.0-rc.4](https://github.com/tinkle-org/syntra-rs/tree/syntra-runtime-v1.0.0-rc.4) and [runtime budget API](https://docs.rs/syntra-runtime/1.0.0-rc.4/syntra_runtime/elapsed/struct.ElapsedDeadline.html) |
+| Rust TCP release | [syntra-net-v1.0.0-rc.4](https://github.com/tinkle-org/syntra-rs/tree/syntra-net-v1.0.0-rc.4) and [connection ownership](https://github.com/tinkle-org/syntra-rs/blob/syntra-net-v1.0.0-rc.4/CONNECTION.md) |
+
+These are crate-specific release tags, not a workspace-wide `v1.0.0-rc.4` tag.
+SDK mechanics remain upstream; the application budget integration contract is in
+[architecture](docs/architecture.md#request-budget-integration-contract).
+The rc.4 consumers paired with Go rc.3 passed
+[scoped application request-budget qualification](../chorus/src/controllers/client-api/tests/native_acceptance/README.md#current-qualification).
+The acceptance README identifies the externally retained evidence bundle with
+tested source fingerprints, published dependency checksums, commands, and results.
+This closes the request-wide budget gap for that consumer implementation and those
+pins, not broader standalone checks, CI status, or rollout readiness.
+The dated rc.3 results below remain historical, not rc.4 evidence.
+
+Use the pinned toolchain and ordinary published dependencies, without source
+overrides. Run standalone checks separately; the paired result does not establish
+their outcome:
+
+```sh
+cargo metadata --locked --all-features --format-version 1
+cargo fmt --all -- --check
+cargo check --locked --workspace --all-targets --all-features
+cargo test --locked --workspace --all-features --verbose
+cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings
+bash scripts/generate-bindings.sh --check
+cargo check --locked -p libtinkle-web -p tinkle-schema --target wasm32-unknown-unknown
+python3 scripts/with-native-fixture.py cargo test --locked -p libtinkle --test mobile_fixture -- --ignored
+```
+
+Use the separate [Chorus actual-application lane](../chorus/src/controllers/client-api/tests/native_acceptance/README.md#run)
+for the baseline fixture; cache-only paired regressions and reproduction commands
+remain in that external evidence bundle. Changed pins or budgets require fresh
+scoped qualification. Retain revisions/dirty baseline, toolchains, resolved
+versions and checksums/features, commands/filters, timestamps, invocation IDs,
+exit results, skips, and raw evidence paths.
+
+## Current published schema pin
 
 The published dependency is
 `tinkle-org_schema_community_neoeinstein-prost` version
@@ -34,9 +81,10 @@ the same published dependency and committed lockfile with `--locked`. They do no
 depend on a schema checkout, a Cargo registry patch or `SCHEMA_CANDIDATE_REF`.
 The descriptor tests check the complete method inventory and exact message shapes.
 
-## Local published-pin validation (2026-11-07)
+## Historical rc.3 published-pin validation (2026-11-07)
 
-These checks ran in the original, unpatched libtinkle workspace on macOS arm64
+These historical checks ran with Rust Syntra rc.3, not the rc.4 pins above,
+in the original, unpatched libtinkle workspace on macOS arm64
 with Rust/Cargo 1.99.1, including the existing dirty enrollment and workflow-test
 changes. The downloaded `.crate` SHA-256 matches the Cargo checksum above.
 `cargo metadata --locked --all-features --format-version 1` confirmed the schema
@@ -74,13 +122,24 @@ All post-change checks above passed with zero failures.
 The mobile fixture is a host-only Rust SDK/server harness. These results do not
 establish installed iOS/Android consumer acceptance, Keychain/Keystore durability,
 or actual Chorus production-handler acceptance. External acceptance tests remained
-ignored in the ordinary workspace run above. The parent subsequently ran the
-separate published-only Chorus production-handler lane: **PASSED**, 2026-11-07
+ignored in the ordinary workspace run above. The separate published-only Chorus
+production-handler run **passed** on 2026-11-07,
 08:52:05–08:52:38 UTC, invocation `ca7630bb-35ae-4054-a7bd-5958e5200ca4`.
-[Chorus evidence](../chorus/src/controllers/client-api/SYNTRA_E2E.md#published-application-acceptance-2026-11-07)
-records the first attempt's stale probe assertion, fixture-only correction, raw
-pins/checksums, and passing rerun. Mobile OS storage, network/trust, capacity,
-production deployment, and the operator authn-restore gate remain separate.
+That run used Go rc.2/Rust rc.3, with direct Logout `Ok(true)` in 184 ms and a
+first-wrapped correlated response in 125 ms. Its first attempt had a stale
+restore-probe assertion corrected only in the fixture. Historical raw evidence:
+`/var/folders/xv/g_j4t2793xdbd_wnr290xgyw0000gn/T/opencode/native-published-logout-20261107-fixed/`
+(`published-sdk-evidence.json`, `strict-logout-evidence.txt`). These are historical
+temporary-file references, not an archive or an availability guarantee.
+
+The later recorded precommit run on 2026-11-07, 16:52:40–16:53:16 UTC,
+invocation `e409fd86-d039-43dc-911a-62b683684623`, also used the old pins and
+reported healthy direct/wrapped responses in 189 ms / 64 ms. Evidence reference:
+`/var/folders/xv/g_j4t2793xdbd_wnr290xgyw0000gn/T/opencode/native-precommit-20261107/`.
+Neither run qualifies the new request-wide budget contract. Mobile OS storage,
+network/trust, capacity, deployment, and the mandatory
+[authn restore gate](../chorus/src/services/authn/README.md#authn-restore-safety-gate)
+remain separate.
 
 ## Optional future-schema development
 
@@ -113,5 +172,7 @@ and run ordinary workspace checks plus binding parity against the released
 artifact. Descriptor tests must match the full method inventory and exact
 SignIn/enrollment/InitConnect fields.
 
-Syntra remains exact crates.io `syntra-core`, `syntra-runtime`, and `syntra-net`
-`=1.0.0-rc.3`. `syntra-net` has default features disabled and enables only `tcp`.
+Keep the three Syntra dependencies aligned with the
+[SDK pins](#sdk-pins-and-qualification), without source
+patches. A changed manifest/lockfile requires new qualification; the historical
+schema-only lockfile update above is not evidence for a later SDK upgrade.

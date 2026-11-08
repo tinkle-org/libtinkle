@@ -278,7 +278,10 @@ impl Client {
 
     /// The sole post-fence RPC is best-effort revocation on the captured,
     /// already-authenticated channel. It never dials or falls back to Bootstrap.
-    pub(crate) async fn retire_signed_out_transport(&self, revoke_remote: bool) -> (String, bool) {
+    pub(crate) async fn retire_signed_out_transport(
+        &self,
+        revoke_budget: Option<&syntra_runtime::elapsed::ElapsedDeadline>,
+    ) -> (String, bool) {
         self.suspended.store(true, Ordering::SeqCst);
         self.stop_supervisor().await;
         let _connection = self.connect_lock.lock().await;
@@ -310,19 +313,22 @@ impl Client {
                 None
             }
         };
-        let confirmed = if let Some(generation) = generation.filter(|_| revoke_remote) {
+        let confirmed = if let Some((generation, budget)) = generation.zip(revoke_budget) {
             let mut caller = self.background_clone();
             caller.call_generation = Some(generation);
             caller.logout_only = true;
-            let result: Result<tinkle_schema::proto::LogoutResponse, TinkleError> =
-                crate::services::call_typed(
-                    &caller,
+            let result = caller
+                .call_initialized_with_budget(
                     tinkle_schema::methods::accountservice::LOGOUT,
-                    &tinkle_schema::proto::LogoutRequest {},
-                    3_000,
+                    Zeroizing::new(tinkle_schema::proto::LogoutRequest {}.encode_to_vec()),
+                    budget,
+                    &CancelToken::new(),
                 )
                 .await;
-            result.is_ok_and(|response| response.logged_out)
+            result.is_ok_and(|bytes| {
+                tinkle_schema::proto::LogoutResponse::decode(bytes.as_slice())
+                    .is_ok_and(|response| response.logged_out)
+            })
         } else {
             false
         };
@@ -1032,18 +1038,63 @@ impl Client {
     ) -> Result<Vec<u8>, TinkleError> {
         let payload = Zeroizing::new(payload);
         self.check_call_admission(method)?;
-        let clock = syntra_runtime::elapsed::ElapsedClock::new();
+        let budget = self.call_budget(timeout_ms)?;
+        self.call_initialized_with_budget(method, payload, &budget, token)
+            .await
+    }
+
+    /// Resolve default/requested and deployment limits once, before any local wait.
+    pub(crate) fn call_budget(
+        &self,
+        timeout_ms: u32,
+    ) -> Result<syntra_runtime::elapsed::ElapsedDeadline, TinkleError> {
         let duration = if timeout_ms == 0 {
             self.config.connection.default_timeout
         } else {
             std::time::Duration::from_millis(timeout_ms as u64)
         };
-        let deadline = clock.now() + duration;
+        syntra_runtime::elapsed::ElapsedClock::new()
+            .deadline_after(duration.min(self.config.connection.max_rpc_timeout))
+            .map_err(|_| Self::call_budget_elapsed())
+    }
+
+    /// Fail closed on exhaustion or clock loss, never falling back to SDK default zero.
+    fn remaining_timeout_ms(
+        budget: &syntra_runtime::elapsed::ElapsedDeadline,
+    ) -> Result<u32, TinkleError> {
+        let remaining = budget
+            .remaining()
+            .map_err(|_| Self::call_budget_elapsed())?;
+        let millis = remaining.as_millis().min(u128::from(u32::MAX)) as u32;
+        if millis == 0 {
+            return Err(Self::call_budget_elapsed());
+        }
+        Ok(millis)
+    }
+
+    /// One sanitized error for a spent or unusable local call budget.
+    fn call_budget_elapsed() -> TinkleError {
+        TinkleError::Syntra(syntra_core::SyntraError::DeadlineExceeded(
+            "initialization/call budget elapsed".into(),
+        ))
+    }
+
+    /// Reuse the caller's original cutoff, including retained logout lifecycle time.
+    async fn call_initialized_with_budget(
+        &self,
+        method: &str,
+        payload: Zeroizing<Vec<u8>>,
+        budget: &syntra_runtime::elapsed::ElapsedDeadline,
+        token: &CancelToken,
+    ) -> Result<Vec<u8>, TinkleError> {
+        self.check_call_admission(method)?;
+        // Preserve the conservative outer pre-poll timeout; do not post-check an
+        // SDK-selected response with ElapsedDeadline::run.
         let result = tokio::select! {
             biased;
             _ = self.authorization.revoked.cancelled(), if !self.logout_only => Err(TinkleError::SignedOut),
-            result = clock.timeout_until(deadline, self.call_initialized_inner(method, payload, timeout_ms, token)) =>
-                result.map_err(|_| TinkleError::Syntra(syntra_core::SyntraError::DeadlineExceeded("initialization/call budget elapsed".into())))?,
+            _ = budget.expired() => Err(Self::call_budget_elapsed()),
+            result = self.call_initialized_inner(method, payload, budget, token) => result,
             _ = token.cancelled() => Err(TinkleError::Syntra(syntra_core::SyntraError::Cancelled("call cancelled".into()))),
         };
         if result
@@ -1099,14 +1150,16 @@ impl Client {
         &self,
         method: &str,
         payload: Zeroizing<Vec<u8>>,
-        timeout_ms: u32,
+        budget: &syntra_runtime::elapsed::ElapsedDeadline,
         token: &CancelToken,
     ) -> Result<Vec<u8>, TinkleError> {
         let (conn, initialized) = self.live_conn().await?;
         self.check_call_admission(method)?;
         if !method.starts_with("/tinkle.v1.") {
+            let encoded = payload.to_vec();
+            let timeout_ms = Self::remaining_timeout_ms(budget)?;
             return conn
-                .call_cancellable(method, payload.to_vec(), timeout_ms, token)
+                .call_cancellable(method, encoded, timeout_ms, token)
                 .await
                 .map_err(Into::into);
         }
@@ -1119,8 +1172,10 @@ impl Client {
         self.check_call_admission(method)?;
         if *ready {
             drop(ready);
+            let encoded = payload.to_vec();
+            let timeout_ms = Self::remaining_timeout_ms(budget)?;
             return conn
-                .call_cancellable(method, payload.to_vec(), timeout_ms, token)
+                .call_cancellable(method, encoded, timeout_ms, token)
                 .await
                 .map_err(Into::into);
         }
@@ -1136,6 +1191,7 @@ impl Client {
         };
         let encoded = request.encode_to_vec();
         crate::enrollment::wipe_bytes(std::mem::take(&mut request.payload));
+        let timeout_ms = Self::remaining_timeout_ms(budget)?;
         let response = Zeroizing::new(
             conn.call_cancellable(
                 "/tinkle.v1.ConnectionService/InitConnect",
@@ -1156,6 +1212,9 @@ impl Client {
         *ready = true;
         drop(ready);
         // No wrapped request is replayed on an ambiguous result or cancellation.
+        if self.authorization.is_signed_out() {
+            return Ok(output.to_vec());
+        }
         let watch = self.watch.lock().await.clone();
         if !watch.is_empty() && !self.authorization.is_signed_out() {
             let mut live = self.live.write().await;
@@ -4017,6 +4076,498 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::TargetDemand;
+
+    /// Observe actual SDK-admitted budgets, without the legacy wire fixture adapter.
+    #[derive(Default)]
+    struct BudgetHandler(std::sync::Mutex<Vec<(String, std::time::Duration)>>);
+
+    impl syntra_runtime::Handler for BudgetHandler {
+        fn authorize(
+            &self,
+            _: &syntra_runtime::Principal,
+            _: &str,
+        ) -> Result<(), syntra_runtime::AuthError> {
+            Ok(())
+        }
+
+        fn handle(
+            &self,
+            _: String,
+            _: Vec<u8>,
+            _: syntra_runtime::CancelToken,
+        ) -> syntra_runtime::HandlerFut {
+            panic!("budget fixture requires the published request context")
+        }
+
+        fn handle_with_context(
+            &self,
+            method: String,
+            payload: Vec<u8>,
+            _: syntra_runtime::CancelToken,
+            lease: syntra_runtime::ExecutionLease,
+            context: syntra_runtime::terminal::RequestContext,
+        ) -> syntra_runtime::HandlerFut {
+            use prost::Message;
+            let wrapped = method == "/tinkle.v1.ConnectionService/InitConnect";
+            let method = if wrapped {
+                tinkle_schema::proto::InitConnectRequest::decode(payload.as_slice())
+                    .unwrap()
+                    .method
+            } else {
+                method
+            };
+            self.0
+                .lock()
+                .unwrap()
+                .push((method.clone(), context.budget().remaining().unwrap()));
+            Box::pin(async move {
+                let _lease = lease;
+                let payload = if method.ends_with("/Logout") {
+                    tinkle_schema::proto::LogoutResponse { logged_out: true }.encode_to_vec()
+                } else {
+                    Vec::new()
+                };
+                syntra_runtime::HandlerOutcome::Payload(if wrapped {
+                    tinkle_schema::proto::InitConnectResponse {
+                        payload: payload.into(),
+                    }
+                    .encode_to_vec()
+                } else {
+                    payload
+                })
+            })
+        }
+    }
+
+    /// Fixed Returning key for a private, encrypted TCP budget fixture.
+    struct BudgetKeys;
+    impl syntra_core::secure_channel::KeyStore for BudgetKeys {
+        fn lookup(
+            &self,
+            _: &syntra_core::secure_channel::Context,
+        ) -> Result<syntra_core::secure_channel::Secret32, syntra_core::secure_channel::Error>
+        {
+            Ok(syntra_core::secure_channel::Secret32::new([9; 32]))
+        }
+    }
+
+    /// Connect one real published-SDK peer; tests may hold private lifecycle/init locks.
+    async fn budget_fixture(
+        returning: bool,
+        default: std::time::Duration,
+        max: std::time::Duration,
+    ) -> (
+        super::Client,
+        std::sync::Arc<BudgetHandler>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use super::*;
+        use syntra_core::secure_channel::{self, Carrier, Mode};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (key, pin) = secure_channel::generate_server_key().unwrap();
+        let trust = crate::ServerTrust {
+            server_public_key: pin,
+            server_key_id: 7,
+            scope: "budget-fixture".into(),
+        };
+        let info = crate::ClientInfo::new(
+            "device".into(),
+            "test".into(),
+            "1".into(),
+            "1".into(),
+            "1".into(),
+            Default::default(),
+        )
+        .unwrap();
+        let mut config = ClientConfig::new("127.0.0.1", info);
+        config.primary_port = listener.local_addr().unwrap().port();
+        config.fallback_port = None;
+        config.connection.default_timeout = default;
+        config.connection.max_rpc_timeout = max;
+        let source = if returning {
+            TrustSource::Returning {
+                trust,
+                enrollment: crate::Enrollment::new([9; 32], [8; 8], 1).unwrap(),
+            }
+        } else {
+            TrustSource::Bootstrap(trust)
+        };
+        let client = Client::new(config, source, crate::InMemoryCursorStore::new());
+        let handler = Arc::new(BudgetHandler::default());
+        let recorded = handler.clone();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let security = secure_channel::ServerConfig {
+                mode: if returning {
+                    Mode::Returning
+                } else {
+                    Mode::Bootstrap
+                },
+                carrier: Carrier::Tcp,
+                server_key_id: 7,
+                scope: b"budget-fixture".to_vec(),
+                private_key: key,
+                store: Some(Arc::new(BudgetKeys)),
+            };
+            let factory: Arc<dyn syntra_net::AuthenticatorFactory> =
+                Arc::new(
+                    |_: &secure_channel::VerifiedIdentity| -> Result<
+                        Arc<dyn syntra_runtime::Authenticator>,
+                        syntra_runtime::AuthError,
+                    > { Ok(Arc::new(syntra_runtime::AllowAnonymous)) },
+                );
+            let handle = syntra_net::tcp::accept_stream(
+                stream,
+                &security,
+                factory,
+                recorded,
+                Default::default(),
+                Default::default(),
+            )
+            .await
+            .unwrap();
+            while !handle.is_closed() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            handle.close().await;
+        });
+        client.connect().await.unwrap();
+        (client, handler, server)
+    }
+
+    /// Every dispatch branch hands off only the remainder after a contended lock.
+    #[tokio::test]
+    async fn call_budget_charges_wait_before_sdk_dispatch() {
+        use std::time::Duration;
+        for requested in [0, 600] {
+            for (ready, method) in [
+                (false, "/tinkle.v1.AuthService/SendCode"),
+                (true, "/tinkle.v1.AuthService/SendCode"),
+                (false, "/example.Echo/Echo"),
+            ] {
+                let (client, handler, server) =
+                    budget_fixture(false, Duration::from_millis(600), Duration::from_secs(2)).await;
+                let (_, initialized) = client.live_conn().await.unwrap();
+                *initialized.lock().await = ready;
+                let init_guard = initialized.lock().await;
+                let live_guard = if method.starts_with("/tinkle.v1.") {
+                    None
+                } else {
+                    Some(client.live.write().await)
+                };
+                let call = client.call_raw(method, Vec::new(), requested);
+                tokio::pin!(call);
+                assert!(futures_util::poll!(&mut call).is_pending());
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                drop(live_guard);
+                drop(init_guard);
+                call.await.unwrap();
+                let remaining = handler.0.lock().unwrap()[0].1;
+                assert!(
+                    remaining < Duration::from_millis(450),
+                    "SDK received renewed budget: {remaining:?}"
+                );
+                assert!(remaining > Duration::ZERO);
+                client.close().await;
+                server.await.unwrap();
+            }
+        }
+    }
+
+    /// The configured maximum bounds the outer wait for explicit and default budgets.
+    #[tokio::test]
+    async fn call_budget_maximum_includes_initialization_wait() {
+        use std::time::Duration;
+        for requested in [0, 1_000] {
+            let (client, handler, server) =
+                budget_fixture(false, Duration::from_secs(1), Duration::from_millis(40)).await;
+            let (_, initialized) = client.live_conn().await.unwrap();
+            let guard = initialized.lock().await;
+            let call = client.call_raw("/tinkle.v1.AuthService/SendCode", Vec::new(), requested);
+            tokio::pin!(call);
+            assert!(futures_util::poll!(&mut call).is_pending());
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            assert!(
+                matches!(futures_util::poll!(&mut call), std::task::Poll::Ready(Err(error)) if error.code() == syntra_core::ErrorCode::DeadlineExceeded),
+                "configured maximum did not expire queued call"
+            );
+            drop(guard);
+            assert!(handler.0.lock().unwrap().is_empty());
+            client.close().await;
+            server.await.unwrap();
+        }
+    }
+
+    /// Fractional milliseconds must expire locally instead of becoming SDK default zero.
+    #[tokio::test]
+    async fn call_budget_submillisecond_never_dispatches() {
+        use std::time::Duration;
+        let (client, handler, server) =
+            budget_fixture(false, Duration::from_micros(900), Duration::from_secs(1)).await;
+        let error = client
+            .call_raw("/example.Echo/Echo", Vec::new(), 0)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), syntra_core::ErrorCode::DeadlineExceeded);
+        assert!(
+            handler.0.lock().unwrap().is_empty(),
+            "sub-ms budget was handed to SDK as default zero"
+        );
+        client.close().await;
+        server.await.unwrap();
+    }
+
+    /// Handoff floors fractional milliseconds and rejects expiry or clock loss.
+    #[tokio::test(start_paused = true)]
+    async fn call_budget_floor_and_clock_loss_never_use_default_zero() {
+        use super::Client;
+        use std::time::Duration;
+        let clock = syntra_runtime::elapsed::ElapsedClock::lifecycle_driven();
+        let budget = clock.deadline_after(Duration::from_micros(2_750)).unwrap();
+        assert_eq!(Client::remaining_timeout_ms(&budget).unwrap(), 2);
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert_eq!(Client::remaining_timeout_ms(&budget).unwrap(), 1);
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert_eq!(
+            Client::remaining_timeout_ms(&budget).unwrap_err().code(),
+            syntra_core::ErrorCode::DeadlineExceeded
+        );
+        tokio::time::advance(Duration::from_micros(750)).await;
+        assert_eq!(
+            Client::remaining_timeout_ms(&budget).unwrap_err().code(),
+            syntra_core::ErrorCode::DeadlineExceeded
+        );
+        let budget = clock.deadline_after(Duration::from_secs(1)).unwrap();
+        clock.invalidate();
+        assert_eq!(
+            Client::remaining_timeout_ms(&budget).unwrap_err().code(),
+            syntra_core::ErrorCode::DeadlineExceeded
+        );
+    }
+
+    /// Raw Logout obeys the caller's requested budget rather than the high-level cap.
+    #[tokio::test]
+    async fn call_budget_raw_logout_keeps_requested_timeout() {
+        use std::time::Duration;
+        let (client, handler, server) =
+            budget_fixture(true, Duration::from_secs(30), Duration::from_secs(120)).await;
+        client
+            .call_raw(
+                tinkle_schema::methods::accountservice::LOGOUT,
+                Vec::new(),
+                4_000,
+            )
+            .await
+            .unwrap();
+        assert!(handler.0.lock().unwrap()[0].1 > Duration::from_secs(3));
+        assert!(!client.is_signed_out());
+        client.close().await;
+        server.await.unwrap();
+    }
+
+    /// Protected clearing can fail or wait independently of the remote budget.
+    #[derive(Default)]
+    struct BudgetStore {
+        fail: std::sync::atomic::AtomicBool,
+        calls: std::sync::atomic::AtomicUsize,
+        entered: tokio::sync::Notify,
+        released: tokio::sync::Notify,
+    }
+    #[async_trait::async_trait]
+    impl crate::SecureEnrollmentStore for BudgetStore {
+        async fn clear(&self) -> Result<(), crate::SecureStoreError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.entered.notify_one();
+            self.released.notified().await;
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                Err(crate::SecureStoreError)
+            } else {
+                Ok(())
+            }
+        }
+        async fn commit(
+            &self,
+            _: crate::SecureWrite,
+            _: &str,
+            _: &crate::SecretBlob,
+        ) -> Result<(), crate::SecureStoreError> {
+            Ok(())
+        }
+        async fn load_operation(
+            &self,
+            _: &str,
+        ) -> Result<Option<crate::SecretBlob>, crate::SecureStoreError> {
+            Ok(None)
+        }
+        async fn load_active(&self) -> Result<Option<crate::SecretBlob>, crate::SecureStoreError> {
+            Ok(None)
+        }
+    }
+
+    /// A partial lifecycle wait shrinks the original, configuration-clamped logout cap.
+    #[tokio::test]
+    async fn logout_budget_charges_lifecycle_wait_and_configured_maximum() {
+        use super::*;
+        use std::time::Duration;
+        for max_ms in [120_000, 600] {
+            for block_initialization in [false, true] {
+                let (client, handler, server) =
+                    budget_fixture(true, Duration::from_secs(30), Duration::from_millis(max_ms))
+                        .await;
+                let store = Arc::new(BudgetStore::default());
+                client
+                    .authorization
+                    .generation()
+                    .unwrap()
+                    .store(&client, store.clone(), None, None)
+                    .unwrap();
+                let (_, initialized) = client.live_conn().await.unwrap();
+                let connection_guard = if block_initialization {
+                    None
+                } else {
+                    Some(client.connect_lock.lock().await)
+                };
+                let init_guard = if block_initialization {
+                    Some(initialized.lock().await)
+                } else {
+                    None
+                };
+                let exiting = client.clone();
+                let waiter = tokio::spawn(async move { exiting.logout().await });
+                while !client.is_signed_out() {
+                    tokio::task::yield_now().await;
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                drop(connection_guard);
+                drop(init_guard);
+                store.entered.notified().await;
+                store.released.notify_one();
+                assert!(waiter.await.unwrap().unwrap());
+                let remaining = handler.0.lock().unwrap()[0].1;
+                assert!(
+                    remaining < Duration::from_millis(max_ms.min(3_000) - 150),
+                    "logout renewed its budget: {remaining:?}"
+                );
+                server.await.unwrap();
+            }
+        }
+    }
+
+    /// Lifecycle time consumes the first logout budget; local retries cannot renew it.
+    #[tokio::test]
+    async fn logout_budget_exhausted_by_lifecycle_still_clears_without_replay() {
+        use super::*;
+        use std::time::Duration;
+        let (client, handler, server) =
+            budget_fixture(true, Duration::from_secs(30), Duration::from_secs(120)).await;
+        let store = Arc::new(BudgetStore::default());
+        client
+            .authorization
+            .generation()
+            .unwrap()
+            .store(&client, store.clone(), None, None)
+            .unwrap();
+        store.fail.store(true, Ordering::SeqCst);
+        let guard = client.connect_lock.lock().await;
+        let exiting = client.clone();
+        let waiter = tokio::spawn(async move { exiting.logout().await });
+        while !client.is_signed_out() {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::sleep(Duration::from_millis(3_100)).await;
+        let joining = client.clone();
+        let joiner = tokio::spawn(async move { joining.logout().await });
+        tokio::task::yield_now().await;
+        drop(guard);
+        store.entered.notified().await;
+        assert!(
+            !waiter.is_finished(),
+            "logout must await durable clear acknowledgement"
+        );
+        store.released.notify_one();
+        assert!(matches!(
+            waiter.await.unwrap(),
+            Err(TinkleError::SecureStore)
+        ));
+        assert!(matches!(
+            joiner.await.unwrap(),
+            Err(TinkleError::SecureStore)
+        ));
+        store.fail.store(false, Ordering::SeqCst);
+        store.released.notify_one();
+        assert!(
+            !client.logout().await.unwrap(),
+            "expired remote budget cannot confirm revocation"
+        );
+        assert_eq!(store.calls.load(Ordering::SeqCst), 2);
+        assert!(
+            handler.0.lock().unwrap().is_empty(),
+            "expired logout was dispatched or replayed"
+        );
+        server.await.unwrap();
+    }
+
+    /// Remote expiry and a dropped waiter cannot abandon mandatory local clearing.
+    #[tokio::test]
+    async fn logout_budget_dropped_waiter_clear_outlives_remote_cutoff() {
+        use super::*;
+        use std::time::Duration;
+        let (client, handler, server) =
+            budget_fixture(true, Duration::from_secs(30), Duration::from_secs(120)).await;
+        let store = Arc::new(BudgetStore::default());
+        client
+            .authorization
+            .generation()
+            .unwrap()
+            .store(&client, store.clone(), None, None)
+            .unwrap();
+        let exiting = client.clone();
+        let waiter = tokio::spawn(async move { exiting.logout().await });
+        store.entered.notified().await;
+        waiter.abort();
+        let _ = waiter.await;
+        tokio::time::sleep(Duration::from_millis(3_100)).await;
+        assert_eq!(
+            client.logout_cleanup.status(),
+            crate::SessionCleanup::Pending
+        );
+        store.released.notify_one();
+        assert!(client.logout().await.unwrap());
+        assert_eq!(store.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(handler.0.lock().unwrap().len(), 1);
+        server.await.unwrap();
+    }
+
+    /// A signed-out wrapped response cannot wait for optional watch restoration.
+    #[tokio::test]
+    async fn logout_budget_confirmation_does_not_wait_for_watch_lock() {
+        use super::*;
+        use std::time::Duration;
+        let (client, handler, server) =
+            budget_fixture(true, Duration::from_secs(30), Duration::from_secs(120)).await;
+        let store = Arc::new(BudgetStore::default());
+        client
+            .authorization
+            .generation()
+            .unwrap()
+            .store(&client, store.clone(), None, None)
+            .unwrap();
+        let watch = client.watch.lock().await;
+        let exiting = client.clone();
+        let waiter = tokio::spawn(async move { exiting.logout().await });
+        // Keep the optional lock beyond the remote cutoff; mandatory reset waits too.
+        tokio::time::sleep(Duration::from_millis(3_100)).await;
+        assert!(!waiter.is_finished());
+        drop(watch);
+        store.entered.notified().await;
+        store.released.notify_one();
+        assert!(
+            waiter.await.unwrap().unwrap(),
+            "successful wrapped Logout lost confirmation on optional watch lock"
+        );
+        assert_eq!(handler.0.lock().unwrap().len(), 1);
+        server.await.unwrap();
+    }
 
     /// A queued old provisioner cannot use or reject an explicitly recovered configuration.
     #[tokio::test]

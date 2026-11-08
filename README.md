@@ -2,8 +2,10 @@
 
 Native Rust client runtime for Tinkle, with Swift/Kotlin bindings. Application
 RPCs, history, cache hydration, journal reconciliation and file transfers use
-encrypted Syntra TCP. `syntra-core`, `syntra-runtime` and `syntra-net` are exact
-crates.io dependencies at `=1.0.0-rc.3`; `syntra-net` enables only `tcp`.
+encrypted Syntra TCP. The SDK uses exact rc.4 pins for
+`syntra-core`, `syntra-runtime`, and TCP-only `syntra-net`; see
+[dependency pins, upstream release links, and scoped paired qualification](PROTO_PINNING.md#sdk-pins-and-qualification).
+`Cargo.toml` / `Cargo.lock` own the installed pins.
 
 ## Native configuration
 
@@ -138,7 +140,15 @@ responses cannot revive it. `Ok(true)` confirms remote revocation; `Ok(false)`
 means remote revocation is unconfirmed but local durable clearing succeeded.
 Cleanup errors leave `is_signed_out()` true and are never a durable-logout ack.
 Resolve failed host invalidation before allowing restoration after restart.
-Use a new Client for deliberate sign-in. See `docs/device-enrollment.md`.
+Use a new Client for deliberate sign-in. The
+[high-level Logout contract](docs/device-enrollment.md#local-sign-out-and-remote-revocation)
+requires a single remote-eligibility budget of up to three seconds, captured before fencing
+or lifecycle waits, retained without renewal on join/retry. Local durable clearing
+is independent and may outlast three seconds. The
+[scoped paired result](PROTO_PINNING.md#sdk-pins-and-qualification) does not imply
+a global three-second wall-clock guarantee for `logout()`.
+Raw calls retain their selected timeout; see the
+[request-budget integration contract](docs/architecture.md#request-budget-integration-contract).
 
 ## Portable schema checks
 

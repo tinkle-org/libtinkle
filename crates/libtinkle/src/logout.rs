@@ -16,8 +16,13 @@ pub(crate) type CleanupAttempt = Shared<BoxFuture<'static, Result<bool, TinkleEr
 /// The first cause is retained across retries; observation never confirms Logout.
 #[derive(Clone)]
 enum CleanupCause {
-    Logout,
-    Retired { principal: String },
+    /// Clock failure disables remote work but cannot bypass local cleanup.
+    Logout {
+        budget: Option<syntra_runtime::elapsed::ElapsedDeadline>,
+    },
+    Retired {
+        principal: String,
+    },
 }
 
 /// A joinable attempt and progress retained across local-storage retries.
@@ -50,7 +55,8 @@ impl LogoutCleanup {
         &self,
         client: Client,
     ) -> Shared<BoxFuture<'static, Result<bool, TinkleError>>> {
-        self.join_cause(client, CleanupCause::Logout)
+        let budget = client.call_budget(3_000).ok();
+        self.join_cause(client, CleanupCause::Logout { budget })
     }
 
     /// Retire locally from exact negative evidence, never issuing remote Logout.
@@ -155,11 +161,13 @@ impl Client {
         self.pause_retirement_schedule().await;
         let mut progress = self.logout_cleanup.progress.lock().await;
         if progress.principal.is_none() {
-            let (principal, confirmed) = self
-                .retire_signed_out_transport(matches!(cause, CleanupCause::Logout))
-                .await;
+            let budget = match cause {
+                CleanupCause::Logout { budget } => budget.as_ref(),
+                CleanupCause::Retired { .. } => None,
+            };
+            let (principal, confirmed) = self.retire_signed_out_transport(budget).await;
             let principal = match cause {
-                CleanupCause::Logout => principal,
+                CleanupCause::Logout { .. } => principal,
                 CleanupCause::Retired { principal } => principal.clone(),
             };
             progress.principal = Some(principal);

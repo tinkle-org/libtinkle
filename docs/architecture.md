@@ -18,8 +18,10 @@ transport selection. Its artifact/dependency update is coordinated separately.
 `tinkle-storage` owns application SQLite rows, journals, transfer state and
 background jobs; authorization keys never enter that database.
 
-All three Syntra crates are exact crates.io `=1.0.0-rc.3` dependencies, resolved
-and tested through the ordinary Cargo workspace without local patches. The application/runtime boundary is
+All three Syntra crates use exact crates.io rc.4 dependencies without local
+patches. Installed versions, crate-specific release tags, upstream budget APIs,
+and scoped paired qualification are in [dependency pinning](../PROTO_PINNING.md#sdk-pins-and-qualification).
+The application/runtime boundary is
 opaque protobuf payload bytes. Device enrollment maps the public schema's exact
 messages into zeroizing native owners and secret-free status projections.
 
@@ -81,6 +83,40 @@ uses the published Cargo pin and ordinary `--locked` workspace checks; required
 CI needs neither Buf nor schema-candidate generation.
 
 ## Application data
+
+### Request-budget integration contract
+
+`crates/libtinkle/src/client.rs` selects the initial requested timeout (or runtime
+default for zero), clamps it to the configured maximum, and retains that one
+budget through live-connection acquisition and initialization-lock waiting.
+Immediately before either the direct call or first InitConnect-wrapped call, it
+passes only positive, floored remaining milliseconds to the runtime. Exhaustion
+or a sub-millisecond remainder fails rather than passing zero and selecting a new default.
+No lock acquisition, wrapper, or runtime handoff grants a fresh budget.
+
+The runtime call API accepts relative milliseconds, not this client's absolute
+cutoff. The original outer budget remains a conservative local bound: a result
+racing that cutoff can remain unconfirmed. Reduced handoff time does not establish
+an exact distributed deadline or prevent an already-admitted remote effect.
+
+Raw `call_raw` / `call_raw_cancellable` calls retain the caller-selected timeout
+policy, including raw Logout; they do not acquire the high-level three-second
+Logout policy by method name. The high-level remote-eligibility contract belongs
+to [device enrollment](device-enrollment.md#local-sign-out-and-remote-revocation),
+with application integration in `crates/libtinkle/src/{logout,client,push}.rs`.
+SDK timing and emission semantics remain in the published references in
+`PROTO_PINNING.md`, not reproduced here.
+
+The implementation boundary is `client.rs:call_budget`,
+`call_initialized_with_budget`, and `remaining_timeout_ms`, with retained Logout
+ownership in `logout.rs`. Forwarding the original `timeout_ms` after locks or
+starting a new 3000 ms call after lifecycle waits would violate this contract.
+The [scoped paired result](../../chorus/src/controllers/client-api/tests/native_acceptance/README.md#current-qualification)
+qualifies the tested consumer implementation/published pins. Changed pins or
+budgets require fresh scoped qualification; the result is not a global
+suspension or `logout()` wall-clock guarantee.
+
+### Data flow
 
 Typed request → application protobuf → Syntra RPC → encrypted TCP → response
 correlation → application decode. Notifications are opaque reconciliation hints

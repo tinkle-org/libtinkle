@@ -1145,9 +1145,8 @@ impl Client {
     /// Dropped waiters leave a retained task running. Later callers join it;
     /// failed local steps can be retried without repeating remote revocation.
     pub async fn logout(&self) -> Result<bool, TinkleError> {
-        // Synchronous shared fence erases all registered secret cells and
-        // cancels provisioning RPCs before awaiting locks, network or storage.
-        self.begin_signed_out();
+        // Join captures the remote budget and first cause, then synchronously
+        // fences secrets/provisioning before scheduling or awaiting cleanup.
         self.logout_cleanup.join(self.background_clone()).await
     }
 }
