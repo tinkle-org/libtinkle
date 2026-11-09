@@ -12,6 +12,7 @@ SDK = ROOT / "packages/kotlin"
 
 class KotlinSdkLayoutTest(unittest.TestCase):
     def test_fresh_package_has_handwritten_build_and_consumer_inputs(self):
+        """Require the Kotlin build and smoke-consumer sources before staging."""
         required = (
             ".gitignore", "README.md", "LICENSE", "build.gradle.kts",
             "settings.gradle.kts", "gradle.properties", "gradlew", "gradlew.bat",

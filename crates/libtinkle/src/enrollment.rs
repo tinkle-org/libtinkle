@@ -30,6 +30,7 @@ impl SecretBlob {
     }
 }
 impl fmt::Debug for SecretBlob {
+    /// Format the owner without revealing protected bytes.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("SecretBlob([redacted])")
     }
@@ -171,6 +172,7 @@ pub(crate) struct RestorePermit {
 }
 
 impl RestorePermit {
+    /// Capture cleanup ownership and the current runtime before acquiring a permit.
     fn new(
         client: &Client,
         store: Arc<dyn SecureEnrollmentStore>,
@@ -212,6 +214,7 @@ impl RestorePermit {
         Ok(())
     }
 
+    /// Withdraw only this failed restore's binding before releasing host exclusion.
     async fn clear_binding(&mut self) {
         if let Some(binding) = &self.binding {
             self.client
@@ -241,6 +244,7 @@ impl RestorePermit {
             .map_err(|_| storage_error())?
     }
 
+    /// Finalize under one owner, withdrawing failures and preserving release errors.
     async fn finish_owned<T>(&mut self, result: Result<T, TinkleError>) -> Result<T, TinkleError> {
         if result.is_err() {
             self.clear_binding().await;
@@ -268,6 +272,7 @@ impl RestorePermit {
 }
 
 impl Drop for RestorePermit {
+    /// Schedule withdrawal and release retries, or retire the secret at terminal shutdown.
     fn drop(&mut self) {
         let Some(runtime) = self.runtime.take() else {
             // Runtime shutdown can drop the cleanup owner before withdrawal or
@@ -309,6 +314,7 @@ pub struct SignInDetails {
     verification_id: String,
 }
 impl SignInDetails {
+    /// Adopt bounded, nonempty phone, code and verification inputs without logging them.
     pub fn new(
         phone_number: String,
         code: String,
@@ -332,6 +338,7 @@ impl SignInDetails {
         }
         Ok(details)
     }
+    /// Build a SignIn request using this durable operation's current capability.
     pub(crate) fn request(
         &self,
         operation: &DurableOperation,
@@ -347,6 +354,7 @@ impl SignInDetails {
     }
 }
 impl fmt::Debug for SignInDetails {
+    /// Redact all sign-in inputs from diagnostic formatting.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("SignInDetails([redacted])")
     }
@@ -360,11 +368,13 @@ pub struct DurableOperation {
     store: Arc<dyn SecureEnrollmentStore>,
 }
 impl DurableOperation {
+    /// Return the public UUID used to recover this operation from protected storage.
     pub fn operation_id(&self) -> &str {
         &self.record.operation_id
     }
 }
 impl fmt::Debug for DurableOperation {
+    /// Redact the operation's capability and stored record.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("DurableOperation([redacted])")
     }
@@ -378,11 +388,13 @@ pub struct PersistedEnrollment {
     store: Arc<dyn SecureEnrollmentStore>,
 }
 impl PersistedEnrollment {
+    /// Borrow the validated candidate status without granting Returning authority.
     pub fn status(&self) -> &DeviceEnrollmentStatus {
         self.record.status.as_ref().expect("validated candidate")
     }
 }
 impl fmt::Debug for PersistedEnrollment {
+    /// Redact the persisted candidate's key and capability.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("PersistedEnrollment([redacted])")
     }
@@ -395,6 +407,7 @@ pub struct SignInOutcome {
     pub enrollment: PersistedEnrollment,
 }
 impl fmt::Debug for SignInOutcome {
+    /// Redact the sign-in projection and enrollment from diagnostics.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("SignInOutcome([redacted])")
     }
@@ -408,9 +421,11 @@ struct Record {
     key: Option<Arc<SecretCell>>,
 }
 
+/// Return a neutral binding/state error without including protected inputs.
 fn invalid() -> TinkleError {
     TinkleError::Codec("invalid enrollment binding or state".into())
 }
+/// Map host failure or ambiguous acknowledgement to the structured storage error.
 fn storage_error() -> TinkleError {
     TinkleError::SecureStore
 }
@@ -428,6 +443,7 @@ pub(crate) fn uuid(value: &str) -> bool {
         && value.bytes().any(|b| b != b'0' && b != b'-')
 }
 
+/// Generate a fresh UUID and revocable capability bound to provisioned trust.
 fn fresh_operation(trust: ServerTrust, epoch: &EnrollmentEpoch) -> Result<Record, TinkleError> {
     trust.validate()?;
     let mut id = [0u8; 16];
@@ -466,6 +482,7 @@ pub(crate) fn wipe_bytes(bytes: bytes::Bytes) {
     }
 }
 
+/// Require valid metadata and a strictly future expiry before adopting credentials.
 pub(crate) fn validate_status(status: &DeviceEnrollmentStatus) -> Result<(), TinkleError> {
     validate_status_structure(status)?;
     let now = SystemTime::now()
@@ -526,6 +543,7 @@ pub(crate) fn retained_metadata(
 }
 
 impl Record {
+    /// Validate and adopt one delivery under the operation's trust and authority fence.
     fn delivery(
         client: &Client,
         operation: &DurableOperation,
@@ -564,6 +582,7 @@ impl Record {
         })
     }
 
+    /// Encode the complete protected record while keeping temporary bytes zeroizing.
     fn encode(&self) -> Result<SecretBlob, TinkleError> {
         let mut bytes = Zeroizing::new(b"TINKLE-ENROLL-1".to_vec());
         bytes.extend_from_slice(self.operation_id.as_bytes());
@@ -584,6 +603,7 @@ impl Record {
         Ok(SecretBlob(bytes))
     }
 
+    /// Validate stored freshness and register decoded secrets under the current epoch.
     fn decode(blob: &SecretBlob, epoch: &EnrollmentEpoch) -> Result<Self, TinkleError> {
         let parsed = ParsedRecord::decode(blob)?;
         if let Some(status) = &parsed.status {
@@ -598,6 +618,7 @@ impl Record {
         })
     }
 
+    /// Construct Returning material only from a live, unexpired ACTIVE record.
     fn returning(&self) -> Result<TrustSource, TinkleError> {
         let status = self.status.as_ref().ok_or_else(invalid)?;
         validate_status(status)?;
@@ -621,6 +642,7 @@ impl ParsedRecord {
             return Err(invalid());
         }
         let mut input = blob.expose_secret();
+        /// Consume exactly one bounded field, rejecting truncated records.
         fn take<'a>(input: &mut &'a [u8], n: usize) -> Result<&'a [u8], TinkleError> {
             if input.len() < n {
                 return Err(invalid());
@@ -678,6 +700,7 @@ impl ParsedRecord {
     }
 }
 
+/// Persist independently of the waiter, attributing conditional revisions only by receipt.
 async fn commit(
     client: &Client,
     epoch: &EnrollmentEpoch,
@@ -782,6 +805,7 @@ impl Client {
         self.bind_namespace(&epoch, store).await.map(|_| ())
     }
 
+    /// Snapshot provisioned trust without exposing any enrollment key.
     pub(crate) async fn enrollment_trust(&self) -> ServerTrust {
         match &*self.trust_source.read().await {
             TrustSource::Bootstrap(trust)
@@ -917,6 +941,7 @@ impl Client {
         result
     }
 
+    /// Recheck the stored ACTIVE slot and acquire host exclusion before installation.
     async fn install_enrollment(
         &self,
         record: &Record,
@@ -979,6 +1004,7 @@ impl Client {
         .await
     }
 
+    /// Establish pinned Bootstrap work under the parent's route, endpoint and logout fences.
     pub(crate) async fn provisioning_client(
         &self,
         trust: &ServerTrust,
@@ -1021,6 +1047,7 @@ impl Client {
         Ok(client)
     }
 
+    /// Acknowledge a candidate only after validating its trust and protected write.
     pub(crate) async fn persist_delivery(
         &self,
         operation: &DurableOperation,
@@ -1046,6 +1073,7 @@ impl Client {
         })
     }
 
+    /// Persist a staged successor only for the current session, user and increasing epoch.
     pub(crate) async fn persist_rotation(
         &self,
         operation: &DurableOperation,
@@ -1095,6 +1123,7 @@ impl Client {
         })
     }
 
+    /// Copy trust from an already-locked source without recursively acquiring its lock.
     fn enrollment_trust_unlocked(&self, source: &TrustSource) -> ServerTrust {
         match source {
             TrustSource::Bootstrap(trust)
@@ -1103,6 +1132,7 @@ impl Client {
         }
     }
 
+    /// Verify activation over Bootstrap, persist ACTIVE, then install under a restore permit.
     pub(crate) async fn activate_persisted(
         &self,
         persisted: &PersistedEnrollment,
@@ -1172,9 +1202,11 @@ impl Client {
 
 /// Private request cleanup implemented for each secret-bearing generated request.
 pub(crate) trait SecretRequest: Message {
+    /// Erase request-owned credentials once the encoded buffer owns the outbound copy.
     fn wipe(&mut self);
 }
 impl SecretRequest for proto::SignInRequest {
+    /// Erase phone verification inputs and the operation capability.
     fn wipe(&mut self) {
         self.phone_number.zeroize();
         self.code.zeroize();
@@ -1183,7 +1215,10 @@ impl SecretRequest for proto::SignInRequest {
     }
 }
 macro_rules! secret_request {
-    ($($ty:ty),+ $(,)?) => {$ (impl SecretRequest for $ty { fn wipe(&mut self) { wipe_bytes(std::mem::take(&mut self.resume_secret)); } })+};
+    ($($ty:ty),+ $(,)?) => {$ (impl SecretRequest for $ty {
+        /// Erase this request's operation capability.
+        fn wipe(&mut self) { wipe_bytes(std::mem::take(&mut self.resume_secret)); }
+    })+};
 }
 secret_request!(
     proto::ResumeEnrollmentRequest,
@@ -1192,10 +1227,13 @@ secret_request!(
 );
 
 pub(crate) trait SecretResponse: Message + Default {
+    /// Erase decoded response secrets before their temporary owner is dropped.
     fn wipe(&mut self);
 }
 macro_rules! secret_response {
-    ($($ty:ty),+ $(,)?) => {$ (impl SecretResponse for $ty { fn wipe(&mut self) {
+    ($($ty:ty),+ $(,)?) => {$ (impl SecretResponse for $ty {
+        /// Erase a delivered authorization key, including partially decoded responses.
+        fn wipe(&mut self) {
         if let Some(enrollment) = &mut self.enrollment { wipe_bytes(std::mem::take(&mut enrollment.authorization_key)); }
     } })+};
 }
@@ -1205,6 +1243,7 @@ secret_response!(
     proto::RotateEnrollmentResponse
 );
 impl SecretResponse for proto::ActivateEnrollmentResponse {
+    /// Activation returns only status metadata and owns no key bytes to erase.
     fn wipe(&mut self) {}
 }
 
@@ -1213,21 +1252,25 @@ impl SecretResponse for proto::ActivateEnrollmentResponse {
 pub(crate) struct SecretReply<T: SecretResponse>(T);
 impl<T: SecretResponse> std::ops::Deref for SecretReply<T> {
     type Target = T;
+    /// Borrow the response while its secret-erasing owner remains alive.
     fn deref(&self) -> &T {
         &self.0
     }
 }
 impl<T: SecretResponse> std::ops::DerefMut for SecretReply<T> {
+    /// Mutably borrow the response without transferring secret cleanup ownership.
     fn deref_mut(&mut self) -> &mut T {
         &mut self.0
     }
 }
 impl<T: SecretResponse> Drop for SecretReply<T> {
+    /// Erase response secrets on every exit, including decode failure and cancellation.
     fn drop(&mut self) {
         self.0.wipe();
     }
 }
 
+/// Execute one enrollment RPC with zeroizing buffers and pre/post authority checks.
 pub(crate) async fn secret_call<Req: SecretRequest, Resp: SecretResponse>(
     client: &Client,
     method: &str,
@@ -1266,6 +1309,7 @@ pub(crate) fn sanitize_auth_error(error: TinkleError) -> TinkleError {
     }
 }
 
+/// Build a recovery request from the operation's still-live capability.
 pub(crate) fn resume_request(
     operation: &DurableOperation,
 ) -> Result<proto::ResumeEnrollmentRequest, TinkleError> {
@@ -1280,6 +1324,7 @@ pub(crate) fn resume_request(
             .into(),
     })
 }
+/// Build a rotation request without exposing the capability outside the RPC owner.
 pub(crate) fn rotate_request(
     operation: &DurableOperation,
 ) -> Result<proto::RotateEnrollmentRequest, TinkleError> {
@@ -1294,6 +1339,7 @@ pub(crate) fn rotate_request(
             .into(),
     })
 }
+/// Borrow the provisioned trust captured when this durable operation was created.
 pub(crate) fn operation_trust(operation: &DurableOperation) -> &ServerTrust {
     &operation.record.trust
 }
@@ -1329,6 +1375,7 @@ pub(crate) mod review_tests {
 
     #[async_trait]
     impl SecureEnrollmentStore for ReviewStore {
+        /// Return the fixture's current conditional namespace and opaque ACTIVE bytes.
         async fn namespace_snapshot(
             &self,
         ) -> Result<Option<EnrollmentNamespaceSnapshot>, SecureStoreError> {
@@ -1346,6 +1393,7 @@ pub(crate) mod review_tests {
                 has_pending: false,
             }))
         }
+        /// Advance a matching revision before optionally withholding its acknowledgement.
         async fn commit_current(
             &self,
             expected: &str,
@@ -1371,6 +1419,7 @@ pub(crate) mod review_tests {
             }
             Ok(Some(revision))
         }
+        /// Record the exact release ID and apply configured callback stalls or failures.
         async fn end_restore(&self, id: &str) -> Result<(), SecureStoreError> {
             self.end_ids.lock().unwrap().push(id.into());
             self.end_entered.notify_one();
@@ -1391,6 +1440,7 @@ pub(crate) mod review_tests {
             }
             Ok(())
         }
+        /// Tombstone only the fixture revision this coordinator is authorized to clear.
         async fn begin_clear(&self, expected: &str) -> Result<bool, SecureStoreError> {
             if expected != self.revision.lock().unwrap().to_string() {
                 return Ok(false);
@@ -1398,6 +1448,7 @@ pub(crate) mod review_tests {
             self.tombstone.store(true, Ordering::SeqCst);
             Ok(true)
         }
+        /// Erase fixture records only under the matching retained tombstone.
         async fn finish_clear(&self, expected: &str) -> Result<bool, SecureStoreError> {
             if expected != self.revision.lock().unwrap().to_string()
                 || !self.tombstone.load(Ordering::SeqCst)
@@ -1409,9 +1460,11 @@ pub(crate) mod review_tests {
             self.active.lock().unwrap().take();
             Ok(true)
         }
+        /// Reject an unconditional clear on a conditional-only fixture.
         async fn clear(&self) -> Result<(), SecureStoreError> {
             panic!("conditional only")
         }
+        /// Reject a legacy write on a conditional-only fixture.
         async fn commit(
             &self,
             _: SecureWrite,
@@ -1420,6 +1473,7 @@ pub(crate) mod review_tests {
         ) -> Result<(), SecureStoreError> {
             panic!("conditional only")
         }
+        /// Return an owned copy of one fixture operation's protected bytes.
         async fn load_operation(&self, id: &str) -> Result<Option<SecretBlob>, SecureStoreError> {
             Ok(self
                 .operations
@@ -1428,6 +1482,7 @@ pub(crate) mod review_tests {
                 .get(id)
                 .map(|bytes| SecretBlob::new(bytes.clone())))
         }
+        /// Return an owned copy of the fixture's ACTIVE slot, if present.
         async fn load_active(&self) -> Result<Option<SecretBlob>, SecureStoreError> {
             Ok(self
                 .active
@@ -1438,6 +1493,7 @@ pub(crate) mod review_tests {
         }
     }
 
+    /// Build a loopback-only client with synthetic Bootstrap or Returning material.
     pub(crate) fn client(returning: bool) -> Client {
         let trust = ServerTrust {
             server_public_key: [1; 32],
@@ -1469,6 +1525,7 @@ pub(crate) mod review_tests {
         Client::new(config, source, crate::InMemoryCursorStore::new())
     }
 
+    /// Build an expired ACTIVE record for structural observation and cleanup tests.
     fn active(client: &Client, epoch: &EnrollmentEpoch) -> Record {
         let mut record = fresh_operation(
             ServerTrust {
@@ -1498,10 +1555,47 @@ pub(crate) mod review_tests {
         record
     }
 
+    /// Validate the shared ACTIVE bytes and their pin against the deterministic SDK peer.
     #[test]
     fn review_swift_active_vector_matches_private_record_encoder_and_validates_returning() {
+        use syntra_core::secure_channel::{
+            self, Carrier, ClientHandshake, Mode, Secret32, ServerConfig,
+        };
         let client = client(false);
         let epoch = client.authorization.generation().unwrap();
+        let trust = ServerTrust {
+            server_public_key: [
+                0x7b, 0x0d, 0x47, 0xd9, 0x34, 0x27, 0xf8, 0x31, 0x11, 0x60, 0x78, 0x1c, 0x7c, 0x73,
+                0x3f, 0xd8, 0x9f, 0x88, 0x97, 0x0a, 0xef, 0x49, 0x0d, 0x8a, 0xa0, 0xee, 0x19, 0xa4,
+                0xcb, 0x8a, 0x1b, 0x14,
+            ],
+            server_key_id: 7,
+            scope: "fixture".into(),
+        };
+        // rc.4 exposes no fixed-private-key derivation helper; prove the pin by
+        // authenticating an actual SDK Bootstrap exchange with that private key.
+        let (handshake, first) =
+            ClientHandshake::start(TrustSource::Bootstrap(trust.clone()).security().unwrap())
+                .unwrap();
+        let (mut server, second) = secure_channel::respond(
+            &ServerConfig {
+                mode: Mode::Bootstrap,
+                carrier: Carrier::Tcp,
+                server_key_id: trust.server_key_id,
+                scope: trust.scope.as_bytes().to_vec(),
+                private_key: Secret32::new([0x33; 32]),
+                store: None,
+            },
+            &first,
+        )
+        .unwrap();
+        let mut channel = handshake.finish(&second).unwrap();
+        let encrypted = channel.encrypt(b"enrollment-review-pin").unwrap();
+        assert_eq!(
+            server.decrypt(&encrypted).unwrap().as_slice(),
+            b"enrollment-review-pin"
+        );
+        assert!(server.verified_identity().is_some());
         let status = DeviceEnrollmentStatus {
             operation_id: "11111111-1111-4111-8111-111111111111".into(),
             session_id: "22222222-2222-4222-8222-222222222222".into(),
@@ -1519,11 +1613,7 @@ pub(crate) mod review_tests {
         let record = Record {
             operation_id: status.operation_id.clone(),
             capability: epoch.secret(Zeroizing::new([0x11; 32])).unwrap(),
-            trust: ServerTrust {
-                server_public_key: [1; 32],
-                server_key_id: 7,
-                scope: "fixture".into(),
-            },
+            trust,
             status: Some(status.clone()),
             key: Some(epoch.secret(Zeroizing::new([0x22; 32])).unwrap()),
         };
@@ -1553,6 +1643,7 @@ pub(crate) mod review_tests {
         ));
     }
 
+    /// Seed conditional storage with expired ACTIVE bytes from the private encoder.
     pub(crate) fn expired_store(client: &Client) -> Arc<ReviewStore> {
         let store = Arc::new(ReviewStore::default());
         let record = active(client, &client.authorization.generation().unwrap());
@@ -1560,6 +1651,7 @@ pub(crate) mod review_tests {
         store
     }
 
+    /// Seed one exact source/secret binding and its permit without dialing a peer.
     async fn installed_permit(client: &Client, store: Arc<ReviewStore>) -> RestorePermit {
         let record = active(client, &client.authorization.generation().unwrap());
         let enrollment = Enrollment::new([9; 32], [8; 8], 1).unwrap();
@@ -1581,6 +1673,7 @@ pub(crate) mod review_tests {
         permit
     }
 
+    /// Prove timeout and cancellation retain exact conditional receipts for logout retry.
     #[tokio::test(start_paused = true)]
     async fn review_late_commit_receipt_survives_timeout_and_cancellation() {
         for cancel in [false, true] {
@@ -1635,11 +1728,13 @@ pub(crate) mod review_tests {
 
     #[async_trait]
     impl SecureEnrollmentStore for StalledLegacyStore {
+        /// Durably fence the fixture namespace against every pending legacy write.
         async fn clear(&self) -> Result<(), SecureStoreError> {
             *self.state.lock().unwrap() = (true, None);
             self.clears.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
+        /// Stall publication, then reject it if an acknowledged clear won the race.
         async fn commit(
             &self,
             _: SecureWrite,
@@ -1660,6 +1755,7 @@ pub(crate) mod review_tests {
             self.finished.notify_one();
             result
         }
+        /// Read the sole legacy fixture record without changing its clear fence.
         async fn load_operation(&self, _: &str) -> Result<Option<SecretBlob>, SecureStoreError> {
             Ok(self
                 .state
@@ -1669,11 +1765,13 @@ pub(crate) mod review_tests {
                 .as_ref()
                 .map(|bytes| SecretBlob::new(bytes.clone())))
         }
+        /// Report that this operation-only fixture has no ACTIVE material.
         async fn load_active(&self) -> Result<Option<SecretBlob>, SecureStoreError> {
             Ok(None)
         }
     }
 
+    /// Prove legacy clear progresses despite a stalled write and dominates late publication.
     #[tokio::test(start_paused = true)]
     async fn review_stalled_legacy_commit_does_not_block_logout_or_revive_after_clear() {
         for cancel in [false, true] {
@@ -1715,6 +1813,7 @@ pub(crate) mod review_tests {
         }
     }
 
+    /// Prove an exact late receipt cannot authorize clearing a newer host revision.
     #[tokio::test]
     async fn review_late_receipt_never_adopts_another_coordinators_revision() {
         let client = client(false);
@@ -1742,6 +1841,7 @@ pub(crate) mod review_tests {
         assert_eq!(store.clears.load(Ordering::SeqCst), 0);
     }
 
+    /// Prove a late receipt cannot replace a locally advanced revision expectation.
     #[tokio::test]
     async fn review_late_receipt_cannot_overwrite_a_changed_local_expected_revision() {
         let client = client(false);
@@ -1766,6 +1866,7 @@ pub(crate) mod review_tests {
         );
     }
 
+    /// Prove cancelled restoration withdraws first and retries release with the same ID.
     #[tokio::test(start_paused = true)]
     async fn review_cancelled_permit_withdraws_before_release_and_retries_same_id() {
         let client = client(false);
@@ -1786,6 +1887,7 @@ pub(crate) mod review_tests {
         assert_eq!(*store.end_ids.lock().unwrap(), vec!["review-permit"; 3]);
     }
 
+    /// Prove waiter cancellation cannot start a second rollback during release finalization.
     #[tokio::test(start_paused = true)]
     async fn review_release_finalizer_has_one_owner_after_waiter_cancellation() {
         let client = client(false);
@@ -1803,6 +1905,7 @@ pub(crate) mod review_tests {
         assert!(client.has_returning_source().await);
     }
 
+    /// Prove release timeout withdraws installed material without discarding its retry ID.
     #[tokio::test(start_paused = true)]
     async fn review_release_timeout_withdraws_and_keeps_id_for_retry() {
         let client = client(false);
@@ -1824,6 +1927,7 @@ pub(crate) mod review_tests {
         assert_eq!(*store.end_ids.lock().unwrap(), vec!["review-permit"; 2]);
     }
 
+    /// Shut down a runtime with blocked cleanup and assert terminal erasure without leaks.
     fn shutdown_unfinished_restore(block_withdrawal: bool, pending_callback: bool) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1866,21 +1970,25 @@ pub(crate) mod review_tests {
         );
     }
 
+    /// Prove shutdown terminates cleanup while its host release callback is pending.
     #[test]
     fn review_runtime_shutdown_during_restore_release_callback_is_terminal() {
         shutdown_unfinished_restore(false, true);
     }
 
+    /// Prove shutdown terminates a failed release's retry owner without recursive Drop.
     #[test]
     fn review_runtime_shutdown_during_restore_release_retry_is_terminal() {
         shutdown_unfinished_restore(false, false);
     }
 
+    /// Prove shutdown erases installed material even while withdrawal waits for a lock.
     #[test]
     fn review_runtime_shutdown_with_blocked_restore_withdrawal_is_terminal() {
         shutdown_unfinished_restore(true, false);
     }
 
+    /// Prove unavailable status leaves expired material observable but never admissible.
     #[tokio::test]
     async fn review_expired_restore_keeps_negative_only_metadata_after_unavailable_status() {
         let client = client(false);
@@ -1897,6 +2005,7 @@ pub(crate) mod review_tests {
         client.stop().await;
     }
 
+    /// Prove encrypted UNKNOWN and temporary-error replies never admit or erase expired keys.
     #[tokio::test]
     async fn review_expired_restore_unknown_and_temporary_rpc_error_never_grant_admission() {
         use syntra_core::secure_channel::{self, Carrier, Mode, ServerConfig};

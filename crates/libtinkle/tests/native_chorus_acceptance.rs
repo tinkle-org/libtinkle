@@ -58,6 +58,7 @@ impl Namespace {
 }
 
 impl Drop for Namespace {
+    /// Erase retained credential bytes when a decoded namespace snapshot is released.
     fn drop(&mut self) {
         for value in self.rows.values_mut() {
             zeroize::Zeroize::zeroize(value);
@@ -66,6 +67,7 @@ impl Drop for Namespace {
 }
 
 impl DiskStore {
+    /// Open a named acceptance namespace with shared restore permits and an optional write gate.
     fn new(name: &str, gate: bool) -> Arc<Self> {
         // Fresh adapters restoring the same file serialize with existing host
         // callbacks. This fixture has one host process; it is not a mobile store.
@@ -102,6 +104,7 @@ impl DiskStore {
         file.try_lock().map_err(|_| SecureStoreError)?;
         Ok(file)
     }
+    /// Decode the durable snapshot, creating its initial incarnation when the file is absent.
     fn read(&self) -> Result<Namespace, SecureStoreError> {
         match fs::read(&self.file) {
             Ok(raw) => {
@@ -164,6 +167,7 @@ impl DiskStore {
             .and_then(|dir| dir.sync_all())
             .map_err(|_| SecureStoreError)
     }
+    /// Copy one opaque record under install exclusion, rejecting cleanup-marked namespaces.
     fn load(&self, id: &str) -> Result<Option<SecretBlob>, SecureStoreError> {
         let _install = self.install_lock()?;
         let _lock = self.lock.lock().unwrap();
@@ -203,9 +207,11 @@ struct RetainedReturningStore(Arc<DiskStore>);
 
 #[async_trait]
 impl SecureEnrollmentStore for RetainedReturningStore {
+    /// Reject mutation because this retained namespace exists only for admission probes.
     async fn clear(&self) -> Result<(), SecureStoreError> {
         panic!("read-only admission probe")
     }
+    /// Reject writes to the read-only pre-retirement credential snapshot.
     async fn commit(
         &self,
         _: SecureWrite,
@@ -214,9 +220,11 @@ impl SecureEnrollmentStore for RetainedReturningStore {
     ) -> Result<(), SecureStoreError> {
         panic!("read-only admission probe")
     }
+    /// Read the retained operation without enabling status-first namespace observation.
     async fn load_operation(&self, id: &str) -> Result<Option<SecretBlob>, SecureStoreError> {
         self.0.load(id)
     }
+    /// Read old active material so the test can prove actual server-side Returning rejection.
     async fn load_active(&self) -> Result<Option<SecretBlob>, SecureStoreError> {
         self.0.load("active")
     }
@@ -224,6 +232,7 @@ impl SecureEnrollmentStore for RetainedReturningStore {
 
 #[async_trait]
 impl SecureEnrollmentStore for DiskStore {
+    /// Pin exact active material at its current namespace token until permit release.
     async fn begin_restore(
         &self,
         incarnation: &str,
@@ -248,12 +257,14 @@ impl SecureEnrollmentStore for DiskStore {
         permits.held.insert(permit_id.into(), install);
         Ok(true)
     }
+    /// Release matching install exclusion and prevent late acquisition of the cancelled ID.
     async fn end_restore(&self, permit_id: &str) -> Result<(), SecureStoreError> {
         let mut permits = self.lock.lock().unwrap();
         permits.cancelled.insert(permit_id.into());
         permits.held.remove(permit_id);
         Ok(())
     }
+    /// Read active material, pending work, and cleanup state from one locked durable snapshot.
     async fn namespace_snapshot(
         &self,
     ) -> Result<Option<EnrollmentNamespaceSnapshot>, SecureStoreError> {
@@ -268,6 +279,7 @@ impl SecureEnrollmentStore for DiskStore {
             has_pending: !state.pending.is_empty(),
         }))
     }
+    /// Durably mark cleanup only if the caller still owns the current namespace token.
     async fn begin_clear(&self, expected: &str) -> Result<bool, SecureStoreError> {
         let _install = self.install_lock()?;
         let _lock = self.lock.lock().unwrap();
@@ -279,6 +291,7 @@ impl SecureEnrollmentStore for DiskStore {
         self.write(&state)?;
         Ok(true)
     }
+    /// Erase all records under the matching tombstone and durably retain that marker.
     async fn finish_clear(&self, expected: &str) -> Result<bool, SecureStoreError> {
         let _install = self.install_lock()?;
         let _lock = self.lock.lock().unwrap();
@@ -294,9 +307,11 @@ impl SecureEnrollmentStore for DiskStore {
         self.write(&state)?;
         Ok(true)
     }
+    /// Fail acceptance if cleanup bypasses the conditional host contract.
     async fn clear(&self) -> Result<(), SecureStoreError> {
         panic!("conditional host must use begin_clear/finish_clear")
     }
+    /// Fail acceptance if a write bypasses namespace revision comparison.
     async fn commit(
         &self,
         _: SecureWrite,
@@ -305,6 +320,7 @@ impl SecureEnrollmentStore for DiskStore {
     ) -> Result<(), SecureStoreError> {
         panic!("conditional host must use commit_current")
     }
+    /// Publish only at the expected unmarked revision, acknowledging after file durability.
     async fn commit_current(
         &self,
         expected: &str,
@@ -340,14 +356,17 @@ impl SecureEnrollmentStore for DiskStore {
         self.events.lock().unwrap().push(kind);
         Ok(Some(state.token()))
     }
+    /// Load the named operation through the namespace's cleanup and install fences.
     async fn load_operation(&self, id: &str) -> Result<Option<SecretBlob>, SecureStoreError> {
         self.load(id)
     }
+    /// Load the active slot through the namespace's cleanup and install fences.
     async fn load_active(&self) -> Result<Option<SecretBlob>, SecureStoreError> {
         self.load("active")
     }
 }
 
+/// Require an acceptance-runner input, reporting only its name when absent.
 fn env(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("missing fixture input {name}"))
 }
@@ -367,6 +386,7 @@ fn trust() -> ServerTrust {
     }
 }
 
+/// Create a Bootstrap client using the independently provisioned acceptance server pin.
 fn client(model: &str) -> Arc<Client> {
     client_with_trust(model, trust())
 }
@@ -485,6 +505,7 @@ fn private_response(raw: &[u8]) -> anyhow::Result<(u16, serde_json::Value)> {
 }
 
 #[test]
+/// Decode plain and chunked capture responses equivalently and reject malformed chunk framing.
 fn private_http_json_framing() {
     let json = br#"{"online":true,"completed":1}"#;
     let plain = [
@@ -519,6 +540,7 @@ fn private_http_json_framing() {
     }
 }
 
+/// Issue one typed acceptance RPC with a three-second budget and decode its response.
 async fn call<Req: Message, Resp: Message + Default>(
     c: &Client,
     method: &str,
@@ -528,6 +550,7 @@ async fn call<Req: Message, Resp: Message + Default>(
     Ok(Resp::decode(bytes.as_slice()).unwrap())
 }
 
+/// Wrap the public account-session projection for acceptance assertions.
 async fn sessions(c: &Client) -> Result<GetSessionsResponse, TinkleError> {
     Ok(GetSessionsResponse {
         sessions: c.account().get_sessions().await?,

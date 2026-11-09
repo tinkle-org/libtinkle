@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import TinkleSDK
 
+/// Supplies complete, nonsecret client labels for native fixture connections.
 func fixtureClientInfo() -> ClientInfoFfi {
     ClientInfoFfi(deviceModel: "fixture-device", platform: "ios", osVersion: "18",
         appVersion: "1", appBuild: "0001", options: ClientOptionsFfi(agent: "", deviceId: "",
@@ -15,6 +16,7 @@ final class LoopbackGateway: @unchecked Sendable {
     private var stopped = false
     let port: UInt16
     let pin: Data
+    private let scope: String
 
     struct TargetChangesRequest: Equatable {
         let targetKind: String
@@ -22,13 +24,27 @@ final class LoopbackGateway: @unchecked Sendable {
         let afterAcceptSeq: Int64
     }
 
-    init() throws {
-        let response = try Self.control(["op": "create", "deletions": []])
+    /// Allocates a Bootstrap gateway; enrollment review opts into the synthetic vector's key.
+    init(enrollmentReview: Bool = false) throws {
+        let response = try Self.control(["op": "create", "deletions": [], "enrollment_review": enrollmentReview])
         id = (response["id"] as! NSNumber).int64Value
         port = (response["port"] as! NSNumber).uint16Value
         pin = Data((response["pin"] as! [NSNumber]).map(\.uint8Value))
+        scope = enrollmentReview ? "fixture" : "tinkle-mobile-fixture"
     }
 
+    /// Recorded by Syntra's verified-identity callback, never inferred from RPCs.
+    var admittedModes: [String] {
+        get throws {
+            let response = try Self.control(["op": "requests", "id": id])
+            guard let modes = response["admissions"] as? [String] else {
+                throw FixtureError("fixture response lacks authenticated admissions")
+            }
+            return modes
+        }
+    }
+
+    /// Returns journal positions decoded from actual encrypted application requests.
     var targetChangesRequests: [TargetChangesRequest] {
         get throws {
             let response = try Self.control(["op": "requests", "id": id])
@@ -40,11 +56,13 @@ final class LoopbackGateway: @unchecked Sendable {
         }
     }
 
+    /// Creates a fresh one-use Bootstrap source pinned to this gateway.
     func trustSource() throws -> TrustSourceFfi {
         try TrustSourceFfi.bootstrap(trust: ServerTrustFfi(
-            serverPublicKey: pin, serverKeyId: 7, scope: "tinkle-mobile-fixture"))
+            serverPublicKey: pin, serverKeyId: 7, scope: scope))
     }
 
+    /// Idempotently stops the gateway and waits for its accepted transports to drain.
     func finish() throws {
         if !stopped {
             _ = try Self.control(["op": "close", "id": id])
@@ -52,6 +70,7 @@ final class LoopbackGateway: @unchecked Sendable {
         }
     }
 
+    /// Performs one bounded loopback control exchange outside the SDK transport.
     private static func control(_ request: [String: Any]) throws -> [String: Any] {
         let op = request["op"] as? String ?? "unknown"
         let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
@@ -81,6 +100,7 @@ final class LoopbackGateway: @unchecked Sendable {
         return try JSONSerialization.jsonObject(with: response) as! [String: Any]
     }
 
+    /// Completes partial writes, retrying only interruptions without replaying bytes.
     static func sendAll(_ bytes: Data, fd: Int32, op: String,
         send: (Int32, UnsafeRawPointer?, Int, Int32) -> Int = Darwin.send) throws {
         var offset = 0
@@ -96,6 +116,7 @@ final class LoopbackGateway: @unchecked Sendable {
         }
     }
 
+    /// Reads one capped newline-terminated response, with deterministic I/O injection for tests.
     static func readLine(fd: Int32, op: String,
         recv: (Int32, UnsafeMutableRawPointer?, Int, Int32) -> Int = Darwin.recv) throws -> Data {
         var response = Data()
@@ -118,6 +139,7 @@ final class LoopbackGateway: @unchecked Sendable {
         throw FixtureError("control \(op) recv oversized response limit=65536 bytes=\(response.count)")
     }
 
+    /// Formats transport diagnostics without including request or response contents.
     private static func ioError(op: String, action: String, code: Int32, bytes: Int) -> FixtureError {
         let kind = code == EAGAIN || code == EWOULDBLOCK || code == ETIMEDOUT ? "timeout" : "system error"
         return FixtureError("control \(op) \(action) \(kind) errno=\(code) bytes=\(bytes)")
@@ -126,6 +148,7 @@ final class LoopbackGateway: @unchecked Sendable {
 
 private struct FixtureError: Error, CustomStringConvertible {
     let message: String
+    /// Retains a control-channel diagnostic for XCTest failure reporting.
     init(_ message: String) { self.message = message }
     var description: String { message }
 }

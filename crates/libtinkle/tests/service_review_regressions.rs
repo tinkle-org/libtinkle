@@ -19,6 +19,7 @@ use tinkle_schema::methods::accountservice as account_methods;
 use tinkle_schema::proto::*;
 use tokio::net::TcpListener;
 
+/// Build staged account enrollment for the supplied operation and fixture user.
 fn enrollment(operation_id: String) -> DeviceEnrollment {
     DeviceEnrollment {
         operation_id,
@@ -37,6 +38,7 @@ fn enrollment(operation_id: String) -> DeviceEnrollment {
     }
 }
 
+/// Retain the server connection until its peer closes, then join transport shutdown.
 async fn keep(handle: syntra_net::tcp::HostHandle) {
     while !handle.is_closed() {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -46,6 +48,7 @@ async fn keep(handle: syntra_net::tcp::HostHandle) {
 
 struct Keys;
 impl KeyStore for Keys {
+    /// Assert the expected Returning handle and epoch before supplying its fixture key.
     fn lookup(&self, context: &Context) -> Result<Secret32, secure_channel::Error> {
         assert_eq!(context.handle, [9; 8]);
         assert_eq!(context.epoch, 1);
@@ -54,6 +57,7 @@ impl KeyStore for Keys {
 }
 
 #[tokio::test]
+/// Check denial classification without clearing credentials or preventing Returning reconnect.
 async fn account_denials_clear_authorization_without_retiring_credentials() {
     for (method, code) in [
         account_methods::GET_SESSIONS,
@@ -183,6 +187,7 @@ struct Store {
 
 #[async_trait]
 impl SecureEnrollmentStore for Store {
+    /// Retain the latest operation bytes and record their write kind for ordering assertions.
     async fn commit(
         &self,
         kind: SecureWrite,
@@ -194,6 +199,7 @@ impl SecureEnrollmentStore for Store {
         self.writes.lock().unwrap().push(kind);
         Ok(())
     }
+    /// Return a copy of the retained operation only when its identifier matches.
     async fn load_operation(&self, id: &str) -> Result<Option<SecretBlob>, SecureStoreError> {
         Ok(self
             .row
@@ -203,9 +209,11 @@ impl SecureEnrollmentStore for Store {
             .filter(|(stored, _)| stored == id)
             .map(|(_, blob)| SecretBlob::new(blob.expose_secret().to_vec())))
     }
+    /// Keep this operation-only fixture from claiming durable active enrollment.
     async fn load_active(&self) -> Result<Option<SecretBlob>, SecureStoreError> {
         Ok(None)
     }
+    /// Count credential cleanup attempts and discard the retained operation.
     async fn clear(&self) -> Result<(), SecureStoreError> {
         self.clears
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -214,6 +222,7 @@ impl SecureEnrollmentStore for Store {
     }
 }
 
+/// Encode a typed payload for the support adapter, which owns response correlation.
 fn response(message: impl Message) -> Frame {
     Frame {
         version: 1,
@@ -225,6 +234,7 @@ fn response(message: impl Message) -> Frame {
 }
 
 #[tokio::test]
+/// A lost revocation response must remain unknown without replaying the mutation.
 async fn revoke_other_sessions_lost_response_is_unknown_and_never_replayed() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let config = support::config(listener.local_addr().unwrap());
@@ -258,6 +268,7 @@ async fn revoke_other_sessions_lost_response_is_unknown_and_never_replayed() {
 }
 
 #[tokio::test]
+/// Reject mismatched user projections before persistence while preserving enrollment recovery.
 async fn sign_in_checks_projection_before_candidate_commit_and_keeps_recovery() {
     for (user, accepted) in [
         (

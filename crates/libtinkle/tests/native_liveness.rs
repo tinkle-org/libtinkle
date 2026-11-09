@@ -42,6 +42,7 @@ struct Session {
 
 struct Pending(Arc<Session>);
 impl Drop for Pending {
+    /// Release the outstanding-request count even when a handler is cancelled.
     fn drop(&mut self) {
         self.0.outstanding.fetch_sub(1, Ordering::SeqCst);
     }
@@ -49,6 +50,7 @@ impl Drop for Pending {
 
 struct ActiveKeys;
 impl KeyStore for ActiveKeys {
+    /// Admit only the two fixture epochs with their matching handles and keys.
     fn lookup(&self, context: &Context) -> Result<Secret32, secure_channel::Error> {
         if !(1..=2).contains(&context.epoch) || context.handle != [context.epoch as u8 + 7; 8] {
             return Err(secure_channel::Error::Authentication);
@@ -57,6 +59,7 @@ impl KeyStore for ActiveKeys {
     }
 }
 
+/// Build Returning trust with active fixture credentials derived from the epoch.
 fn active_source(epoch: u64) -> TrustSource {
     let status = DeviceEnrollmentStatus {
         operation_id: "96007910-fd5b-4ef2-bf0c-2e4ae1d44b1b".into(),
@@ -84,11 +87,14 @@ struct Fixture {
     listener: tokio::task::JoinHandle<()>,
 }
 impl Drop for Fixture {
+    /// Abort the listener and its owned connection tasks when the fixture leaves scope.
     fn drop(&mut self) {
         self.listener.abort();
     }
 }
 impl Fixture {
+    /// Start an encrypted listener recording initialization, sequence, and lease effects.
+    /// The selected reply controls KeepAlive success, rejection, corruption, or cancellation.
     async fn new(mode: Mode, reply: Reply) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -214,6 +220,7 @@ impl Fixture {
             listener,
         }
     }
+    /// Target this listener using either Bootstrap trust or epoch-one Returning credentials.
     fn client(&self, mode: Mode) -> Client {
         Client::new(
             support::config(self.address),
@@ -225,14 +232,17 @@ impl Fixture {
             InMemoryCursorStore::new(),
         )
     }
+    /// Retain a recorded connection's counters for assertions after transport shutdown.
     fn session(&self, index: usize) -> Arc<Session> {
         self.sessions.lock().unwrap()[index].clone()
     }
+    /// Count accepted sockets, including connections that have already closed.
     fn connections(&self) -> usize {
         self.sessions.lock().unwrap().len()
     }
 }
 
+/// Poll a fixture observation with a two-second deadline to bound regression failures.
 async fn until(mut condition: impl FnMut() -> bool) {
     tokio::time::timeout(Duration::from_secs(2), async {
         while !condition() {
@@ -254,6 +264,7 @@ async fn elapse(seconds: u64) {
 }
 
 #[tokio::test]
+/// Idempotent connect must keep one initialized loop with monotonic, nonoverlapping renewals.
 async fn exact_monotonic_sequences_initialize_once_and_renew_once() {
     let fixture = Fixture::new(Mode::Returning, Reply::Echo).await;
     let client = fixture.client(Mode::Returning);
@@ -282,9 +293,11 @@ async fn exact_monotonic_sequences_initialize_once_and_renew_once() {
     assert!(!client.is_connected().await);
 }
 
+/// Check that the server has released every outstanding KeepAlive handler.
 fn client_pending_settled(session: &Session) -> bool {
     session.outstanding.load(Ordering::SeqCst) == 0
 }
+/// Wait up to two seconds for client-side RPC acknowledgements to settle.
 async fn until_pending(client: &Client) {
     tokio::time::timeout(Duration::from_secs(2), async {
         while client.pending_len().await != 0 {
@@ -295,6 +308,7 @@ async fn until_pending(client: &Client) {
     .unwrap();
 }
 
+/// Wait up to two seconds for a replacement connection to reach CoreReady.
 async fn until_connected(client: &Client) {
     tokio::time::timeout(Duration::from_secs(2), async {
         while !client.is_connected().await {
@@ -306,6 +320,7 @@ async fn until_connected(client: &Client) {
 }
 
 #[tokio::test]
+/// A locally selected cache principal must not authorize Bootstrap KeepAlive traffic.
 async fn bootstrap_never_sends_keepalive_even_with_a_local_cache_principal() {
     for principal in [None, Some(42)] {
         let fixture = Fixture::new(Mode::Bootstrap, Reply::Echo).await;
@@ -322,6 +337,7 @@ async fn bootstrap_never_sends_keepalive_even_with_a_local_cache_principal() {
 }
 
 #[tokio::test]
+/// Reconnect a closed Bootstrap transport without adding account identity or lease traffic.
 async fn bootstrap_closed_transport_reconnects_without_keepalive_or_account_identity() {
     let fixture = Fixture::new(Mode::Bootstrap, Reply::Echo).await;
     let client = fixture.client(Mode::Bootstrap);
@@ -338,6 +354,7 @@ async fn bootstrap_closed_transport_reconnects_without_keepalive_or_account_iden
 }
 
 #[tokio::test]
+/// A hung KeepAlive must time out and close without overlap or replaying its sequence.
 async fn one_outstanding_unknown_outcome_closes_without_replaying_observation() {
     let fixture = Fixture::new(Mode::Returning, Reply::Hang).await;
     let client = fixture.client(Mode::Returning);
@@ -357,6 +374,7 @@ async fn one_outstanding_unknown_outcome_closes_without_replaying_observation() 
 }
 
 #[tokio::test]
+/// Suspend, wake, and rotation must join old loops and restart sequences only on new sockets.
 async fn pause_wake_and_rotation_join_old_tasks_and_reset_only_on_new_connection() {
     let fixture = Fixture::new(Mode::Returning, Reply::Hang).await;
     let client = fixture.client(Mode::Returning);
@@ -392,6 +410,7 @@ async fn pause_wake_and_rotation_join_old_tasks_and_reset_only_on_new_connection
 }
 
 #[tokio::test]
+/// Authorization rejection or invalid echoes must close transport and park automatic reconnect.
 async fn terminal_authorization_and_bad_echo_park_the_existing_supervisor() {
     for reply in [
         Reply::Reject(ErrorCode::Unauthenticated),
@@ -414,6 +433,7 @@ async fn terminal_authorization_and_bad_echo_park_the_existing_supervisor() {
 }
 
 #[tokio::test]
+/// Transient failure must establish a new supervised connection instead of retrying the old RPC.
 async fn transient_failure_schedules_fresh_supervised_connection_not_same_rpc_retry() {
     let fixture = Fixture::new(Mode::Returning, Reply::Reject(ErrorCode::Unavailable)).await;
     let client = fixture.client(Mode::Returning);
@@ -434,6 +454,7 @@ async fn transient_failure_schedules_fresh_supervised_connection_not_same_rpc_re
 }
 
 #[tokio::test]
+/// Switching accounts must cancel in-flight liveness and stop using the old Returning context.
 async fn account_switch_joins_task_and_parks_old_returning_context() {
     let fixture = Fixture::new(Mode::Returning, Reply::Hang).await;
     let client = fixture.client(Mode::Returning);
@@ -451,6 +472,7 @@ async fn account_switch_joins_task_and_parks_old_returning_context() {
 }
 
 #[tokio::test]
+/// Dropping the final client owner must retire both manual and supervised liveness tasks.
 async fn dropping_last_host_owner_releases_manual_and_supervised_connections() {
     for supervised in [false, true] {
         let fixture = Fixture::new(Mode::Returning, Reply::Hang).await;
@@ -472,6 +494,7 @@ async fn dropping_last_host_owner_releases_manual_and_supervised_connections() {
 }
 
 #[tokio::test]
+/// Cancelling stop must leave task ownership available for a later stop to finish joining.
 async fn cancelled_stop_retains_join_ownership_for_the_next_stop() {
     for yields in [0, 1, 3, 8] {
         let fixture = Fixture::new(Mode::Returning, Reply::Hang).await;
@@ -498,6 +521,7 @@ async fn cancelled_stop_retains_join_ownership_for_the_next_stop() {
 }
 
 #[tokio::test]
+/// Foreground start after suspension must use a new socket and restart KeepAlive sequencing.
 async fn foreground_start_after_suspend_uses_a_fresh_liveness_generation() {
     let fixture = Fixture::new(Mode::Returning, Reply::Echo).await;
     let client = fixture.client(Mode::Returning);
@@ -517,6 +541,7 @@ async fn foreground_start_after_suspend_uses_a_fresh_liveness_generation() {
 }
 
 #[tokio::test]
+/// Logout must retire liveness and sign out even when durable cleanup cannot be confirmed.
 async fn logout_joins_inflight_liveness_even_when_no_secure_store_was_bound() {
     let fixture = Fixture::new(Mode::Returning, Reply::Hang).await;
     let client = fixture.client(Mode::Returning);

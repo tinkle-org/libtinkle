@@ -13,11 +13,13 @@ internal class LoopbackGateway(deletionTargets: Set<String> = emptySet()) : Auto
     private val id = fixture.getLong("id")
     val port: Int = fixture.getInt("port")
 
+    /** Create one-use Bootstrap trust from this host fixture's reported server pin. */
     fun trustSource(): TrustSourceFfi {
         val pin = fixture.getJSONArray("pin")
         return TrustSourceFfi.bootstrap(ServerTrustFfi(ByteArray(32) { pin.getInt(it).toByte() }, 7u, "tinkle-mobile-fixture"))
     }
 
+    /** Read journal requests with their exact 64-bit acceptance cursors. */
     val requests: List<Pair<String, Long>> get() {
         val rows = control(JSONObject().put("op", "requests").put("id", id)).getJSONArray("requests")
         return (0 until rows.length()).map { index ->
@@ -26,13 +28,16 @@ internal class LoopbackGateway(deletionTargets: Set<String> = emptySet()) : Auto
         }
     }
 
+    /** Read the conversation keys whose history the native consumer requested. */
     val historyRequests: List<String> get() {
         val rows = control(JSONObject().put("op", "requests").put("id", id)).getJSONArray("history")
         return (0 until rows.length()).map { rows.getString(it) }
     }
 
+    /** Ask the host runner to close this fixture and its owned connections. */
     override fun close() { control(JSONObject().put("op", "close").put("id", id)) }
 
+    /** Exchange one newline-delimited JSON command with bounded connect and read waits. */
     private fun control(request: JSONObject): JSONObject = Socket().use { socket ->
         socket.connect(java.net.InetSocketAddress(host, 48080), 5_000)
         socket.soTimeout = 5_000

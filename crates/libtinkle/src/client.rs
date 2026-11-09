@@ -60,9 +60,44 @@ struct Live {
 struct Initialization {
     ready: tokio::sync::Mutex<bool>,
     watch: tokio::sync::Notify,
+    dispatched_deadline: std::sync::Mutex<Option<Arc<syntra_runtime::elapsed::ElapsedDeadline>>>,
+    changed: tokio::sync::Notify,
+}
+
+/// An initialization owner may be retained without polling by its caller. Keep
+/// its actual dispatched cutoff observable independently of that caller.
+struct InitializationAttempt<'a> {
+    initialized: &'a Initialization,
+    deadline: Arc<syntra_runtime::elapsed::ElapsedDeadline>,
+}
+
+impl Drop for InitializationAttempt<'_> {
+    /// Withdraw only this initializer's cutoff and wake queued heartbeat admission.
+    fn drop(&mut self) {
+        let mut current = self
+            .initialized
+            .dispatched_deadline
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if current
+            .as_ref()
+            .is_some_and(|deadline| Arc::ptr_eq(deadline, &self.deadline))
+        {
+            *current = None;
+        }
+        self.initialized.changed.notify_one();
+    }
+}
+
+/// Distinguish local admission deferral from an RPC handed to Syntra.
+#[derive(Default)]
+struct CallProgress {
+    dispatched: AtomicBool,
+    deferred: AtomicBool,
 }
 
 impl Initialization {
+    /// Serialize snapshot installation; ready unary calls release this gate before dispatch.
     async fn lock(&self) -> tokio::sync::MutexGuard<'_, bool> {
         self.ready.lock().await
     }
@@ -76,6 +111,7 @@ pub(crate) struct ConnectionGate {
 }
 
 impl ConnectionGate {
+    /// Serialize dial, installation, and scope transitions across parent and provisioning clients.
     pub(crate) async fn lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.lock.lock().await
     }
@@ -88,6 +124,7 @@ struct SupState {
     epoch: u64,
     /// Only a later suspend vetoes resume; supervisor stop is not suspension.
     suspension_epoch: u64,
+    resume_cancel: Option<CancelToken>,
     #[cfg(not(target_arch = "wasm32"))]
     last_result: Option<()>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -105,6 +142,12 @@ struct ReconnectFence {
     generation: Option<Arc<LiveGeneration>>,
 }
 
+/// Join ownership for the single retained foreground transition.
+struct ResumeTask {
+    suspension_epoch: u64,
+    task: tokio::task::JoinHandle<()>,
+}
+
 /// Per-target reconcile demand tracked by the supervisor.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone)]
@@ -115,6 +158,7 @@ struct TargetDemand {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl TargetDemand {
+    /// Make newly observed target demand eligible for an immediate recovery attempt.
     fn fresh() -> Self {
         Self {
             failures: 0,
@@ -122,6 +166,7 @@ impl TargetDemand {
         }
     }
 
+    /// Double the target retry delay from two seconds, saturating at sixty seconds.
     fn backoff_for(failures: u32) -> std::time::Duration {
         let shift = failures.min(5);
         std::time::Duration::from_secs(2u64.saturating_mul(1 << shift).min(60))
@@ -237,6 +282,8 @@ pub struct Client {
     start_lock: Arc<tokio::sync::Mutex<()>>,
     drain_mgrs: Arc<tokio::sync::Mutex<Vec<Arc<SyncManager>>>>,
     suspended: Arc<AtomicBool>,
+    /// Retain the resume transition even when its foreign/Rust waiter is dropped.
+    resume_task: Arc<tokio::sync::Mutex<Option<ResumeTask>>>,
     /// Client-level commit gate: every native ingest holds this lock
     /// across its epoch check + write. Blocking writers retain owned guards
     /// even after their async waiter is cancelled. Logout/principal switches
@@ -261,6 +308,7 @@ pub struct Client {
     catchup_pending: Arc<tokio::sync::Mutex<HashMap<String, CatchupResume>>>,
 }
 
+/// Validate a positive peer identity before constructing its canonical journal key.
 fn target_key_of(target: &tinkle_schema::proto::Target) -> Result<String, TinkleError> {
     match &target.kind {
         Some(tinkle_schema::proto::target::Kind::UserId(id)) => {
@@ -279,6 +327,7 @@ fn target_key_of(target: &tinkle_schema::proto::Target) -> Result<String, Tinkle
     }
 }
 
+/// Reject malformed journal keys before converting their peer kind and positive ID to a target.
 fn parse_target_key(target_key: &str) -> Result<tinkle_schema::proto::Target, TinkleError> {
     let rest = target_key.strip_prefix("target:").ok_or_else(|| {
         TinkleError::Codec("target_key must be target:user:<id> or target:room:<id>".into())
@@ -296,6 +345,7 @@ fn parse_target_key(target_key: &str) -> Result<tinkle_schema::proto::Target, Ti
 }
 
 impl Client {
+    /// Irreversibly revoke local admission and invalidate native reconcile work before cleanup awaits.
     pub(crate) fn begin_signed_out(&self) {
         self.authorization.sign_out();
         self.suspended.store(true, Ordering::SeqCst);
@@ -356,6 +406,7 @@ impl Client {
                     Zeroizing::new(tinkle_schema::proto::LogoutRequest {}.encode_to_vec()),
                     budget,
                     &CancelToken::new(),
+                    None,
                     None,
                 )
                 .await;
@@ -426,6 +477,7 @@ impl Client {
         manager.emit_signal(RecoverySignal::PumpDead).await;
     }
 
+    /// Construct a disconnected client using caller-provided trust and principal-scoped cursors.
     pub fn new(
         config: ClientConfig,
         trust_source: TrustSource,
@@ -462,6 +514,7 @@ impl Client {
             start_lock: Arc::new(tokio::sync::Mutex::new(())),
             drain_mgrs: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             suspended: Arc::new(AtomicBool::new(false)),
+            resume_task: Arc::new(tokio::sync::Mutex::new(None)),
             #[cfg(not(target_arch = "wasm32"))]
             checkpoint_save: Arc::new(tokio::sync::Mutex::new(())),
             #[cfg(not(target_arch = "wasm32"))]
@@ -471,6 +524,7 @@ impl Client {
         }
     }
 
+    /// Share one native SQLite store between journal checkpoints and offline cache projection.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new_sqlite(
         config: ClientConfig,
@@ -507,6 +561,7 @@ impl Client {
             start_lock: Arc::new(tokio::sync::Mutex::new(())),
             drain_mgrs: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             suspended: Arc::new(AtomicBool::new(false)),
+            resume_task: Arc::new(tokio::sync::Mutex::new(None)),
             #[cfg(not(target_arch = "wasm32"))]
             checkpoint_save: Arc::new(tokio::sync::Mutex::new(())),
             #[cfg(not(target_arch = "wasm32"))]
@@ -515,6 +570,7 @@ impl Client {
         }
     }
 
+    /// Return the shared native cache, or None for a cursor-only client.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn sqlite_storage(&self) -> Option<Arc<tinkle_storage::Storage>> {
         self.sqlite.clone()
@@ -534,10 +590,12 @@ impl Client {
         0
     }
 
+    /// Inspect the immutable endpoint, client snapshot, and runtime policy supplied at construction.
     pub fn config(&self) -> &ClientConfig {
         &self.config
     }
 
+    /// Report local transport availability, not server authorization or presence renewal.
     pub async fn is_connected(&self) -> bool {
         if self.authorization.is_signed_out() {
             return false;
@@ -550,6 +608,7 @@ impl Client {
             && self.transport_ok.load(Ordering::SeqCst)
     }
 
+    /// Return the application cache principal, hiding the retired scope after local sign-out.
     pub async fn principal(&self) -> String {
         if self.authorization.is_signed_out() {
             return UNKNOWN_PRINCIPAL.into();
@@ -557,6 +616,7 @@ impl Client {
         self.principal.read().await.clone()
     }
 
+    /// Switch cache scope for a positive user ID, retiring any prior Returning account context.
     pub async fn set_principal_user_id(&self, user_id: i64) {
         if user_id <= 0 || self.authorization.is_signed_out() {
             return;
@@ -786,16 +846,29 @@ impl Client {
                 .map_err(|e| TinkleError::CursorStore(format!("logout wipe task failed: {e}")))
                 .and_then(|r| r.map_err(|e| TinkleError::CursorStore(e.to_string())));
             }
+            let store = self.store.clone();
+            let p = principal.to_string();
+            let commit_guard = _client_guard.clone();
+            let cursor_result = tokio::spawn(async move {
+                let _guard = commit_guard;
+                store.clear_principal(&p).await
+            })
+            .await
+            .map_err(|e| TinkleError::CursorStore(format!("cursor clear task failed: {e}")))
+            .and_then(|result| result);
+            wipe_result = wipe_result.and(cursor_result);
         }
         self.reset_session_locked(mgr.as_deref()).await;
         wipe_result
     }
 
+    /// Establish one pinned connection unless already connected; never retry an application request.
     pub async fn connect(&self) -> Result<(), TinkleError> {
         let _connect_guard = self.connect_lock.lock().await;
         self.connect_locked().await
     }
 
+    /// Race establishment against irreversible sign-out while the caller holds the connection gate.
     async fn connect_locked(&self) -> Result<(), TinkleError> {
         let epoch = self.authorization.generation()?;
         let revoked = self.authorization.revoked.clone();
@@ -806,6 +879,7 @@ impl Client {
         }
     }
 
+    /// Install a fresh channel and its owned workers only if authorization and lifecycle still match.
     async fn connect_generation(
         &self,
         authorization: &crate::authorization::EnrollmentEpoch,
@@ -1034,6 +1108,7 @@ impl Client {
         error
     }
 
+    /// Resolve an open channel, rejecting a background caller pinned to a superseded generation.
     async fn live_conn(&self) -> Result<(Initiator, Arc<Initialization>), TinkleError> {
         self.live
             .read()
@@ -1050,6 +1125,7 @@ impl Client {
             .ok_or_else(|| TinkleError::NotConnected("call connect() first".into()))
     }
 
+    /// Resolve the reconcile manager without letting generation-bound restoration adopt a successor.
     async fn live_mgr(&self) -> Result<Arc<SyncManager>, TinkleError> {
         self.live
             .read()
@@ -1064,6 +1140,7 @@ impl Client {
             .ok_or_else(|| TinkleError::NotConnected("call connect() first".into()))
     }
 
+    /// Send opaque application bytes once, including first-call initialization in the caller budget.
     pub async fn call_raw(
         &self,
         method: &str,
@@ -1074,6 +1151,7 @@ impl Client {
             .await
     }
 
+    /// Apply cooperative cancellation to one raw call without replaying an uncertain remote effect.
     pub async fn call_raw_cancellable(
         &self,
         method: &str,
@@ -1096,7 +1174,7 @@ impl Client {
         let payload = Zeroizing::new(payload);
         self.check_call_admission(method)?;
         let budget = self.call_budget(timeout_ms)?;
-        self.call_initialized_with_budget(method, payload, &budget, token, None)
+        self.call_initialized_with_budget(method, payload, &budget, token, None, None)
             .await
     }
 
@@ -1143,34 +1221,44 @@ impl Client {
         payload: Zeroizing<Vec<u8>>,
         budget: &syntra_runtime::elapsed::ElapsedDeadline,
         token: &CancelToken,
-        dispatched: Option<&AtomicBool>,
+        progress: Option<&CallProgress>,
+        ready: Option<tokio::sync::MutexGuard<'_, bool>>,
     ) -> Result<Vec<u8>, TinkleError> {
-        self.check_call_admission(method)?;
+        self.check_call_admission_progress(method, progress)?;
         // Preserve the conservative outer pre-poll timeout; do not post-check an
         // SDK-selected response with ElapsedDeadline::run.
         let result = tokio::select! {
             biased;
             _ = self.authorization.revoked.cancelled(), if !self.logout_only => Err(TinkleError::SignedOut),
             _ = budget.expired() => Err(Self::call_budget_elapsed()),
-            result = self.call_initialized_inner(method, payload, budget, token, dispatched) => result,
+            result = self.call_initialized_inner(method, payload, budget, token, progress, ready) => result,
             _ = token.cancelled() => Err(TinkleError::Syntra(syntra_core::SyntraError::Cancelled("call cancelled".into()))),
         };
-        if result
-            .as_ref()
-            .is_err_and(|error| matches!(error.code(), syntra_core::ErrorCode::Unauthenticated))
-        {
-            self.authorization.set_authentication_known(false);
+        if let Err(error) = &result {
+            self.observe_denial(error);
         }
         result
     }
 
     /// Admit the private logout caller only on its captured Returning generation.
     fn check_call_admission(&self, method: &str) -> Result<(), TinkleError> {
+        self.check_call_admission_progress(method, None)
+    }
+
+    /// Mark restoration-only deferral separately from trust, sign-out, and transport failures.
+    fn check_call_admission_progress(
+        &self,
+        method: &str,
+        progress: Option<&CallProgress>,
+    ) -> Result<(), TinkleError> {
         self.check_provisioning_context()?;
         if self.endpoint_rejected.load(Ordering::SeqCst) {
             return Err(TinkleError::TrustRejected);
         }
         if self.retirement.is_restoring() {
+            if let Some(progress) = progress {
+                progress.deferred.store(true, Ordering::SeqCst);
+            }
             return Err(TinkleError::NotConnected(
                 "restoration install is pending".into(),
             ));
@@ -1186,6 +1274,16 @@ impl Client {
             return Err(TinkleError::SignedOut);
         }
         self.authorization.generation().map(|_| ())
+    }
+
+    /// Any application denial withdraws authorization knowledge, never credentials.
+    pub(crate) fn observe_denial(&self, error: &TinkleError) {
+        if matches!(
+            error.code(),
+            syntra_core::ErrorCode::Unauthenticated | syntra_core::ErrorCode::PermissionDenied
+        ) {
+            self.authorization.set_authentication_known(false);
+        }
     }
 
     /// A child admitted under an older configuration cannot park or use a
@@ -1210,15 +1308,16 @@ impl Client {
         payload: Zeroizing<Vec<u8>>,
         budget: &syntra_runtime::elapsed::ElapsedDeadline,
         token: &CancelToken,
-        dispatched: Option<&AtomicBool>,
+        progress: Option<&CallProgress>,
+        ready: Option<tokio::sync::MutexGuard<'_, bool>>,
     ) -> Result<Vec<u8>, TinkleError> {
         let (conn, initialized) = self.live_conn().await?;
-        self.check_call_admission(method)?;
+        self.check_call_admission_progress(method, progress)?;
         if !method.starts_with("/tinkle.v1.") {
             let encoded = payload.to_vec();
             let timeout_ms = Self::remaining_timeout_ms(budget)?;
-            if let Some(dispatched) = dispatched {
-                dispatched.store(true, Ordering::SeqCst);
+            if let Some(progress) = progress {
+                progress.dispatched.store(true, Ordering::SeqCst);
             }
             return conn
                 .call_cancellable(method, encoded, timeout_ms, token)
@@ -1230,14 +1329,17 @@ impl Client {
                 "InitConnect is owned by the client snapshot".into(),
             ));
         }
-        let mut ready = initialized.lock().await;
-        self.check_call_admission(method)?;
+        let mut ready = match ready {
+            Some(ready) => ready,
+            None => initialized.lock().await,
+        };
+        self.check_call_admission_progress(method, progress)?;
         if *ready {
             drop(ready);
             let encoded = payload.to_vec();
             let timeout_ms = Self::remaining_timeout_ms(budget)?;
-            if let Some(dispatched) = dispatched {
-                dispatched.store(true, Ordering::SeqCst);
+            if let Some(progress) = progress {
+                progress.dispatched.store(true, Ordering::SeqCst);
             }
             return conn
                 .call_cancellable(method, encoded, timeout_ms, token)
@@ -1257,8 +1359,17 @@ impl Client {
         let encoded = request.encode_to_vec();
         crate::enrollment::wipe_bytes(std::mem::take(&mut request.payload));
         let timeout_ms = Self::remaining_timeout_ms(budget)?;
-        if let Some(dispatched) = dispatched {
-            dispatched.store(true, Ordering::SeqCst);
+        let attempt = InitializationAttempt {
+            initialized: &initialized,
+            deadline: Arc::new(budget.clone()),
+        };
+        *initialized
+            .dispatched_deadline
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(attempt.deadline.clone());
+        initialized.changed.notify_one();
+        if let Some(progress) = progress {
+            progress.dispatched.store(true, Ordering::SeqCst);
         }
         let response = Zeroizing::new(
             conn.call_cancellable(
@@ -1278,18 +1389,66 @@ impl Client {
         let output = Zeroizing::new(decoded.payload.to_vec());
         crate::enrollment::wipe_bytes(std::mem::take(&mut decoded.payload));
         *ready = true;
+        drop(attempt);
         drop(ready);
         // This synchronous wake cannot turn a confirmed response into a local timeout.
         initialized.watch.notify_one();
         Ok(output.to_vec())
     }
 
-    /// None means the heartbeat never reached RPC dispatch; local contention is not peer failure.
+    /// Retain FIFO admission behind bounded initialization instead of repeatedly
+    /// timing out and requeueing. The initializer keeps its original deadline;
+    /// the heartbeat's five-second budget starts only after local admission.
     pub(crate) async fn call_keep_alive(
         &self,
         payload: Vec<u8>,
     ) -> Option<Result<Vec<u8>, TinkleError>> {
-        let dispatched = AtomicBool::new(false);
+        let progress = CallProgress::default();
+        let method = crate::liveness::KEEP_ALIVE_METHOD;
+        if let Err(error) = self.check_call_admission_progress(method, Some(&progress)) {
+            return if progress.deferred.load(Ordering::SeqCst) {
+                None
+            } else {
+                Some(Err(error))
+            };
+        }
+        let (_, initialized) = match self.live_conn().await {
+            Ok(live) => live,
+            Err(error) => return Some(Err(error)),
+        };
+        let queued = initialized.lock();
+        tokio::pin!(queued);
+        let ready = loop {
+            let deadline = initialized
+                .dispatched_deadline
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            tokio::select! { biased;
+                _ = self.authorization.revoked.cancelled() => return Some(Err(TinkleError::SignedOut)),
+                _ = async {
+                    match &self.call_generation {
+                        Some(generation) => generation.closed.cancelled().await,
+                        None => std::future::pending::<()>().await,
+                    }
+                } => return Some(Err(TinkleError::NetworkUnavailable)),
+                ready = &mut queued => break ready,
+                _ = initialized.changed.notified() => {},
+                _ = async {
+                    match &deadline {
+                        Some(deadline) => deadline.expired().await,
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    let current = initialized.dispatched_deadline.lock().unwrap_or_else(|e| e.into_inner());
+                    if current.as_ref().zip(deadline.as_ref()).is_some_and(|(current, expected)| Arc::ptr_eq(current, expected)) {
+                        // A dispatched initializer exceeded its own deadline. This
+                        // is not a timeout inferred merely from mutex contention.
+                        return Some(Err(Self::call_budget_elapsed()));
+                    }
+                },
+            }
+        };
         let budget = match self.call_budget(5_000) {
             Ok(budget) => budget,
             Err(error) => return Some(Err(error)),
@@ -1300,13 +1459,15 @@ impl Client {
                 Zeroizing::new(payload),
                 &budget,
                 &CancelToken::new(),
-                Some(&dispatched),
+                Some(&progress),
+                Some(ready),
             )
             .await;
-        if !dispatched.load(Ordering::SeqCst)
-            && result
-                .as_ref()
-                .is_err_and(|error| error.code() == syntra_core::ErrorCode::DeadlineExceeded)
+        if !progress.dispatched.load(Ordering::SeqCst)
+            && (progress.deferred.load(Ordering::SeqCst)
+                || result
+                    .as_ref()
+                    .is_err_and(|error| error.code() == syntra_core::ErrorCode::DeadlineExceeded))
         {
             None
         } else {
@@ -1366,10 +1527,12 @@ impl Client {
         }))
     }
 
+    /// Bind typed message operations to this client's current admission and channel.
     pub fn messages(&self) -> Messages<'_> {
         Messages::new(self)
     }
 
+    /// Bind enrollment operations to this client's protected-store coordinator.
     pub fn auth(&self) -> Auth<'_> {
         Auth::new(self)
     }
@@ -1379,10 +1542,12 @@ impl Client {
         Account::new(self)
     }
 
+    /// Bind ephemeral connectivity observations to this client's active channel.
     pub fn updates(&self) -> Updates<'_> {
         Updates::new(self)
     }
 
+    /// Bind validated file RPCs to this client without creating a separate transport.
     pub fn files(&self) -> Files<'_> {
         Files::new(self)
     }
@@ -1480,6 +1645,7 @@ impl Client {
         })
     }
 
+    /// Dispatch one already-chunked body fetch through the typed validation boundary.
     async fn get_messages_single(
         &self,
         req: tinkle_schema::proto::GetMessagesRequest,
@@ -1525,6 +1691,7 @@ impl Client {
         self.files().begin_upload(req).await
     }
 
+    /// Upload one validated part using the active channel and the facade's size checks.
     pub async fn upload_part(
         &self,
         req: tinkle_schema::proto::UploadPartRequest,
@@ -1532,6 +1699,7 @@ impl Client {
         self.files().upload_part(req).await
     }
 
+    /// Query upload progress without inferring that an unconfirmed mutation was rolled back.
     pub async fn get_upload_status(
         &self,
         req: tinkle_schema::proto::GetUploadStatusRequest,
@@ -1539,6 +1707,7 @@ impl Client {
         self.files().get_upload_status(req).await
     }
 
+    /// Submit upload completion once through the typed file service.
     pub async fn complete_upload(
         &self,
         req: tinkle_schema::proto::CompleteUploadRequest,
@@ -1546,6 +1715,7 @@ impl Client {
         self.files().complete_upload(req).await
     }
 
+    /// Request server-side upload cancellation; local future cancellation alone is not this RPC.
     pub async fn abort_upload(
         &self,
         req: tinkle_schema::proto::AbortUploadRequest,
@@ -1553,6 +1723,7 @@ impl Client {
         self.files().abort_upload(req).await
     }
 
+    /// Fetch file metadata through the facade's identity validation.
     pub async fn get_file_info(
         &self,
         req: tinkle_schema::proto::GetFileInfoRequest,
@@ -1560,6 +1731,7 @@ impl Client {
         self.files().get_file_info(req).await
     }
 
+    /// Fetch one bounded file range through the active encrypted connection.
     pub async fn download_part(
         &self,
         req: tinkle_schema::proto::DownloadPartRequest,
@@ -1626,6 +1798,7 @@ impl Client {
         result
     }
 
+    /// Page and commit one fenced target journal, then repair missing bodies without cursor forgery.
     async fn reconcile_target_inner(
         &self,
         mgr: &Arc<SyncManager>,
@@ -3097,6 +3270,10 @@ impl Client {
     ) -> Result<(), TinkleError> {
         let epoch = self.reconcile_epoch();
         let _sub = self.sub_lock.lock().await;
+        let scope = self.connect_lock.lock().await;
+        if self.reconcile_epoch() != epoch || self.is_signed_out() {
+            return Err(TinkleError::Sync("subscription scope changed".into()));
+        }
         let mgr = self.live_mgr().await?;
         let principal = self.principal().await;
         if principal == UNKNOWN_PRINCIPAL {
@@ -3107,12 +3284,12 @@ impl Client {
         for t in &targets {
             target_key_of(t)?;
         }
-        mgr.track_targets(targets.clone()).await;
         {
             let mut g = self.interests.lock().await;
             if self.reconcile_epoch() != epoch || self.is_signed_out() {
                 return Err(TinkleError::Sync("subscription scope changed".into()));
             }
+            mgr.track_targets(targets.clone()).await;
             // Merge: keep existing plus new (dedupe by key).
             let mut keys: HashSet<String> = g
                 .targets
@@ -3128,6 +3305,7 @@ impl Client {
             }
             g.subscribed = true;
         }
+        drop(scope);
         // Kick: one pass now (manual path); supervisor reschedules demand.
         let keys = self.tracked_targets().await;
         for key in keys {
@@ -3168,6 +3346,7 @@ impl Client {
         Ok(())
     }
 
+    /// Drain retained managers before waiting on the current one, following connection replacement.
     pub async fn next_event(&self) -> Option<SyncEvent> {
         loop {
             {
@@ -3205,6 +3384,7 @@ impl Client {
         }
     }
 
+    /// Keep at most two distinct retired event sources available for subsequent draining.
     async fn retain_manager(&self, mgr: Arc<SyncManager>) {
         let mut retained = self.drain_mgrs.lock().await;
         if retained.iter().any(|m| Arc::ptr_eq(m, &mgr)) {
@@ -3216,6 +3396,7 @@ impl Client {
         }
     }
 
+    /// Fence the live channel and join retired workers, retaining ownership if teardown is cancelled.
     async fn teardown_connection(&self) {
         let mut retiring = self.retiring.lock().await;
         {
@@ -3246,10 +3427,12 @@ impl Client {
         }
     }
 
+    /// Stop transport and supervised work without signing out or erasing protected credentials.
     pub async fn close(&self) {
         self.stop().await;
     }
 
+    /// Stop observation, supervisor, and transport before draining native commits outside the dial gate.
     pub async fn stop(&self) {
         self.pause_retirement_schedule().await;
         self.stop_supervisor().await;
@@ -3263,6 +3446,7 @@ impl Client {
         let _commits = self.checkpoint_save.lock().await;
     }
 
+    /// Join the async supervisor without blocking protected-store invalidation on cache writers.
     async fn stop_supervisor(&self) {
         // Keep the aborted join owner in shared state if this waiter is dropped.
         let mut sup = self.sup_state.lock().await;
@@ -3281,11 +3465,15 @@ impl Client {
         *self.signal_tx.lock().await = None;
     }
 
+    /// Make suspension authoritative over older resume work, then retire observation and transport.
     pub async fn suspend(&self) {
         {
             let mut sup = self.sup_state.lock().await;
             sup.epoch = sup.epoch.wrapping_add(1);
             sup.suspension_epoch = sup.suspension_epoch.wrapping_add(1);
+            if let Some(cancel) = sup.resume_cancel.take() {
+                cancel.cancel();
+            }
             self.suspended.store(true, Ordering::SeqCst);
         }
         self.pause_retirement_schedule().await;
@@ -3293,35 +3481,94 @@ impl Client {
         self.teardown_connection().await;
     }
 
+    /// Join or retain a foreground transition so waiter cancellation cannot strand local suspension.
     pub async fn resume(&self) {
         if self.authorization.is_signed_out() {
             return;
         }
+        // Admission precedes the owner queue: a later suspend supersedes queued
+        // requests as well as the transition currently running for this epoch.
+        let epoch = self.sup_state.lock().await.suspension_epoch;
+        let mut owner = self.resume_task.lock().await;
+        if self.sup_state.lock().await.suspension_epoch != epoch {
+            return;
+        }
+        if let Some(current) = owner.as_mut() {
+            let join_current = !current.task.is_finished() && epoch == current.suspension_epoch;
+            let _ = (&mut current.task).await;
+            *owner = None;
+            if join_current {
+                return;
+            }
+        }
+        if self.is_signed_out() {
+            return;
+        }
+        let mut sup = self.sup_state.lock().await;
+        if sup.suspension_epoch != epoch {
+            return;
+        }
+        let cancelled = CancelToken::new();
+        sup.resume_cancel = Some(cancelled.clone());
+        self.suspended.store(true, Ordering::SeqCst);
+        let caller = self.background_clone();
+        let owner_gone = self.owner_gone();
+        // Spawn before yielding after the suspension write. The shared join owner
+        // survives waiter cancellation; the worker never locks resume_task.
+        *owner = Some(ResumeTask {
+            suspension_epoch: epoch,
+            task: tokio::spawn(async move {
+                caller.resume_owned(epoch, cancelled, owner_gone).await;
+            }),
+        });
+        drop(sup);
+        if let Some(current) = owner.as_mut() {
+            let _ = (&mut current.task).await;
+        }
+        *owner = None;
+    }
+
+    /// One retained foreground transition. A later suspend cancels entry and
+    /// fences completion without abandoning teardown's retained task owners.
+    async fn resume_owned(
+        &self,
+        suspension_epoch: u64,
+        cancelled: CancelToken,
+        owner_gone: CancelToken,
+    ) {
         // A foreground/wake call never carries timers or an unverified old
         // socket across the platform suspension boundary.
-        let suspension_epoch = {
-            let sup = self.sup_state.lock().await;
-            self.suspended.store(true, Ordering::SeqCst);
-            sup.suspension_epoch
+        let connection = tokio::select! { biased;
+            _ = cancelled.cancelled() => return,
+            _ = owner_gone.cancelled() => return,
+            _ = self.authorization.revoked.cancelled() => return,
+            connection = self.connect_lock.lock() => connection,
         };
-        let _connect = self.connect_lock.lock().await;
         self.teardown_connection().await;
-        drop(_connect);
-        let _ = self.foreground_retirement().await;
+        drop(connection);
+        tokio::select! { biased;
+            _ = cancelled.cancelled() => return,
+            _ = owner_gone.cancelled() => return,
+            _ = self.authorization.revoked.cancelled() => return,
+            _ = self.foreground_retirement() => {},
+        }
         let sup = self.sup_state.lock().await;
         if !self.is_signed_out() && sup.suspension_epoch == suspension_epoch {
             self.suspended.store(false, Ordering::SeqCst);
         }
     }
 
+    /// Inspect the local admission gate used by lifecycle and background workers.
     pub async fn is_suspended(&self) -> bool {
         self.suspended.load(Ordering::SeqCst)
     }
 
+    /// Make one explicit replacement attempt and restore interests without replaying application RPCs.
     pub async fn reconnect(&self) -> Result<(), TinkleError> {
         self.reconnect_once(false, &mut None).await
     }
 
+    /// Fence restoration and retry bookkeeping to this attempt's source and installed generation.
     async fn reconnect_once(
         &self,
         automatic: bool,
@@ -3340,6 +3587,11 @@ impl Client {
             return Err(TinkleError::Configuration(
                 "automatic reconnect is parked".into(),
             ));
+        }
+        // Resume may wake the supervisor while a manual dial already owns this
+        // gate. Its queued loss observation must not retire that healthy result.
+        if automatic && self.is_connected().await {
+            return Ok(());
         }
         let attempt = Arc::new(());
         self.sup_state.lock().await.reconnect_attempt = Some(attempt.clone());
@@ -3413,6 +3665,7 @@ impl Client {
         }
     }
 
+    /// Establish retained interests and one supervisor after the foreground retirement barrier.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn start(
         &self,
@@ -3463,6 +3716,7 @@ impl Client {
         }
     }
 
+    /// Reject supervised startup on unsupported wasm runtimes without attempting native I/O.
     #[cfg(target_arch = "wasm32")]
     pub async fn start(
         &self,
@@ -3474,6 +3728,7 @@ impl Client {
         ))
     }
 
+    /// Connect and subscribe for startup, rejecting completion after a supervisor epoch change.
     #[cfg(not(target_arch = "wasm32"))]
     async fn establish(
         &self,
@@ -3503,6 +3758,7 @@ impl Client {
         result
     }
 
+    /// Drive bounded recovery signals and periodic demand sweeps through the sole reconnect scheduler.
     #[cfg(not(target_arch = "wasm32"))]
     async fn supervise(
         self,
@@ -3563,6 +3819,7 @@ impl Client {
         }
     }
 
+    /// Prune untracked demand and retry only targets whose per-target backoff has elapsed.
     #[cfg(not(target_arch = "wasm32"))]
     async fn recover_due(&self, demand: &mut HashMap<String, TargetDemand>) {
         // Drop demand for untracked targets first: stale queued demand must
@@ -3633,6 +3890,7 @@ impl Client {
         }
     }
 
+    /// Attempt recovery only after liveness classification, backoff, and terminal parking allow it.
     #[cfg(not(target_arch = "wasm32"))]
     async fn reestablish(&self) {
         if self.authorization.is_signed_out() {
@@ -3713,6 +3971,7 @@ impl Client {
         }
     }
 
+    /// Retry a tracked, non-running target in bounded attempts, retaining demand on failure.
     #[cfg(not(target_arch = "wasm32"))]
     async fn recover_one(&self, target_key: &str, demand: &mut HashMap<String, TargetDemand>) {
         let now = std::time::Instant::now();
@@ -3891,6 +4150,7 @@ impl Client {
         })
     }
 
+    /// Aggregate bounded history pages on the non-SQLite path without advancing journal positions.
     #[cfg(target_arch = "wasm32")]
     pub async fn load_history(
         &self,
@@ -3971,6 +4231,7 @@ impl Client {
         Ok(resp)
     }
 
+    /// Return the typed dialog snapshot without native cache hydration.
     #[cfg(target_arch = "wasm32")]
     pub async fn load_dialogs(
         &self,
@@ -4065,6 +4326,7 @@ impl Client {
         }
     }
 
+    /// Globally pin dialog rows only while the captured epoch remains valid at the blocking write.
     #[cfg(not(target_arch = "wasm32"))]
     async fn ingest_snapshot_dialogs(
         &self,
@@ -4192,6 +4454,7 @@ impl Client {
         }
     }
 
+    /// Inspect configured channel mode without treating retained credentials as current admission.
     pub(crate) async fn has_returning_source(&self) -> bool {
         matches!(
             &*self.trust_source.read().await,
@@ -4343,6 +4606,7 @@ impl Client {
         self.retirement.invalidate();
     }
 
+    /// Inspect current runtime correlation demand, returning zero when no channel is retained.
     pub async fn pending_len(&self) -> usize {
         match self.live.read().await.as_ref() {
             Some(l) => l.handle.conn.pending_len(),
@@ -4350,6 +4614,7 @@ impl Client {
         }
     }
 
+    /// Inspect the retained channel identity; its presence alone does not attest an open transport.
     pub async fn connection_id(&self) -> Option<String> {
         self.live
             .read()
@@ -4358,6 +4623,7 @@ impl Client {
             .map(|l| l.connection_id.clone())
     }
 
+    /// Inspect the retained channel's negotiated Syntra version, not application schema compatibility.
     pub async fn version(&self) -> Option<u32> {
         self.live.read().await.as_ref().map(|l| l.version)
     }
@@ -4375,9 +4641,11 @@ mod tests {
         std::sync::Arc<tokio::sync::Notify>,
         std::sync::Arc<tokio::sync::Notify>,
         std::sync::atomic::AtomicBool,
+        std::sync::Mutex<Option<syntra_core::ErrorCode>>,
     );
 
     impl syntra_runtime::Handler for BudgetHandler {
+        /// Let the fixture handler, rather than transport authorization, choose test denial codes.
         fn authorize(
             &self,
             _: &syntra_runtime::Principal,
@@ -4386,6 +4654,7 @@ mod tests {
             Ok(())
         }
 
+        /// Reject the legacy handler path so budget tests cannot omit the SDK request context.
         fn handle(
             &self,
             _: String,
@@ -4395,6 +4664,7 @@ mod tests {
             panic!("budget fixture requires the published request context")
         }
 
+        /// Record admitted budgets and exercise held, rejected, or echoed application responses.
         fn handle_with_context(
             &self,
             method: String,
@@ -4421,6 +4691,7 @@ mod tests {
             let hold = self.4.load(std::sync::atomic::Ordering::SeqCst);
             let entered = self.2.clone();
             let released = self.3.clone();
+            let denial = *self.5.lock().unwrap();
             Box::pin(async move {
                 let _lease = lease;
                 entered.notify_one();
@@ -4432,6 +4703,9 @@ mod tests {
                         syntra_core::ErrorCode::Unavailable,
                         "retry observation",
                     );
+                }
+                if let Some(code) = denial {
+                    return syntra_runtime::HandlerOutcome::error(code, "denied");
                 }
                 let payload = if method.ends_with("/Logout") {
                     tinkle_schema::proto::LogoutResponse { logged_out: true }.encode_to_vec()
@@ -4460,6 +4734,7 @@ mod tests {
     /// Fixed Returning key for a private, encrypted TCP budget fixture.
     struct BudgetKeys;
     impl syntra_core::secure_channel::KeyStore for BudgetKeys {
+        /// Supply the fixed synthetic key used by this fixture's Returning channel.
         fn lookup(
             &self,
             _: &syntra_core::secure_channel::Context,
@@ -4482,6 +4757,7 @@ mod tests {
         budget_fixture_connections(returning, default, max, 1).await
     }
 
+    /// Accept a fixed number of encrypted generations to make reconnect tests self-terminating.
     async fn budget_fixture_connections(
         returning: bool,
         default: std::time::Duration,
@@ -4603,6 +4879,7 @@ mod tests {
         }
     }
 
+    /// Keep optional observation demand alive through Unavailable despite a healthy heartbeat.
     #[tokio::test]
     async fn review_observation_retries_while_keep_alive_succeeds() {
         use super::*;
@@ -4654,6 +4931,7 @@ mod tests {
         server.await.unwrap();
     }
 
+    /// Hold local admission past the RPC ceiling without retiring the open generation.
     #[tokio::test]
     async fn review_keep_alive_local_contention_is_not_connection_failure() {
         use super::*;
@@ -4672,14 +4950,18 @@ mod tests {
             .clone();
         let mut heartbeat = client.clone();
         heartbeat.call_generation = Some(generation.clone());
-        assert!(heartbeat
-            .call_keep_alive(tinkle_schema::proto::KeepAliveRequest { sequence: 1 }.encode_to_vec())
-            .await
-            .is_none());
+        let waiting = heartbeat.call_keep_alive(
+            tinkle_schema::proto::KeepAliveRequest { sequence: 1 }.encode_to_vec(),
+        );
+        tokio::pin!(waiting);
+        assert!(futures_util::poll!(&mut waiting).is_pending());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(futures_util::poll!(&mut waiting).is_pending());
         assert!(handler.0.lock().unwrap().is_empty());
         assert!(generation.open.load(Ordering::SeqCst));
         assert!(client.is_connected().await);
         drop(lock);
+        assert!(waiting.await.unwrap().is_ok());
         assert!(heartbeat
             .call_keep_alive(tinkle_schema::proto::KeepAliveRequest { sequence: 2 }.encode_to_vec())
             .await
@@ -4689,6 +4971,249 @@ mod tests {
         server.await.unwrap();
     }
 
+    /// Ensure a queued heartbeat keeps its place ahead of later unary initialization attempts.
+    #[tokio::test]
+    async fn followup_heartbeat_keeps_fifo_place_across_local_timeout_windows() {
+        use super::*;
+        use std::time::Duration;
+        let (client, handler, server) =
+            budget_fixture(true, Duration::from_secs(1), Duration::from_millis(100)).await;
+        let (_, initialized) = client.live_conn().await.unwrap();
+        let lock = initialized.lock().await;
+        let heartbeat = client.call_keep_alive(
+            tinkle_schema::proto::KeepAliveRequest { sequence: 1 }.encode_to_vec(),
+        );
+        tokio::pin!(heartbeat);
+        assert!(futures_util::poll!(&mut heartbeat).is_pending());
+        // Queue an ordinary call behind the heartbeat, then hold local admission
+        // longer than its eventual RPC budget without treating that as peer loss.
+        let unary = client.call_raw("/tinkle.v1.AuthService/SendCode", vec![], 0);
+        tokio::pin!(unary);
+        assert!(futures_util::poll!(&mut unary).is_pending());
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(futures_util::poll!(&mut heartbeat).is_pending());
+        assert!(client.is_connected().await);
+        drop(lock);
+        heartbeat.await.unwrap().unwrap();
+        assert_eq!(
+            handler.0.lock().unwrap()[0].0,
+            crate::liveness::KEEP_ALIVE_METHOD
+        );
+        assert!(unary.await.is_err());
+        client.close().await;
+        server.await.unwrap();
+    }
+
+    /// Distinguish a dispatched heartbeat timeout from the initializer timeout that preceded it.
+    #[tokio::test]
+    async fn followup_stalled_initializer_does_not_mask_dispatched_heartbeat_failure() {
+        use super::*;
+        use std::time::Duration;
+        let (client, handler, server) =
+            budget_fixture(true, Duration::from_secs(1), Duration::from_millis(100)).await;
+        handler.4.store(true, Ordering::SeqCst);
+        let caller = client.clone();
+        let unary = tokio::spawn(async move {
+            caller
+                .call_raw("/tinkle.v1.AuthService/SendCode", vec![], 0)
+                .await
+        });
+        handler.2.notified().await;
+        let heartbeat = client.call_keep_alive(
+            tinkle_schema::proto::KeepAliveRequest { sequence: 1 }.encode_to_vec(),
+        );
+        tokio::pin!(heartbeat);
+        assert_eq!(
+            unary.await.unwrap().unwrap_err().code(),
+            syntra_core::ErrorCode::DeadlineExceeded
+        );
+        let error = heartbeat.await.unwrap().unwrap_err();
+        assert_eq!(error.code(), syntra_core::ErrorCode::DeadlineExceeded);
+        assert_eq!(handler.0.lock().unwrap().len(), 2);
+        let generation = client
+            .live
+            .read()
+            .await
+            .as_ref()
+            .unwrap()
+            .generation
+            .clone();
+        client.fail_liveness(&generation, &error).await;
+        assert!(!client.is_connected().await);
+        client.close().await;
+        server.await.unwrap();
+    }
+
+    /// Observe a dispatched initializer's expiry even when its caller stops polling the held future.
+    #[tokio::test]
+    async fn followup_unpolled_dispatched_initializer_is_detected_by_its_own_cutoff() {
+        use super::*;
+        use std::time::Duration;
+        let (client, handler, server) =
+            budget_fixture(true, Duration::from_secs(1), Duration::from_millis(100)).await;
+        handler.4.store(true, Ordering::SeqCst);
+        {
+            let unary = client.call_raw("/tinkle.v1.AuthService/SendCode", vec![], 0);
+            tokio::pin!(unary);
+            tokio::select! {
+                _ = &mut unary => panic!("fixture must hold initialization"),
+                _ = handler.2.notified() => {},
+            }
+            // Retain, but deliberately do not poll, the initializer again. Its
+            // mutex remains held even when the dispatched request has expired.
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let error = client
+                .call_keep_alive(
+                    tinkle_schema::proto::KeepAliveRequest { sequence: 1 }.encode_to_vec(),
+                )
+                .await
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(error.code(), syntra_core::ErrorCode::DeadlineExceeded);
+            assert_eq!(handler.0.lock().unwrap().len(), 1, "no initializer replay");
+        }
+        client.close().await;
+        server.await.unwrap();
+    }
+
+    /// Build synthetic reference metadata for local admission tests, not a usable ACTIVE receipt.
+    fn followup_status() -> tinkle_schema::proto::DeviceEnrollmentStatus {
+        tinkle_schema::proto::DeviceEnrollmentStatus {
+            session_id: "12345678-1234-4234-8234-123456789abc".into(),
+            handle: vec![8; 8].into(),
+            enrollment_epoch: 1,
+            user_id: 1,
+            account_auth_epoch: 1,
+            scope: 1,
+            state: 2,
+            ..Default::default()
+        }
+    }
+
+    /// Cover restoration starting both before heartbeat entry and during its initialization wait.
+    #[tokio::test]
+    async fn followup_restoration_pending_defers_heartbeat_before_and_after_wait() {
+        use super::*;
+        use std::time::Duration;
+        for after_wait in [false, true] {
+            let (client, handler, server) =
+                budget_fixture(true, Duration::from_secs(1), Duration::from_secs(1)).await;
+            let (_, initialized) = client.live_conn().await.unwrap();
+            let lock = initialized.lock().await;
+            let heartbeat = client.call_keep_alive(
+                tinkle_schema::proto::KeepAliveRequest { sequence: 1 }.encode_to_vec(),
+            );
+            tokio::pin!(heartbeat);
+            if after_wait {
+                assert!(futures_util::poll!(&mut heartbeat).is_pending());
+            }
+            client.retirement.bind(
+                client.enrollment_trust().await,
+                &followup_status(),
+                Arc::new(BudgetStore::default()),
+                true,
+                false,
+            );
+            drop(lock);
+            assert!(heartbeat.await.is_none());
+            assert!(handler.0.lock().unwrap().is_empty());
+            assert!(client.is_connected().await);
+            client.retirement.invalidate();
+            client
+                .call_keep_alive(
+                    tinkle_schema::proto::KeepAliveRequest { sequence: 2 }.encode_to_vec(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            client.close().await;
+            server.await.unwrap();
+        }
+    }
+
+    /// Resume actual periodic probing after a restoration barrier without replacing the channel.
+    #[tokio::test]
+    async fn followup_liveness_loop_survives_restoration_admission_barrier() {
+        use super::*;
+        use std::time::Duration;
+        let (client, handler, server) =
+            budget_fixture(true, Duration::from_secs(1), Duration::from_secs(1)).await;
+        client.retirement.bind(
+            client.enrollment_trust().await,
+            &followup_status(),
+            Arc::new(BudgetStore::default()),
+            true,
+            false,
+        );
+        tokio::task::yield_now().await;
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(6)).await;
+        tokio::time::resume();
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert!(client.is_connected().await);
+        assert!(handler.0.lock().unwrap().is_empty());
+        client.retirement.invalidate();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(5)).await;
+        tokio::time::resume();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while handler.0.lock().unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            handler.0.lock().unwrap()[0].0,
+            crate::liveness::KEEP_ALIVE_METHOD
+        );
+        assert!(client.is_connected().await);
+        client.close().await;
+        server.await.unwrap();
+    }
+
+    /// Apply both denial codes across raw/typed and initialized/wrapped dispatch without key erasure.
+    #[tokio::test]
+    async fn followup_raw_and_typed_denials_withdraw_auth_without_retiring_credentials() {
+        use std::time::Duration;
+        for code in [
+            syntra_core::ErrorCode::PermissionDenied,
+            syntra_core::ErrorCode::Unauthenticated,
+        ] {
+            for ready in [false, true] {
+                for raw in [false, true] {
+                    let (client, handler, server) =
+                        budget_fixture(true, Duration::from_secs(1), Duration::from_secs(1)).await;
+                    let (_, initialized) = client.live_conn().await.unwrap();
+                    *initialized.lock().await = ready;
+                    *handler.5.lock().unwrap() = Some(code);
+                    let result = if raw {
+                        client.call_raw("/example.Echo/Call", vec![], 0).await
+                    } else {
+                        client
+                            .messages()
+                            .get_history(Default::default())
+                            .await
+                            .map(|_| vec![])
+                    };
+                    assert_eq!(result.unwrap_err().code(), code);
+                    assert!(!client.authorization.authentication_known());
+                    if code == syntra_core::ErrorCode::PermissionDenied {
+                        assert!(client.is_connected().await);
+                    }
+                    assert!(!client.is_signed_out());
+                    assert!(client.has_returning_source().await);
+                    assert_eq!(handler.0.lock().unwrap().len(), 1);
+                    client.close().await;
+                    server.await.unwrap();
+                }
+            }
+        }
+    }
+
+    /// Release an older resume after suspend has advanced its fence and retain suspension.
     #[tokio::test]
     async fn review_resume_cannot_undo_later_suspend() {
         use std::time::Duration;
@@ -4707,6 +5232,43 @@ mod tests {
         server.await.unwrap();
     }
 
+    /// A resume queued before suspend must not adopt the newer epoch after its predecessor finishes.
+    #[tokio::test]
+    async fn followup_queued_resume_cannot_undo_later_suspend() {
+        use std::time::Duration;
+        let (client, _, server) =
+            budget_fixture(false, Duration::from_secs(1), Duration::from_secs(1)).await;
+        let retiring = client.retiring.lock().await;
+        let first = client.resume();
+        let queued = client.resume();
+        let suspend = client.suspend();
+        tokio::pin!(first, queued, suspend);
+        assert!(futures_util::poll!(&mut first).is_pending());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while client.connect_lock.lock.try_lock().is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        // A holds resume_task and waits in teardown; B has already entered resume.
+        assert!(futures_util::poll!(&mut queued).is_pending());
+        assert!(futures_util::poll!(&mut suspend).is_pending());
+        drop(retiring);
+        first.await;
+        suspend.await;
+        queued.await;
+        assert!(client.is_suspended().await);
+        assert!(!client.is_connected().await);
+        assert!(client.sup_state.lock().await.resume_cancel.is_none());
+        // Only a new request admitted after suspension may enter foreground again.
+        client.resume().await;
+        assert!(!client.is_suspended().await);
+        client.close().await;
+        server.await.unwrap();
+    }
+
+    /// Keep stop distinct from suspension so a concurrent resume still permits a later connect.
     #[tokio::test]
     async fn review_resume_concurrent_stop_does_not_require_another_resume() {
         use std::time::Duration;
@@ -4729,6 +5291,7 @@ mod tests {
         server.await.unwrap();
     }
 
+    /// Allow foreground completion to clear suspension after an unrelated supervisor epoch change.
     #[tokio::test]
     async fn review_resume_foreground_wait_ignores_supervisor_only_epoch_changes() {
         let client = crate::enrollment::review_tests::client(false);
@@ -4743,6 +5306,7 @@ mod tests {
         client.close().await;
     }
 
+    /// Ensure retirement's supervisor stop cannot let resume reopen a signed-out client.
     #[tokio::test]
     async fn review_resume_retirement_cleanup_keeps_signed_out_suspended() {
         use super::*;
@@ -4767,6 +5331,292 @@ mod tests {
         client.close().await;
     }
 
+    /// Join the retained transition directly without starting another explicit resume.
+    async fn followup_drain_resume(client: &super::Client) {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let mut owner = client.resume_task.lock().await;
+            if let Some(current) = owner.as_mut() {
+                (&mut current.task).await.unwrap();
+            }
+            *owner = None;
+        })
+        .await
+        .unwrap();
+    }
+
+    /// Drop a teardown waiter, then verify completion and later suspend/logout authority separately.
+    #[tokio::test]
+    async fn followup_cancelled_resume_finishes_teardown_without_overriding_suspend_or_logout() {
+        use std::time::Duration;
+        for later in [0, 1, 2] {
+            let (client, _, server) =
+                budget_fixture(false, Duration::from_secs(1), Duration::from_secs(1)).await;
+            let retiring = client.retiring.lock().await;
+            {
+                let resume = client.resume();
+                tokio::pin!(resume);
+                assert!(futures_util::poll!(&mut resume).is_pending());
+                tokio::task::yield_now().await;
+                assert!(client.is_suspended().await);
+            }
+            let subsequent = async {
+                match later {
+                    1 => client.suspend().await,
+                    2 => {
+                        client.logout().await.unwrap();
+                    }
+                    _ => {}
+                }
+            };
+            tokio::pin!(subsequent);
+            if later != 0 {
+                assert!(futures_util::poll!(&mut subsequent).is_pending());
+            }
+            drop(retiring);
+            subsequent.await;
+            followup_drain_resume(&client).await;
+            assert_eq!(client.is_suspended().await, later != 0);
+            assert_eq!(client.is_signed_out(), later == 2);
+            client.close().await;
+            server.await.unwrap();
+        }
+    }
+
+    #[derive(Default)]
+    struct ForegroundBarrierStore {
+        entered: tokio::sync::Notify,
+        released: tokio::sync::Notify,
+    }
+    #[async_trait::async_trait]
+    impl crate::SecureEnrollmentStore for ForegroundBarrierStore {
+        /// Hold foreground observation at its protected read, then return no conditional namespace.
+        async fn namespace_snapshot(
+            &self,
+        ) -> Result<Option<crate::EnrollmentNamespaceSnapshot>, crate::SecureStoreError> {
+            self.entered.notify_one();
+            self.released.notified().await;
+            Ok(None)
+        }
+        /// Acknowledge clearing this metadata-only fixture, which retains no protected records.
+        async fn clear(&self) -> Result<(), crate::SecureStoreError> {
+            Ok(())
+        }
+        /// Accept unused writes without persisting credentials in this foreground-only fixture.
+        async fn commit(
+            &self,
+            _: crate::SecureWrite,
+            _: &str,
+            _: &crate::SecretBlob,
+        ) -> Result<(), crate::SecureStoreError> {
+            Ok(())
+        }
+        /// Keep operation recovery absent so the fixture tests only foreground read ownership.
+        async fn load_operation(
+            &self,
+            _: &str,
+        ) -> Result<Option<crate::SecretBlob>, crate::SecureStoreError> {
+            Ok(None)
+        }
+        /// Return no active key; the test binding supplies observation metadata only.
+        async fn load_active(&self) -> Result<Option<crate::SecretBlob>, crate::SecureStoreError> {
+            Ok(None)
+        }
+    }
+
+    /// Release a held protected read after cancelling resume's waiter and observe its final state.
+    #[tokio::test]
+    async fn followup_cancelled_resume_finishes_foreground_entry() {
+        use super::*;
+        use std::time::Duration;
+        let (client, _, server) =
+            budget_fixture(false, Duration::from_secs(1), Duration::from_secs(1)).await;
+        let store = Arc::new(ForegroundBarrierStore::default());
+        client.retirement.bind(
+            client.enrollment_trust().await,
+            &followup_status(),
+            store.clone(),
+            false,
+            true,
+        );
+        let caller = client.clone();
+        let waiter = tokio::spawn(async move { caller.resume().await });
+        tokio::time::timeout(Duration::from_secs(1), store.entered.notified())
+            .await
+            .unwrap();
+        assert!(client.is_suspended().await);
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        store.released.notify_one();
+        followup_drain_resume(&client).await;
+        assert!(!client.is_suspended().await);
+        assert!(!client.is_signed_out());
+        client.close().await;
+        server.await.unwrap();
+    }
+
+    /// Change principal behind sub_lock and require rejection before any manager or interest mutation.
+    #[tokio::test]
+    async fn followup_subscription_scope_rejection_has_no_tracking_effects() {
+        use super::*;
+        use std::time::Duration;
+        let (client, handler, server) =
+            budget_fixture(false, Duration::from_secs(1), Duration::from_secs(1)).await;
+        client.set_principal_user_id(1).await;
+        let manager = client.live_mgr().await.unwrap();
+        let lock = client.sub_lock.lock().await;
+        let subscribe = client.subscribe(vec![tinkle_schema::proto::Target {
+            kind: Some(tinkle_schema::proto::target::Kind::UserId(42)),
+        }]);
+        tokio::pin!(subscribe);
+        assert!(futures_util::poll!(&mut subscribe).is_pending());
+        client.set_principal_user_id(2).await;
+        drop(lock);
+        assert!(matches!(subscribe.await, Err(TinkleError::Sync(_))));
+        assert!(manager.tracked_keys().await.is_empty());
+        assert!(client.tracked_targets().await.is_empty());
+        assert!(!client.interests.lock().await.subscribed);
+        assert!(handler.0.lock().unwrap().is_empty());
+        client.close().await;
+        server.await.unwrap();
+    }
+
+    /// Recheck queued loss demand after a manual dial wins, avoiding a redundant replacement.
+    #[tokio::test]
+    async fn followup_queued_supervisor_does_not_replace_completed_manual_dial() {
+        use std::time::Duration;
+        let (client, _, server) =
+            budget_fixture_connections(false, Duration::from_secs(1), Duration::from_secs(1), 2)
+                .await;
+        client.close().await;
+        let connection = client.connect_lock.lock().await;
+        let manual = client.reconnect();
+        let automatic = client.reestablish();
+        tokio::pin!(manual, automatic);
+        assert!(futures_util::poll!(&mut manual).is_pending());
+        assert!(futures_util::poll!(&mut automatic).is_pending());
+        drop(connection);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let (result, ()) = tokio::join!(manual, automatic);
+            result.unwrap();
+        })
+        .await
+        .unwrap();
+        assert!(client.is_connected().await);
+        assert!(!client.sup_state.lock().await.reconnect_blocked);
+        client.close().await;
+        server.await.unwrap();
+    }
+
+    #[derive(Default)]
+    struct FollowupCursorStore {
+        inner: crate::InMemoryCursorStore,
+        fail: std::sync::atomic::AtomicBool,
+        clears: std::sync::Mutex<Vec<String>>,
+    }
+    #[async_trait::async_trait]
+    impl crate::CursorStore for FollowupCursorStore {
+        /// Read the isolated in-memory journal used to verify per-principal clearing.
+        async fn load_journal(
+            &self,
+            principal: &str,
+            target: &str,
+        ) -> Result<Option<i64>, crate::TinkleError> {
+            self.inner.load_journal(principal, target).await
+        }
+        /// Seed independent principal checkpoints for logout isolation assertions.
+        async fn save_journal(
+            &self,
+            principal: &str,
+            target: &str,
+            seq: i64,
+        ) -> Result<(), crate::TinkleError> {
+            self.inner.save_journal(principal, target, seq).await
+        }
+        /// Preserve ordinary target removal while this fixture injects failures only on clear.
+        async fn remove_target(
+            &self,
+            principal: &str,
+            target: &str,
+        ) -> Result<(), crate::TinkleError> {
+            self.inner.remove_target(principal, target).await
+        }
+        /// Record the requested principal and optionally fail before erasing its checkpoints.
+        async fn clear_principal(&self, principal: &str) -> Result<(), crate::TinkleError> {
+            self.clears.lock().unwrap().push(principal.to_string());
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(crate::TinkleError::CursorStore("clear failed".into()));
+            }
+            self.inner.clear_principal(principal).await
+        }
+    }
+
+    /// Retry failed injected-store clearing under the original scope, preserving another account.
+    #[tokio::test]
+    async fn followup_logout_clears_injected_cursors_and_retries_original_principal() {
+        use super::*;
+        use std::time::Duration;
+        for with_sqlite in [false, true] {
+            let (mut client, _, server) =
+                budget_fixture(false, Duration::from_secs(1), Duration::from_secs(1)).await;
+            let store = Arc::new(FollowupCursorStore::default());
+            client.store = store.clone();
+            store
+                .save_journal("user:1", "target:user:42", 9)
+                .await
+                .unwrap();
+            store
+                .save_journal("user:2", "target:user:42", 10)
+                .await
+                .unwrap();
+            if with_sqlite {
+                client.sqlite = Some(Arc::new(tinkle_storage::Storage::open_in_memory().unwrap()));
+            }
+            client.set_principal_user_id(1).await;
+            store.fail.store(true, Ordering::SeqCst);
+            assert!(matches!(
+                client.logout().await,
+                Err(TinkleError::CursorStore(_))
+            ));
+            assert_eq!(
+                client.logout_cleanup.status(),
+                crate::SessionCleanup::Failed
+            );
+            assert!(client.is_signed_out());
+            assert_eq!(client.principal().await, UNKNOWN_PRINCIPAL);
+            assert_eq!(
+                store
+                    .load_journal("user:1", "target:user:42")
+                    .await
+                    .unwrap(),
+                Some(9)
+            );
+            store.fail.store(false, Ordering::SeqCst);
+            assert!(!client.logout().await.unwrap());
+            assert_eq!(
+                client.logout_cleanup.status(),
+                crate::SessionCleanup::Complete
+            );
+            assert_eq!(*store.clears.lock().unwrap(), ["user:1", "user:1"]);
+            assert_eq!(
+                store
+                    .load_journal("user:1", "target:user:42")
+                    .await
+                    .unwrap(),
+                None
+            );
+            assert_eq!(
+                store
+                    .load_journal("user:2", "target:user:42")
+                    .await
+                    .unwrap(),
+                Some(10)
+            );
+            client.close().await;
+            server.await.unwrap();
+        }
+    }
+
+    /// Clear exhausted manual retry counters on success without overriding terminal parking.
     #[tokio::test]
     async fn review_manual_reconnect_resets_only_nonterminal_backoff() {
         use std::time::Duration;
@@ -4939,6 +5789,7 @@ mod tests {
         server.await.unwrap();
     }
 
+    /// Refuse provisioning fallback after the parent selected a primary that later became unavailable.
     #[tokio::test]
     async fn review_provisioning_inherits_selected_primary_without_fallback() {
         use super::*;
@@ -4962,6 +5813,7 @@ mod tests {
         );
     }
 
+    /// Withdraw inherited account interests on raw replacement and reject cross-deployment cache reuse.
     #[tokio::test]
     async fn review_raw_replacement_withdraws_unknown_account_and_rejects_cross_deployment_cache() {
         use super::*;
@@ -5000,6 +5852,7 @@ mod tests {
         server.await.unwrap();
     }
 
+    /// Discard predecessor success/failure bookkeeping after a source replacement.
     #[tokio::test]
     async fn review_old_reconnect_result_cannot_charge_or_park_replacement() {
         use super::*;
@@ -5273,6 +6126,7 @@ mod tests {
     }
     #[async_trait::async_trait]
     impl crate::SecureEnrollmentStore for BudgetStore {
+        /// Block clear acknowledgement until released, optionally returning a sanitized store failure.
         async fn clear(&self) -> Result<(), crate::SecureStoreError> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.entered.notify_one();
@@ -5283,6 +6137,7 @@ mod tests {
                 Ok(())
             }
         }
+        /// Accept unused writes without adding persistence delays to logout budget tests.
         async fn commit(
             &self,
             _: crate::SecureWrite,
@@ -5291,12 +6146,14 @@ mod tests {
         ) -> Result<(), crate::SecureStoreError> {
             Ok(())
         }
+        /// Expose no recoverable operation because these tests bind the store directly.
         async fn load_operation(
             &self,
             _: &str,
         ) -> Result<Option<crate::SecretBlob>, crate::SecureStoreError> {
             Ok(None)
         }
+        /// Expose no active record; Returning material comes from the encrypted fixture setup.
         async fn load_active(&self) -> Result<Option<crate::SecretBlob>, crate::SecureStoreError> {
             Ok(None)
         }
@@ -5515,6 +6372,7 @@ mod tests {
         assert!(!parent.endpoint_rejected.load(Ordering::SeqCst));
     }
 
+    /// Check the initial target delay, exponential growth, cap, and immediately due fresh demand.
     #[test]
     fn demand_backoff_grows_and_caps() {
         assert_eq!(
@@ -5532,6 +6390,7 @@ mod tests {
         assert!(TargetDemand::fresh().next_due <= std::time::Instant::now());
     }
 
+    /// Preserve current resume fields while accepting legacy rows and discarding orphaned metadata.
     #[test]
     fn resume_state_codec_round_trips() {
         use super::{CatchupResume, Client};

@@ -32,6 +32,7 @@ async fn control(request: Value) -> Value {
 
 #[tokio::test]
 #[ignore = "run via scripts/with-native-fixture.py cargo test -p libtinkle --test mobile_fixture -- --ignored"]
+/// Malformed control connections must close without disrupting subsequent harness commands.
 async fn mobile_fixture_survives_faulty_control_requests() {
     for input in [&b""[..], b"\n", b"not json\n", b"\xff\n", b"{"] {
         let mut stream = tokio::net::TcpStream::connect(control_address())
@@ -59,6 +60,7 @@ async fn mobile_fixture_survives_faulty_control_requests() {
 
 #[tokio::test]
 #[ignore = "run via scripts/with-native-fixture.py cargo test -p libtinkle --test mobile_fixture -- --ignored"]
+/// Exercise encrypted journal/history responses and preserve cursors larger than 32 bits.
 async fn mobile_fixture_serves_encrypted_journal_history_and_exact_i64_cursors() {
     let fixture = control(json!({"op":"create", "deletions":["target:room:7"]})).await;
     let id = fixture["id"].as_u64().unwrap();

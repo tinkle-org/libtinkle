@@ -236,6 +236,7 @@ mod review_tests {
     use std::sync::atomic::Ordering;
 
     #[tokio::test]
+    /// An unresolved credential write must defer store clearing without deferring cache cleanup.
     async fn pending_store_write_defers_credentials_but_not_cache_cleanup() {
         for known_principal in [false, true] {
             let storage = Arc::new(crate::Storage::open(":memory:").unwrap());
@@ -304,6 +305,7 @@ mod review_tests {
     }
 
     #[tokio::test(start_paused = true)]
+    /// Clear credentials before waiting on cache locks and retry only unfinished cache work.
     async fn review_credentials_clear_before_stalled_cache_and_later_attempt_retries() {
         let client = client(true);
         let store = Arc::new(ReviewStore::default());
@@ -339,6 +341,7 @@ mod review_tests {
     }
 
     #[tokio::test]
+    /// The first logout must invalidate credentials before draining a blocked pre-fence cache write.
     async fn review_first_logout_clears_credentials_before_draining_cache_writer() {
         use crate::client::IngestBatch;
         let dir = tempfile::tempdir().unwrap();
@@ -428,6 +431,7 @@ mod review_tests {
     }
 
     #[tokio::test]
+    /// A post-sign-out tombstoned binding may complete cleanup but cannot grant enrollment authority.
     async fn review_tombstoned_clear_only_binding_counts_without_enrollment_authority() {
         let client = client(true);
         assert!(client.logout().await.is_err());

@@ -21,6 +21,7 @@ pub(crate) struct ClientOwner {
     pub(crate) gone: CancelToken,
 }
 impl Drop for ClientOwner {
+    /// Cancel background observers when the last host ownership anchor is released.
     fn drop(&mut self) {
         self.gone.cancel();
     }
@@ -34,6 +35,7 @@ pub(crate) struct LiveGeneration {
     pub(crate) classified: AtomicBool,
 }
 impl LiveGeneration {
+    /// Allocate fresh open/closed fences with failure classification still pending.
     pub(crate) fn new(returning: bool) -> Arc<Self> {
         Arc::new(Self {
             open: AtomicBool::new(true),
@@ -47,9 +49,11 @@ impl LiveGeneration {
 /// Abort safety and joined explicit retirement for auxiliary connection tasks.
 pub(crate) struct AbortTask(Option<tokio::task::JoinHandle<()>>);
 impl AbortTask {
+    /// Adopt an auxiliary task so dropping its owner cannot silently detach it.
     pub(crate) fn new(task: tokio::task::JoinHandle<()>) -> Self {
         Self(Some(task))
     }
+    /// Abort and join while retaining the handle if the shutdown waiter is cancelled.
     pub(crate) async fn shutdown(&mut self) {
         if let Some(task) = self.0.as_mut() {
             task.abort();
@@ -59,6 +63,7 @@ impl AbortTask {
     }
 }
 impl Drop for AbortTask {
+    /// Abort any task that explicit shutdown has not yet joined.
     fn drop(&mut self) {
         if let Some(task) = &self.0 {
             task.abort();
@@ -73,6 +78,7 @@ pub(crate) struct LivenessTask {
     task: Option<tokio::task::JoinHandle<()>>,
 }
 impl LivenessTask {
+    /// Own one generation-bound loop, cancellable by lifecycle stop or loss of host ownership.
     pub(crate) fn spawn(
         client: Client,
         generation: Arc<LiveGeneration>,
@@ -94,6 +100,7 @@ impl LivenessTask {
         }
     }
 
+    /// Cancel and join the local loop; this does not prove cancellation of a dispatched remote RPC.
     pub(crate) async fn shutdown(&mut self) {
         self.stop.cancel();
         if let Some(task) = self.task.as_mut() {
@@ -103,6 +110,7 @@ impl LivenessTask {
     }
 }
 impl Drop for LivenessTask {
+    /// Cancel and abort as a final safety net when no lifecycle caller remains to join.
     fn drop(&mut self) {
         self.stop.cancel();
         if let Some(task) = self.task.take() {
@@ -111,6 +119,7 @@ impl Drop for LivenessTask {
     }
 }
 
+/// Probe sequentially, deferring local admission barriers and retiring only the captured generation.
 async fn run(client: Client, generation: Arc<LiveGeneration>) {
     let mut ticks = tokio::time::interval_at(
         tokio::time::Instant::now() + KEEP_ALIVE_INTERVAL,
@@ -147,8 +156,8 @@ async fn run(client: Client, generation: Arc<LiveGeneration>) {
         };
         sequence = next;
         let request = tinkle_schema::proto::KeepAliveRequest { sequence };
-        // The shared call path bounds local waits too. No dispatched heartbeat
-        // means contention, not evidence that this connection failed.
+        // FIFO initialization admission does not spend the heartbeat RPC budget.
+        // A restoration barrier defers admission; it is not transport failure.
         let Some(result) = client.call_keep_alive(request.encode_to_vec()).await else {
             continue;
         };

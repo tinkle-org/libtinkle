@@ -26,6 +26,7 @@ SPEC.loader.exec_module(ci)
 
 class CandidateBindingsTests(unittest.TestCase):
     def setUp(self):
+        """Create an isolated candidate workspace with original binding sentinels."""
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name).resolve() / "repo"
@@ -46,11 +47,14 @@ class CandidateBindingsTests(unittest.TestCase):
             path.write_text("original " + relative)
 
     def bindings(self):
+        """Snapshot every destination binding so tests can detect partial updates."""
         return {name: (self.root / "bindings" / name).read_bytes() for name in BINDINGS}
 
     def generate(self, missing=None, directory=False, syntra_version="1.0.0-rc.4",
                  bindings_runner=None):
+        """Run candidate generation with stubbed tools and optional broken outputs."""
         def run(command, **kwargs):
+            """Emulate Buf and bindgen outputs, or delegate to a supplied generator."""
             if command[:2] == ["buf", "build"]:
                 Path(command[-1]).write_bytes(b"descriptor")
             elif command[:2] == ["buf", "generate"]:
@@ -84,6 +88,7 @@ class CandidateBindingsTests(unittest.TestCase):
             runpy.run_path(str(self.script), run_name="__main__")
 
     def test_every_missing_or_non_file_source_leaves_all_destinations_untouched(self):
+        """Validate the complete output set before replacing any checked-in binding."""
         original = self.bindings()
         for name in BINDINGS:
             for directory in (False, True):
@@ -96,6 +101,7 @@ class CandidateBindingsTests(unittest.TestCase):
                     self.assertEqual(self.bindings(), original)
 
     def test_complete_bindings_are_copied_without_changing_manifest_or_lock(self):
+        """Copy valid candidate bindings without changing the published Cargo pins."""
         originals = {name: (self.root / name).read_bytes() for name in ("Cargo.toml", "Cargo.lock")}
         self.generate()
         self.assertEqual(self.bindings(), {name: ("candidate " + name).encode() for name in BINDINGS})
@@ -152,6 +158,7 @@ elif sys.argv[1] != "rustc":
 
 class CandidateCiTests(unittest.TestCase):
     def test_missing_or_mutable_schema_ref_is_rejected_before_any_commands(self):
+        """Reject absent, mutable, or malformed schema revisions before invoking tools."""
         for revision in ("", "main", "v1", "a" * 39, "a" * 40 + "\n", "a" * 40 + ",branch=other"):
             with self.subTest(revision=revision), \
                     patch.dict(os.environ, {"SCHEMA_CANDIDATE_REF": revision}), \
@@ -161,6 +168,7 @@ class CandidateCiTests(unittest.TestCase):
                 invoke.assert_not_called()
 
     def test_cli_exports_exact_schema_then_uses_existing_candidate_flow(self):
+        """Export the immutable schema revision before invoking the candidate helper."""
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp).resolve() / "candidate"
             revision = "a" * 40
@@ -176,6 +184,7 @@ class CandidateCiTests(unittest.TestCase):
             ])
 
     def test_schema_export_failure_never_starts_candidate_build(self):
+        """Stop candidate orchestration immediately if schema export fails."""
         with tempfile.TemporaryDirectory() as tmp, \
                 patch.dict(os.environ, {"SCHEMA_CANDIDATE_REF": "a" * 40}), \
                 patch.object(ci, "call", side_effect=subprocess.CalledProcessError(1, "buf")) as invoke:

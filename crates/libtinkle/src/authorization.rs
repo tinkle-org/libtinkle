@@ -10,9 +10,11 @@ use zeroize::Zeroizing;
 /// retains an operation/candidate object. No Clone or diagnostic secret export.
 pub(crate) struct SecretCell(Mutex<Option<Zeroizing<[u8; 32]>>>);
 impl SecretCell {
+    /// Retain key bytes in a shared zeroizing cell that logout can revoke.
     pub(crate) fn new(bytes: Zeroizing<[u8; 32]>) -> Arc<Self> {
         Arc::new(Self(Mutex::new(Some(bytes))))
     }
+    /// Copy live key bytes into a zeroizing owner, or reject an already retired cell.
     pub(crate) fn snapshot(&self) -> Result<Zeroizing<[u8; 32]>, TinkleError> {
         self.0
             .lock()
@@ -21,6 +23,7 @@ impl SecretCell {
             .map(|v| Zeroizing::new(**v))
             .ok_or(TinkleError::SignedOut)
     }
+    /// Erase the retained key and permanently prevent further snapshots.
     pub(crate) fn retire(&self) {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).take();
     }
@@ -38,12 +41,14 @@ struct StoreBinding {
 /// Keeps an ambiguous host transaction single-owned until its exact receipt arrives.
 pub(crate) struct StoreWrite(Arc<AtomicBool>);
 impl Drop for StoreWrite {
+    /// Release single-write ownership when the acknowledged transaction owner finishes.
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
     }
 }
 
 impl StoreBinding {
+    /// Match a registered callback object or one of its known namespace aliases.
     fn owns(&self, store: &dyn SecureEnrollmentStore) -> bool {
         std::ptr::eq(self.store.as_ref(), store)
             || self
@@ -67,6 +72,7 @@ pub(crate) struct Authorization {
     pub(crate) revoked: syntra_runtime::CancelToken,
 }
 impl Authorization {
+    /// Initialize the sign-out fence and register any supplied Returning key for revocation.
     pub(crate) fn new(source: &TrustSource) -> Arc<Self> {
         let value = Arc::new(Self {
             state: Mutex::new(State {
@@ -87,6 +93,7 @@ impl Authorization {
         }
         value
     }
+    /// Read the irreversible local sign-out fence independently of transport state.
     pub(crate) fn is_signed_out(&self) -> bool {
         self.state
             .lock()
@@ -114,6 +121,7 @@ impl Authorization {
                 .iter()
                 .all(|binding| binding.revision.is_some())
     }
+    /// Capture client-specific enrollment authority unless local sign-out has fenced it.
     pub(crate) fn generation(self: &Arc<Self>) -> Result<EnrollmentEpoch, TinkleError> {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.signed_out {
@@ -124,6 +132,7 @@ impl Authorization {
             generation: state.generation,
         })
     }
+    /// Run a synchronous action under the state lock only for the still-live generation.
     pub(crate) fn with_generation<T>(
         &self,
         generation: u64,
@@ -135,6 +144,7 @@ impl Authorization {
         }
         Ok(f())
     }
+    /// Register source key revocation and require durable cleanup; erase stale registrations.
     pub(crate) fn register_source(
         &self,
         generation: u64,
@@ -149,6 +159,7 @@ impl Authorization {
         state.needs_store = true;
         Ok(())
     }
+    /// Track a receipt's live secret for logout, retiring it if its generation is stale.
     fn register_secret(
         &self,
         generation: u64,
@@ -163,6 +174,7 @@ impl Authorization {
         state.secrets.push(Arc::downgrade(secret));
         Ok(())
     }
+    /// Fence enrollment, erase every reachable registered secret, and cancel revoked work.
     pub(crate) fn sign_out(&self) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if !state.signed_out {
@@ -178,6 +190,7 @@ impl Authorization {
         }
         self.revoked.cancel();
     }
+    /// Snapshot the cleanup requirement and one callback owner per registered namespace.
     pub(crate) fn stores(&self) -> (bool, Vec<Arc<dyn SecureEnrollmentStore>>) {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         (
@@ -190,6 +203,7 @@ impl Authorization {
         )
     }
 
+    /// Reserve the registered namespace's single outstanding host-write receipt.
     pub(crate) fn begin_store_write(
         &self,
         store: &dyn SecureEnrollmentStore,
@@ -206,6 +220,7 @@ impl Authorization {
         Ok(StoreWrite(binding.writing.clone()))
     }
 
+    /// Report whether any namespace still awaits its exact host-write acknowledgement.
     pub(crate) fn has_pending_store_write(&self) -> bool {
         self.state
             .lock()
@@ -298,24 +313,29 @@ pub(crate) struct EnrollmentEpoch {
     pub(crate) generation: u64,
 }
 impl EnrollmentEpoch {
+    /// Reject authority invalidated by local sign-out or generation replacement.
     pub(crate) fn valid(&self) -> Result<(), TinkleError> {
         self.owner.with_generation(self.generation, || ())
     }
+    /// Require both the originating client coordinator and its current live generation.
     pub(crate) fn check(&self, client: &Client) -> Result<(), TinkleError> {
         if !Arc::ptr_eq(&self.owner, &client.authorization) {
             return Err(TinkleError::SignedOut);
         }
         self.owner.with_generation(self.generation, || ())
     }
+    /// Retain the same sealed authority without creating or advancing a generation.
     pub(crate) fn duplicate(&self) -> Self {
         Self {
             owner: self.owner.clone(),
             generation: self.generation,
         }
     }
+    /// Share the coordinator's irreversible sign-out cancellation signal.
     pub(crate) fn revoked(&self) -> syntra_runtime::CancelToken {
         self.owner.revoked.clone()
     }
+    /// Create a revocable zeroizing secret registered to this live enrollment generation.
     pub(crate) fn secret(
         &self,
         bytes: Zeroizing<[u8; 32]>,
@@ -402,17 +422,21 @@ mod tests {
     struct Callback(Arc<std::sync::atomic::AtomicUsize>);
     #[async_trait::async_trait]
     impl SecureEnrollmentStore for Callback {
+        /// Count each namespace clear acknowledged by this callback alias.
         async fn clear(&self) -> Result<(), crate::SecureStoreError> {
             self.0.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
+        /// Accept the fixture cleanup marker without introducing additional storage state.
         async fn begin_clear(&self, _: &str) -> Result<bool, crate::SecureStoreError> {
             Ok(true)
         }
+        /// Acknowledge conditional cleanup through the same counted clear callback.
         async fn finish_clear(&self, _: &str) -> Result<bool, crate::SecureStoreError> {
             self.clear().await?;
             Ok(true)
         }
+        /// Reject writes because these tests exercise callback registration and cleanup only.
         async fn commit(
             &self,
             _: crate::SecureWrite,
@@ -421,12 +445,14 @@ mod tests {
         ) -> Result<(), crate::SecureStoreError> {
             unreachable!()
         }
+        /// Reject operation reads outside the registration-only fixture contract.
         async fn load_operation(
             &self,
             _: &str,
         ) -> Result<Option<crate::SecretBlob>, crate::SecureStoreError> {
             unreachable!()
         }
+        /// Reject restoration reads outside the registration-only fixture contract.
         async fn load_active(&self) -> Result<Option<crate::SecretBlob>, crate::SecureStoreError> {
             unreachable!()
         }
@@ -503,6 +529,7 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Clear conditional namespace aliases once, but retain separate legacy callback obligations.
     async fn review_logout_clears_namespace_aliases_once_and_distinct_legacy_stores_each() {
         let client = crate::enrollment::review_tests::client(false);
         let epoch = client.authorization.generation().unwrap();
@@ -530,6 +557,7 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Upgrading a legacy alias must merge namespace identity without permitting fence downgrade.
     async fn review_legacy_callback_opt_in_merges_an_existing_namespace_without_downgrade() {
         let client = crate::enrollment::review_tests::client(false);
         let epoch = client.authorization.generation().unwrap();
@@ -556,6 +584,7 @@ mod tests {
     }
 
     #[test]
+    /// Sign-out must erase both source keys and secrets retained by previously issued receipts.
     fn sign_out_erases_retained_receipt_cells_and_source_material() {
         let trust = crate::ServerTrust {
             server_public_key: [1; 32],

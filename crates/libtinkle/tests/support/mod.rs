@@ -17,6 +17,7 @@ use syntra_runtime::{
     AllowAnonymous, AuthError, Authenticator, ConnectionConfig, FnHandler, HandlerOutcome, Host,
 };
 
+/// Build valid client metadata with a stable build identifier for fixture assertions.
 pub fn client_info() -> libtinkle::ClientInfo {
     libtinkle::ClientInfo::new(
         "fixture-device".into(),
@@ -29,11 +30,13 @@ pub fn client_info() -> libtinkle::ClientInfo {
     .unwrap()
 }
 
+/// Share one generated server key pair across this test executable's connections.
 fn keys() -> &'static (Secret32, [u8; 32]) {
     static KEYS: OnceLock<(Secret32, [u8; 32])> = OnceLock::new();
     KEYS.get_or_init(|| secure_channel::generate_server_key().unwrap())
 }
 
+/// Pin the fixture server's public key, key ID, and scope.
 pub fn trust() -> libtinkle::ServerTrust {
     libtinkle::ServerTrust {
         server_public_key: keys().1,
@@ -42,10 +45,12 @@ pub fn trust() -> libtinkle::ServerTrust {
     }
 }
 
+/// Select Bootstrap admission using the fixture's pinned server identity.
 pub fn source() -> libtinkle::TrustSource {
     libtinkle::TrustSource::Bootstrap(trust())
 }
 
+/// Target the listener's allocated port without allowing fallback to another port.
 pub fn config(addr: SocketAddr) -> libtinkle::ClientConfig {
     let mut cfg = libtinkle::ClientConfig::new(addr.ip().to_string(), client_info());
     cfg.primary_port = addr.port();
@@ -53,6 +58,7 @@ pub fn config(addr: SocketAddr) -> libtinkle::ClientConfig {
     cfg
 }
 
+/// Configure Bootstrap TCP security matching the trust supplied to fixture clients.
 pub fn server_security() -> ServerConfig {
     ServerConfig {
         mode: Mode::Bootstrap,
@@ -64,6 +70,7 @@ pub fn server_security() -> ServerConfig {
     }
 }
 
+/// Allow anonymous RPC admission after the encrypted transport verifies its identity.
 pub fn factory() -> Arc<dyn AuthenticatorFactory> {
     Arc::new(
         |_: &VerifiedIdentity| -> Result<Arc<dyn Authenticator>, AuthError> {
@@ -86,6 +93,8 @@ pub fn outcome(frame: Frame) -> HandlerOutcome {
     }
 }
 
+/// Accept encrypted TCP and unwrap InitConnect before dispatching application RPCs.
+/// Reject Tinkle RPCs before initialization; leave frame correlation to the SDK.
 pub async fn accept<F, Fut>(
     stream: tokio::net::TcpStream,
     f: F,
@@ -107,7 +116,7 @@ where
                 if let Some(host) = host {
                     let initialized = method == "/tinkle.v1.ConnectionService/InitConnect";
                     if !initialized
-                        && method.starts_with("/tinkle.")
+                        && method.starts_with("/tinkle.v1.")
                         && !connection_initialized.load(Ordering::SeqCst)
                     {
                         return HandlerOutcome::error(

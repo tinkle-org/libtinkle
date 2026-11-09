@@ -2,7 +2,7 @@
 //!
 //! Method bindings are maintained from BSR `tinkle-org/schema` descriptors
 //! (`tinkle-schema::methods::ALL_METHODS`). The generic
-//! [`Service::call_typed`] serializes the request protobuf, constructs the
+//! [`call_typed`] serializes the request protobuf, constructs the
 //! Syntra `RpcRequest`, allocates a nonzero `request_id`, sends through
 //! the active connection, awaits the matching `RpcResult`, decodes the
 //! typed response, and returns typed errors.
@@ -150,15 +150,6 @@ impl<'a> Account<'a> {
         Self { client }
     }
 
-    fn observe_denial(&self, error: &TinkleError) {
-        if matches!(
-            error.code(),
-            syntra_core::ErrorCode::Unauthenticated | syntra_core::ErrorCode::PermissionDenied
-        ) {
-            self.client.authorization.set_authentication_known(false);
-        }
-    }
-
     /// List active devices with neutral session IDs and descriptive metadata.
     pub async fn get_sessions(&self) -> Result<Vec<tinkle_schema::proto::Session>, TinkleError> {
         let response: tinkle_schema::proto::GetSessionsResponse = call_typed(
@@ -167,8 +158,7 @@ impl<'a> Account<'a> {
             &tinkle_schema::proto::GetSessionsRequest {},
             3_000,
         )
-        .await
-        .inspect_err(|error| self.observe_denial(error))?;
+        .await?;
         Ok(response.sessions)
     }
 
@@ -185,8 +175,7 @@ impl<'a> Account<'a> {
             },
             3_000,
         )
-        .await
-        .inspect_err(|error| self.observe_denial(error))?;
+        .await?;
         Ok(response.revoked)
     }
 
@@ -198,8 +187,7 @@ impl<'a> Account<'a> {
             &tinkle_schema::proto::RevokeSessionsRequest {},
             3_000,
         )
-        .await
-        .inspect_err(|error| self.observe_denial(error))?;
+        .await?;
         Ok(response.revoked)
     }
 }
@@ -214,6 +202,7 @@ impl<'a> Auth<'a> {
         Self { client }
     }
 
+    /// Request a verification challenge, rejecting a missing identifier and sanitizing auth errors.
     pub async fn send_code(
         &self,
         req: tinkle_schema::proto::SendCodeRequest,
@@ -234,6 +223,8 @@ impl<'a> Auth<'a> {
         Ok(response)
     }
 
+    /// Deliver enrollment on pinned Bootstrap and await validated candidate persistence.
+    /// Reject an account projection that disagrees with the delivered enrollment user.
     pub async fn sign_in(
         &self,
         details: crate::SignInDetails,

@@ -53,6 +53,7 @@ pub enum FfiError {
 }
 
 impl From<libtinkle::TinkleError> for FfiError {
+    /// Map core failures by typed code while preserving storage, sync, and lifecycle distinctions.
     fn from(e: libtinkle::TinkleError) -> Self {
         match e {
             libtinkle::TinkleError::SignedOut => Self::Auth(e.to_string()),

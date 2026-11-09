@@ -4,6 +4,7 @@ import XCTest
 
 /// Tests the generated Swift API against the real Rust binary and a local gateway.
 final class TinkleSDKTests: XCTestCase {
+    /// Interrupted reads preserve a split JSON integer without truncating its Int64 value.
     func testControlReadRetriesInterruptionsAcrossJSONChunks() throws {
         let chunks = [Data("{\"after_accept_seq\":1099".utf8), Data("511627776}\n".utf8)]
         var calls = 0
@@ -24,6 +25,7 @@ final class TinkleSDKTests: XCTestCase {
         XCTAssertEqual(calls, 4)
     }
 
+    /// Interrupted partial sends resume at the first unsent byte.
     func testControlSendRetriesInterruptionsWithoutDuplicatingPartialWrites() throws {
         let bytes = Data("{\"op\":\"requests\"}\n".utf8)
         let results = [-1, 3, -1, 2, bytes.count - 5]
@@ -44,6 +46,7 @@ final class TinkleSDKTests: XCTestCase {
         XCTAssertEqual(calls, results.count)
     }
 
+    /// Partial-response failures retain distinct EOF, timeout, and system diagnostics.
     func testControlReadDiagnosesEOFTimeoutAndSystemErrorAfterPartialResponse() {
         for (result, code, expected) in [
             (0, Int32(0), "EOF before newline"),
@@ -70,6 +73,7 @@ final class TinkleSDKTests: XCTestCase {
         }
     }
 
+    /// The control response limit includes its terminating newline.
     func testControlReadEnforcesCapIncludingNewline() throws {
         for length in [65536, 65537] {
             let bytes = Data(repeating: 120, count: length - 1) + Data([10])
@@ -93,6 +97,7 @@ final class TinkleSDKTests: XCTestCase {
         }
     }
 
+    /// Non-interruption failures stop sending instead of replaying a partial request.
     func testControlSendDoesNotRetryNonInterruptFailures() {
         for code in [EAGAIN, ETIMEDOUT, EPIPE] {
             var calls = 0
@@ -114,6 +119,7 @@ final class TinkleSDKTests: XCTestCase {
         }
     }
 
+    /// A failed Swift persistence callback cannot produce a durable enrollment receipt.
     func testEnrollmentCannotAdvanceBeforePlatformPersistenceAcknowledgement() async throws {
         let client = try TinkleClient(config: ClientConfigFfi(clientInfo: fixtureClientInfo(),
             host: "127.0.0.1", primaryPort: 9, fallbackPort: nil),
@@ -133,6 +139,7 @@ final class TinkleSDKTests: XCTestCase {
         await client.shutdown()
     }
 
+    /// Successive writes use exact CAS receipts, and a lost comparison never falls back.
     func testPrepareEnrollmentUsesConditionalSuccessorRevisionsWithoutLegacyFallback() async throws {
         let client = try TinkleClient(config: ClientConfigFfi(clientInfo: fixtureClientInfo(),
             host: "127.0.0.1", primaryPort: 9, fallbackPort: nil),
@@ -175,7 +182,10 @@ final class TinkleSDKTests: XCTestCase {
         await client.shutdown()
     }
 
+    /// A denied foreign install permit must leave this client able to establish only Bootstrap.
     func testRestoreActiveEnrollmentRejectsDeniedInstallPermit() async throws {
+        let gateway = try LoopbackGateway(enrollmentReview: true)
+        defer { try? gateway.finish() }
         // Exact opaque bytes checked by review_swift_active_vector_matches_private_record_encoder_and_validates_returning
         // in crates/libtinkle/src/enrollment.rs; Swift must not recreate the private record format.
         let hex = Array(EnrollmentReviewVector.activeRecordHex)
@@ -184,11 +194,8 @@ final class TinkleSDKTests: XCTestCase {
         })
         defer { bytes.resetBytes(in: 0..<bytes.count) }
         let secure = DenyingRestoreSecureStore(active: ProtectedEnrollmentRecord.fromSecureStorage(bytes: bytes))
-        let client = try TinkleClient(config: ClientConfigFfi(clientInfo: fixtureClientInfo(),
-            host: "127.0.0.1", primaryPort: 9, fallbackPort: nil),
-            trustSource: try TrustSourceFfi.bootstrap(trust: ServerTrustFfi(
-                serverPublicKey: Data(repeating: 1, count: 32), serverKeyId: 7, scope: "fixture")),
-            store: MemoryCursorStore())
+        let cursors = MemoryCursorStore()
+        let client = try makeLoopbackClient(gateway, store: cursors)
         do {
             let before = await client.sessionStatus()
             XCTAssertEqual(before.authorization, .unknown)
@@ -214,14 +221,35 @@ final class TinkleSDKTests: XCTestCase {
             XCTAssertEqual(after.authorization, before.authorization)
             XCTAssertEqual(after.network, before.network)
             XCTAssertEqual(after.cleanup, before.cleanup)
-            // The public API exposes authorization knowledge, not the private principal or trust-source variant.
+            // Restoration made one independent Bootstrap retirement query; no main channel was installed.
+            XCTAssertEqual(try gateway.admittedModes, ["bootstrap"])
+            try await client.connect()
+            // Await a real RPC, not a timing-dependent admission callback after connect().
+            do {
+                _ = try await client.sendCode(phoneNumber: "+14155550123", langCode: "en")
+                XCTFail("The fixture does not implement verification delivery")
+            } catch FfiError.Network {
+                // Unimplemented RPCs map to Network; verified admission below is the handshake proof.
+            }
+            XCTAssertEqual(try gateway.admittedModes, ["bootstrap", "bootstrap"],
+                "The post-denial main connection must authenticate as Bootstrap, never retained Returning")
+            do {
+                _ = try await client.subscribe(targets: [TargetSub(targetKind: "room", targetId: 7)], watch: [])
+                XCTFail("Denied restoration must not install the retained user:42 principal")
+            } catch FfiError.Sync(let message) {
+                XCTAssertTrue(message.contains("authenticated principal unknown"))
+            }
+            let reads = await cursors.loadCalls
+            XCTAssertTrue(reads.isEmpty, "An unknown principal must not read retained user journals")
         } catch {
             await client.shutdown()
             throw error
         }
         await client.shutdown()
+        try gateway.finish()
     }
 
+    /// Repeated initialization and Rust object construction cross the generated ABI safely.
     func testRuntimeInitializationAndRustStoreConstruction() {
         tinkleFfiInit()
         tinkleFfiInit()
@@ -229,6 +257,7 @@ final class TinkleSDKTests: XCTestCase {
         _ = InMemoryFfiStore()
     }
 
+    /// Journal deletion is isolated by both principal and target.
     func testInMemoryJournalStoreIsolation() async throws {
         let store = MemoryCursorStore()
         try await store.saveJournal(principal: "alice", targetKey: "target:room:1", acceptSeq: 42)
@@ -251,6 +280,7 @@ final class TinkleSDKTests: XCTestCase {
         XCTAssertEqual(retained, 9)
     }
 
+    /// Native async calls preserve typed failures and shutdown releases event consumption.
     func testClientAsyncErrorsAndLifecycle() async throws {
         tinkleFfiInit()
         let store = MemoryCursorStore()
@@ -288,6 +318,7 @@ final class TinkleSDKTests: XCTestCase {
         XCTAssertNil(event)
     }
 
+    /// Real journal RPCs use the principal-specific Int64 positions returned by Swift.
     func testRustCallsSwiftAsyncCursorStore() async throws {
         let gateway = try LoopbackGateway()
         defer { try? gateway.finish() }
@@ -329,6 +360,7 @@ final class TinkleSDKTests: XCTestCase {
         try gateway.finish()
     }
 
+    /// A suspended Swift storage failure becomes a Rust target failure and sync event.
     func testSwiftAsyncStoreErrorReportsFailedTargetThroughRust() async throws {
         let gateway = try LoopbackGateway()
         defer { try? gateway.finish() }
@@ -375,6 +407,7 @@ final class TinkleSDKTests: XCTestCase {
         try gateway.finish()
     }
 
+    /// Builds an isolated native client with the gateway's exact Bootstrap pin and scope.
     private func makeLoopbackClient(_ gateway: LoopbackGateway, store: MemoryCursorStore) throws -> TinkleClient {
         try TinkleClient(
             config: ClientConfigFfi(
@@ -394,13 +427,16 @@ private actor DenyingRestoreSecureStore: FfiSecureEnrollmentStore {
     private(set) var endIds: [String] = []
     private(set) var unexpectedCalls: [String] = []
 
+    /// Retains only the synthetic ACTIVE record, never a client or a permit owner.
     init(active: ProtectedEnrollmentRecord) { self.active = active }
 
+    /// Supplies a stable ACTIVE namespace without pending operations or cleanup.
     func namespaceSnapshot() async throws -> ProtectedEnrollmentNamespace? {
         await Task.yield()
         return ProtectedEnrollmentNamespace(incarnation: "restore-denial-fixture", revision: "restore-denial-fixture:1",
             cleanupPending: false, active: active, hasPending: false)
     }
+    /// Records the exact requested install binding but grants no exclusion.
     func beginRestore(incarnation: String, revision: String, active: ProtectedEnrollmentRecord, permitId: String) async throws -> Bool {
         await Task.yield()
         var expected = self.active.copyForSecureStorage()
@@ -412,22 +448,31 @@ private actor DenyingRestoreSecureStore: FfiSecureEnrollmentStore {
         begins.append((incarnation, revision, received == expected, permitId))
         return false
     }
+    /// Records release after the foreign suspension resumes without creating a permit.
     func endRestore(permitId: String) async throws {
         await Task.yield()
         endIds.append(permitId)
     }
+    /// Marks an unexpected mutation or legacy load before rejecting it.
     private func unsupported(_ method: String) -> FfiError {
         unexpectedCalls.append(method)
         return FfiError.Storage("restore-denial fixture does not support \(method)")
     }
+    /// Restore denial must never request a conditional write.
     func commitCurrent(expectedRevision: String, kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord) async throws -> String? {
         throw unsupported("commitCurrent")
     }
+    /// Rejects an unexpected legacy write.
     func commit(kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord) async throws { throw unsupported("commit") }
+    /// Rejects an unexpected cleanup marker.
     func beginClear(expectedRevision: String) async throws -> Bool { throw unsupported("beginClear") }
+    /// Rejects an unexpected cleanup transaction.
     func finishClear(expectedRevision: String) async throws -> Bool { throw unsupported("finishClear") }
+    /// Rejects unconditional namespace clearing.
     func clear() async throws { throw unsupported("clear") }
+    /// Rejects operation lookup on this ACTIVE-only restore fixture.
     func loadOperation(operationId: String) async throws -> ProtectedEnrollmentRecord? { throw unsupported("loadOperation") }
+    /// Requires the atomic snapshot instead of a legacy ACTIVE read.
     func loadActive() async throws -> ProtectedEnrollmentRecord? { throw unsupported("loadActive") }
 }
 
@@ -441,13 +486,18 @@ private actor ConditionalSecureStore: FfiSecureEnrollmentStore {
     private(set) var unconditionalCommits = 0
     var operationIds: Set<String> { Set(records.keys) }
 
+    /// Models another writer winning the next revision comparison.
     func rejectNextCommit() { rejectCommit = true }
+    /// This create-only fixture cannot provide cross-writer restore exclusion.
     func beginRestore(incarnation: String, revision: String, active: ProtectedEnrollmentRecord, permitId: String) async throws -> Bool { false }
+    /// No permit is held, so repeated release is harmless.
     func endRestore(permitId: String) async throws {}
+    /// Reports the immutable incarnation and current operation revision atomically.
     func namespaceSnapshot() async throws -> ProtectedEnrollmentNamespace? {
         ProtectedEnrollmentNamespace(incarnation: "conditional-fixture", revision: "conditional-fixture:\(revision)",
             cleanupPending: false, active: nil, hasPending: !records.isEmpty)
     }
+    /// Acknowledges only create-only operations under the exact current revision.
     func commitCurrent(expectedRevision: String, kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord) async throws -> String? {
         await Task.yield()
         expectedRevisions.append(expectedRevision)
@@ -464,31 +514,45 @@ private actor ConditionalSecureStore: FfiSecureEnrollmentStore {
         revision += 1
         return "conditional-fixture:\(revision)"
     }
+    /// This fixture never acknowledges cleanup markers.
     func beginClear(expectedRevision: String) async throws -> Bool { throw FfiError.Storage("clearing unsupported") }
+    /// This fixture never acknowledges credential erasure.
     func finishClear(expectedRevision: String) async throws -> Bool { throw FfiError.Storage("clearing unsupported") }
+    /// Rejects unconditional clearing of the conditional namespace.
     func clear() async throws { throw FfiError.Storage("clearing unsupported") }
+    /// Detects any prohibited fallback from conditional to legacy persistence.
     func commit(kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord) async throws {
         unconditionalCommits += 1
         throw FfiError.Storage("conditional fixture must not use legacy commit")
     }
+    /// Returns the exact record retained for one acknowledged operation.
     func loadOperation(operationId: String) async throws -> ProtectedEnrollmentRecord? { records[operationId] }
+    /// Preparation alone never creates an ACTIVE slot.
     func loadActive() async throws -> ProtectedEnrollmentRecord? { nil }
 }
 
 /// Failure-only fixture: it deliberately never acknowledges secure persistence.
 private actor RejectingSecureStore: FfiSecureEnrollmentStore {
+    /// Refuses restore exclusion rather than emulating unsupported host guarantees.
     func beginRestore(incarnation: String, revision: String, active: ProtectedEnrollmentRecord, permitId: String) async throws -> Bool {
         throw FfiError.Storage("restore exclusion unsupported by this failure-only fixture")
     }
+    /// This failure-only host cannot acknowledge permit release.
     func endRestore(permitId: String) async throws { throw FfiError.Storage("restore exclusion unsupported") }
+    /// Selects the legacy write path so its acknowledgement failure can be tested.
     func namespaceSnapshot() async throws -> ProtectedEnrollmentNamespace? { nil }
+    /// Explicitly refuses conditional persistence.
     func commitCurrent(expectedRevision: String, kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord) async throws -> String? {
         throw FfiError.Storage("conditional storage unsupported by this failure-only fixture")
     }
+    /// Rejects unsupported conditional cleanup markers.
     func beginClear(expectedRevision: String) async throws -> Bool { throw FfiError.Storage("conditional storage unsupported") }
+    /// Rejects unsupported conditional erasure.
     func finishClear(expectedRevision: String) async throws -> Bool { throw FfiError.Storage("conditional storage unsupported") }
+    /// Never claims a durable full-namespace deletion.
     func clear() async throws { throw FfiError.Storage("secure clearing is not acknowledged by this failure-only fixture") }
     private(set) var commits = 0
+    /// Suspends, erases its temporary copy, and returns a diagnostic Rust must sanitize.
     func commit(kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord) async throws {
         await Task.yield()
         commits += 1
@@ -496,7 +560,9 @@ private actor RejectingSecureStore: FfiSecureEnrollmentStore {
         bytes.resetBytes(in: 0..<bytes.count)
         throw FfiError.Storage("host diagnostic must be sanitized")
     }
+    /// Failed persistence leaves no recoverable operation.
     func loadOperation(operationId: String) async throws -> ProtectedEnrollmentRecord? { nil }
+    /// Failed persistence leaves no ACTIVE record.
     func loadActive() async throws -> ProtectedEnrollmentRecord? { nil }
 }
 
@@ -507,8 +573,10 @@ private actor MemoryCursorStore: FfiCursorStore {
     private let failLoads: Bool
     private(set) var loadCalls: [(principal: String, targetKey: String)] = []
 
+    /// Optionally enables deterministic suspended read failures for Rust error tests.
     init(failLoads: Bool = false) { self.failLoads = failLoads }
 
+    /// Records the calling principal and returns its target position after suspension.
     func loadJournal(principal: String, targetKey: String) async throws -> Int64? {
         // Force suspension so the foreign-future completion path is exercised.
         await Task.yield()
@@ -517,14 +585,17 @@ private actor MemoryCursorStore: FfiCursorStore {
         return journals[principal]?[targetKey]
     }
 
+    /// Stores an exact Int64 position within the principal's isolated target map.
     func saveJournal(principal: String, targetKey: String, acceptSeq: Int64) async throws {
         journals[principal, default: [:]][targetKey] = acceptSeq
     }
 
+    /// Removes only one target owned by the supplied principal.
     func removeTarget(principal: String, targetKey: String) async throws {
         journals[principal]?[targetKey] = nil
     }
 
+    /// Clears one principal without changing any other principal's positions.
     func clearPrincipal(principal: String) async throws {
         journals[principal] = nil
     }

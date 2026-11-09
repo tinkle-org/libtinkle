@@ -153,6 +153,7 @@ async fn handle_mock_request(id: u64, req: RpcRequest) -> Frame {
     }
 }
 
+/// Serve the push fixture through SDK-owned encrypted TCP admission and response correlation.
 async fn mock_gateway(listener: TcpListener) {
     loop {
         let (stream, _) = match listener.accept().await {
@@ -181,6 +182,7 @@ async fn start_mock() -> SocketAddr {
     addr
 }
 
+/// Attach a fixture-pinned Bootstrap client to the SQLite cache used for push assertions.
 fn push_client(addr: SocketAddr, storage: Arc<tinkle_storage::Storage>) -> libtinkle::Client {
     let cfg = support::config(addr);
     libtinkle::Client::new_sqlite(cfg, support::source(), storage)

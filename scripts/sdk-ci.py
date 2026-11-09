@@ -462,6 +462,7 @@ def jitpack(tag, destination):
 
 
 def main():
+    """Parse the SDK CI subcommand and dispatch its validation or staging flow."""
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("toolchain")

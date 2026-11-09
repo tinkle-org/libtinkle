@@ -51,6 +51,7 @@ pub enum TinkleError {
 }
 
 impl TinkleError {
+    /// Return the typed recovery code without interpreting diagnostic text.
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::SignedOut => ErrorCode::Unauthenticated,
@@ -71,6 +72,7 @@ impl TinkleError {
         }
     }
 
+    /// Report whether a Syntra failure leaves the remote RPC outcome ambiguous.
     pub fn is_unknown_outcome(&self) -> bool {
         match self {
             Self::Syntra(e) => e.is_unknown_outcome(),
@@ -104,6 +106,7 @@ impl TinkleError {
         }
     }
 
+    /// Classify network failures without retaining potentially sensitive transport diagnostics.
     pub(crate) fn from_network(error: syntra_net::Error) -> Self {
         match error {
             syntra_net::Error::Io(_) | syntra_net::Error::Timeout | syntra_net::Error::Closed => {
@@ -116,6 +119,7 @@ impl TinkleError {
         }
     }
 
+    /// Keep pre-readiness I/O failures distinct from retryable established-network loss.
     pub(crate) fn from_establishment(error: syntra_net::Error) -> Self {
         match Self::from_network(error) {
             Self::NetworkUnavailable => Self::EstablishmentFailed,

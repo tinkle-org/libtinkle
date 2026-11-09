@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use tinkle_schema::proto::FILE_DESCRIPTOR_SET;
 
 #[test]
+/// Compare every public method and request/response type with the pinned descriptor artifact.
 fn canonical_method_inventory_matches_the_actual_message_artifact() {
     let descriptors = prost_types::FileDescriptorSet::decode(FILE_DESCRIPTOR_SET).unwrap();
     let mut actual = BTreeSet::new();
@@ -52,6 +53,7 @@ fn canonical_method_inventory_matches_the_actual_message_artifact() {
 }
 
 #[test]
+/// Lock enrollment field numbers and require ordinary uint64 KeepAlive sequence fields.
 fn enrollment_fields_and_capability_activation_are_exact() {
     let descriptors = prost_types::FileDescriptorSet::decode(FILE_DESCRIPTOR_SET).unwrap();
     for (message, fields) in [

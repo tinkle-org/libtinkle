@@ -1418,7 +1418,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect() and 0xFFFF) != 32861) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_replace_trust_source() and 0xFFFF) != 28156) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_replace_trust_source() and 0xFFFF) != 60334) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_resume() and 0xFFFF) != 27994) {
@@ -1469,10 +1469,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_restore_active_enrollment() and 0xFFFF) != 34764) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_resume_enrollment() and 0xFFFF) != 16014) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_resume_enrollment() and 0xFFFF) != 44521) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_rotate_enrollment() and 0xFFFF) != 55365) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_rotate_enrollment() and 0xFFFF) != 48536) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_send_code() and 0xFFFF) != 30274) {
@@ -1496,7 +1496,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_unregister_push() and 0xFFFF) != 33025) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_enrollmentoperation_operation_id() and 0xFFFF) != 1256) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_enrollmentoperation_operation_id() and 0xFFFF) != 23696) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_begin_restore() and 0xFFFF) != 28725) {
@@ -1520,19 +1520,19 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_clear() and 0xFFFF) != 25367) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_commit() and 0xFFFF) != 2601) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_commit() and 0xFFFF) != 25187) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_load_operation() and 0xFFFF) != 18449) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_load_operation() and 0xFFFF) != 15303) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_load_active() and 0xFFFF) != 64614) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_load_active() and 0xFFFF) != 37446) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_protectedenrollmentrecord_copy_for_secure_storage() and 0xFFFF) != 33978) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_storedenrollment_status() and 0xFFFF) != 16456) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_storedenrollment_status() and 0xFFFF) != 14321) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_clear_principal() and 0xFFFF) != 7934) {
@@ -1577,7 +1577,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite() and 0xFFFF) != 40274) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_constructor_trustsourceffi_bootstrap() and 0xFFFF) != 27011) {
+    if ((lib.uniffi_tinkle_ffi_checksum_constructor_trustsourceffi_bootstrap() and 0xFFFF) != 30715) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_constructor_protectedenrollmentrecord_from_secure_storage() and 0xFFFF) != 51245) {
@@ -2231,6 +2231,9 @@ public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
  */
 public interface EnrollmentOperationInterface {
 
+    /**
+     * Return the durable operation identifier without exposing its recovery capability.
+     */
     fun `operationId`(): kotlin.String
 
     companion object
@@ -2340,7 +2343,10 @@ open class EnrollmentOperation: Disposable, AutoCloseable, EnrollmentOperationIn
         }
     }
 
-    override fun `operationId`(): kotlin.String {
+
+    /**
+     * Return the durable operation identifier without exposing its recovery capability.
+     */override fun `operationId`(): kotlin.String {
             return FfiConverterString.lift(
     callWithHandle {
     uniffiRustCall() { _status ->
@@ -3100,10 +3106,19 @@ public interface FfiSecureEnrollmentStore {
      */
     suspend fun `clear`()
 
+    /**
+     * Acknowledge an atomic durable write with the transaction semantics described above.
+     */
     suspend fun `commit`(`kind`: SecureEnrollmentWrite, `operationId`: kotlin.String, `record`: ProtectedEnrollmentRecord)
 
+    /**
+     * Load a retained operation or candidate by operation ID from protected storage.
+     */
     suspend fun `loadOperation`(`operationId`: kotlin.String): ProtectedEnrollmentRecord?
 
+    /**
+     * Load the acknowledged active slot, returning None when no active enrollment exists.
+     */
     suspend fun `loadActive`(): ProtectedEnrollmentRecord?
 
     companion object
@@ -3410,6 +3425,9 @@ open class FfiSecureEnrollmentStoreImpl: Disposable, AutoCloseable, FfiSecureEnr
     }
 
 
+    /**
+     * Acknowledge an atomic durable write with the transaction semantics described above.
+     */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `commit`(`kind`: SecureEnrollmentWrite, `operationId`: kotlin.String, `record`: ProtectedEnrollmentRecord) {
@@ -3435,6 +3453,9 @@ open class FfiSecureEnrollmentStoreImpl: Disposable, AutoCloseable, FfiSecureEnr
     }
 
 
+    /**
+     * Load a retained operation or candidate by operation ID from protected storage.
+     */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `loadOperation`(`operationId`: kotlin.String) : ProtectedEnrollmentRecord? {
@@ -3457,6 +3478,9 @@ open class FfiSecureEnrollmentStoreImpl: Disposable, AutoCloseable, FfiSecureEnr
     }
 
 
+    /**
+     * Load the acknowledged active slot, returning None when no active enrollment exists.
+     */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `loadActive`() : ProtectedEnrollmentRecord? {
@@ -5125,6 +5149,9 @@ public object FfiConverterTypeSqliteStorage: FfiConverter<SqliteStorage, Long> {
  */
 public interface StoredEnrollmentInterface {
 
+    /**
+     * Return candidate metadata without exposing its authorization key or capability.
+     */
     fun `status`(): EnrollmentStatus
 
     companion object
@@ -5234,7 +5261,10 @@ open class StoredEnrollment: Disposable, AutoCloseable, StoredEnrollmentInterfac
         }
     }
 
-    override fun `status`(): EnrollmentStatus {
+
+    /**
+     * Return candidate metadata without exposing its authorization key or capability.
+     */override fun `status`(): EnrollmentStatus {
             return FfiConverterTypeEnrollmentStatus.lift(
     callWithHandle {
     uniffiRustCall() { _status ->
@@ -5605,10 +5635,15 @@ public interface TinkleClientInterface {
      * activation or validated ACTIVE secure-store restoration. A rejected
      * Returning proof never triggers automatic downgrade to Bootstrap.
      *
+     * The pin, server key ID, and scope must match the current source; a change
+     * is rejected. Use a new Client with a separate cache/cursor namespace for
+     * a different deployment.
+     *
      * Successful raw Bootstrap replacement clears the application principal,
-     * tracked targets, watches, and pending catch-up. Callers must establish
-     * the appropriate identity and register interests again before subscriptions
-     * can sync.
+     * tracked targets, watches, and in-memory pending catch-up. Durable resume
+     * jobs are not removed and may hydrate when the same principal is set again.
+     * Callers must establish the appropriate identity and register interests
+     * again before subscriptions can sync.
      */
     suspend fun `replaceTrustSource`(`source`: TrustSourceFfi)
 
@@ -5732,8 +5767,14 @@ public interface TinkleClientInterface {
      */
     suspend fun `restoreActiveEnrollment`(`store`: FfiSecureEnrollmentStore): EnrollmentStatus
 
+    /**
+     * Recover and persist delivery on pinned Bootstrap using the retained operation capability.
+     */
     suspend fun `resumeEnrollment`(`operation`: EnrollmentOperation): StoredEnrollment
 
+    /**
+     * Stage and persist a successor on Returning while preserving the previous active slot.
+     */
     suspend fun `rotateEnrollment`(`operation`: EnrollmentOperation): StoredEnrollment
 
     /**
@@ -6637,10 +6678,15 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
      * activation or validated ACTIVE secure-store restoration. A rejected
      * Returning proof never triggers automatic downgrade to Bootstrap.
      *
+     * The pin, server key ID, and scope must match the current source; a change
+     * is rejected. Use a new Client with a separate cache/cursor namespace for
+     * a different deployment.
+     *
      * Successful raw Bootstrap replacement clears the application principal,
-     * tracked targets, watches, and pending catch-up. Callers must establish
-     * the appropriate identity and register interests again before subscriptions
-     * can sync.
+     * tracked targets, watches, and in-memory pending catch-up. Durable resume
+     * jobs are not removed and may hydrate when the same principal is set again.
+     * Callers must establish the appropriate identity and register interests
+     * again before subscriptions can sync.
      */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
@@ -7105,6 +7151,9 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
     }
 
 
+    /**
+     * Recover and persist delivery on pinned Bootstrap using the retained operation capability.
+     */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `resumeEnrollment`(`operation`: EnrollmentOperation) : StoredEnrollment {
@@ -7127,6 +7176,9 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
     }
 
 
+    /**
+     * Stage and persist a successor on Returning while preserving the previous active slot.
+     */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `rotateEnrollment`(`operation`: EnrollmentOperation) : StoredEnrollment {
@@ -7636,6 +7688,9 @@ open class TrustSourceFfi: Disposable, AutoCloseable, TrustSourceFfiInterface
 
     companion object {
 
+    /**
+     * Construct one-use Bootstrap trust from a validated, independently provisioned server pin.
+     */
     @Throws(FfiException::class) fun `bootstrap`(`trust`: ServerTrustFfi): TrustSourceFfi {
             return FfiConverterTypeTrustSourceFfi.lift(
     uniffiRustCallWithError(FfiException) { _status ->

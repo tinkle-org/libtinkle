@@ -45,6 +45,7 @@ class SdkWorkflowTests(unittest.TestCase):
                     self.assertEqual(values(step, "persist-credentials", 10), ["false"])
 
     def test_original_required_jobs_names_and_unconditional_commands_survive(self):
+        """Keep required check identities and commands intact without conditional bypasses."""
         names = {"fmt": "rustfmt", "clippy": "clippy (${{ matrix.os }})",
                  "test": "test (${{ matrix.os }})", "wasm": "wasm32 check",
                  "msrv": "msrv (cargo-hack)"}
@@ -99,6 +100,7 @@ class SdkWorkflowTests(unittest.TestCase):
             self.assertNotIn("--port 0", self.native[name])
 
     def test_required_checks_and_native_builds_use_the_published_dependency_graph(self):
+        """Build required checks and native artifacts from locked, unpatched dependencies."""
         for name in ("ci", "native-sdk"):
             with self.subTest(workflow=name):
                 content = self.workflows[name]

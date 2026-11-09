@@ -43,11 +43,13 @@ public object SmokeChecks {
         }
     }
 
+    /** Target the host fixture's encrypted TCP port with complete native client metadata. */
     private fun config(gateway: LoopbackGateway) = ClientConfigFfi(
         ClientInfoFfi("fixture-device", "android", "36", "1", "0001", ClientOptionsFfi("", "", "", "", "", "")),
         gateway.host, gateway.port.toUShort(), null,
     )
 
+    /** Verify scoped journal callbacks, durable checkpointing, and typed foreign failures. */
     private suspend fun foreignJournalCallbacks() {
         val journals = mapOf(
             ("user:42" to "target:room:7") to 37L,
@@ -131,6 +133,7 @@ public object SmokeChecks {
         }
     }
 
+    /** Reopen the native cache, resume journal progress, and clear only the selected principal. */
     private suspend fun sqlitePersistence() {
         val file = File.createTempFile("tinkle-sdk-smoke-", ".sqlite")
         // Minimal tinkle.v1.User.empty { id: 42 } and Chat { chat_id: 7 }.

@@ -17,6 +17,7 @@ use syntra_core::{
 use syntra_runtime::{ConnectionConfig, FnHandler, HandlerOutcome};
 use tokio::net::TcpListener;
 
+/// Supply a fixed successful payload for the support adapter to correlate with its request.
 fn echo() -> Frame {
     Frame {
         version: 1,
@@ -52,6 +53,7 @@ fn active_enrollment(
     )
 }
 
+/// Keep the encrypted server connection alive until the client closes it.
 async fn keep(handle: syntra_net::tcp::HostHandle) {
     while !handle.is_closed() {
         tokio::time::sleep(Duration::from_millis(5)).await;
@@ -60,6 +62,7 @@ async fn keep(handle: syntra_net::tcp::HostHandle) {
 }
 
 #[test]
+/// Validate default routes, reject malformed trust inputs, and keep enrollment Debug redacted.
 fn default_ports_and_trust_inputs_are_explicit() {
     let config = ClientConfig::new("gateway.example.com", support::client_info());
     assert_eq!((config.primary_port, config.fallback_port), (443, Some(80)));
@@ -92,6 +95,7 @@ fn default_ports_and_trust_inputs_are_explicit() {
 }
 
 #[tokio::test]
+/// Permit fallback after a primary dial failure without changing encrypted server trust.
 async fn dial_failure_uses_encrypted_fallback_with_same_trust() {
     let primary = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let primary_addr = primary.local_addr().unwrap();
@@ -122,6 +126,7 @@ async fn dial_failure_uses_encrypted_fallback_with_same_trust() {
 }
 
 #[tokio::test]
+/// Require InitConnect independently on each connection, only for the Tinkle namespace.
 async fn fixture_requires_initialization_per_connection_only_for_tinkle_rpcs() {
     tokio::time::timeout(Duration::from_secs(5), async {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -166,6 +171,16 @@ async fn fixture_requires_initialization_per_connection_only_for_tinkle_rpcs() {
             )
             .await
             .unwrap();
+            let before = calls.load(Ordering::SeqCst);
+            assert_eq!(
+                client
+                    .conn
+                    .call("/tinkle.example.Echo/Call", vec![], 1_000)
+                    .await
+                    .unwrap(),
+                b"ok"
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), before + 1);
             assert_eq!(
                 client
                     .conn
@@ -220,7 +235,7 @@ async fn fixture_requires_initialization_per_connection_only_for_tinkle_rpcs() {
             );
             client.close().await;
         }
-        assert_eq!(calls.load(Ordering::SeqCst), 6);
+        assert_eq!(calls.load(Ordering::SeqCst), 8);
         servers.join_next().await.unwrap().unwrap();
     })
     .await
@@ -228,6 +243,7 @@ async fn fixture_requires_initialization_per_connection_only_for_tinkle_rpcs() {
 }
 
 #[tokio::test]
+/// Keep healthy traffic on the primary route and block dialing while suspended.
 async fn healthy_primary_never_opens_fallback_and_suspend_blocks_dial() {
     let primary = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let fallback = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -266,6 +282,7 @@ async fn healthy_primary_never_opens_fallback_and_suspend_blocks_dial() {
 }
 
 #[tokio::test]
+/// Trust or admission-mode rejection must neither dispatch an RPC nor probe fallback.
 async fn wrong_pin_scope_key_id_and_mode_never_fall_back_or_dispatch() {
     for case in 0..4 {
         let primary = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -313,6 +330,7 @@ async fn wrong_pin_scope_key_id_and_mode_never_fall_back_or_dispatch() {
 
 struct EnrollmentStore;
 impl KeyStore for EnrollmentStore {
+    /// Supply the fixture key only for its exact scope, handle, and enrollment epoch.
     fn lookup(&self, context: &Context) -> Result<Secret32, secure_channel::Error> {
         if context.scope != b"tinkle-fixture" || context.handle != [8; 8] || context.epoch != 9 {
             return Err(secure_channel::Error::Authentication);
@@ -322,6 +340,7 @@ impl KeyStore for EnrollmentStore {
 }
 
 #[tokio::test]
+/// Accept only the matching Returning key and tuple, with no bearer or alternate route.
 async fn returning_enrollment_proves_key_and_tuple_without_bearer() {
     for case in 0..4 {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -386,6 +405,7 @@ async fn returning_enrollment_proves_key_and_tuple_without_bearer() {
 }
 
 #[tokio::test]
+/// Replacing raw trust retires Bootstrap transport without inheriting account or watch state.
 async fn raw_enrollment_replacement_retires_bootstrap_and_withdraws_application_scope() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let client = Client::new(
@@ -459,6 +479,7 @@ async fn raw_enrollment_replacement_retires_bootstrap_and_withdraws_application_
 }
 
 #[tokio::test]
+/// A rejected server pin must park automatic reconnect rather than retry on later ticks.
 async fn supervisor_parks_after_trust_rejection_instead_of_retrying_on_ticks() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let count = Arc::new(AtomicUsize::new(0));
@@ -514,6 +535,7 @@ async fn supervisor_parks_after_trust_rejection_instead_of_retrying_on_ticks() {
 }
 
 #[tokio::test]
+/// Once TCP is selected, handshake EOF must not trigger an alternate-port attempt.
 async fn connected_peer_eof_during_handshake_never_uses_another_port() {
     let primary = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let fallback = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -536,6 +558,7 @@ async fn connected_peer_eof_during_handshake_never_uses_another_port() {
 }
 
 #[tokio::test]
+/// Losing an established route cannot authorize fallback until trust is explicitly replaced.
 async fn opaque_active_loss_cannot_authorize_an_alternate_port() {
     let primary = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let fallback = TcpListener::bind("127.0.0.1:0").await.unwrap();

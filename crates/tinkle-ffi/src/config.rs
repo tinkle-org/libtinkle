@@ -35,6 +35,7 @@ pub struct ClientInfoFfi {
 }
 
 impl ClientInfoFfi {
+    /// Validate required device labels while transferring optional metadata unchanged.
     fn core(self) -> Result<libtinkle::ClientInfo, FfiError> {
         libtinkle::ClientInfo::new(
             self.device_model,
@@ -64,6 +65,7 @@ pub struct ServerTrustFfi {
 }
 
 impl ServerTrustFfi {
+    /// Require a 32-byte public pin and validate its value and scope before construction.
     fn core(self) -> Result<libtinkle::ServerTrust, FfiError> {
         let trust = libtinkle::ServerTrust {
             server_public_key: self
@@ -85,6 +87,7 @@ pub struct TrustSourceFfi(Mutex<Option<libtinkle::TrustSource>>);
 
 #[uniffi::export]
 impl TrustSourceFfi {
+    /// Construct one-use Bootstrap trust from a validated, independently provisioned server pin.
     #[uniffi::constructor]
     pub fn bootstrap(trust: ServerTrustFfi) -> Result<Arc<Self>, FfiError> {
         Ok(Arc::new(Self(Mutex::new(Some(
@@ -94,6 +97,7 @@ impl TrustSourceFfi {
 }
 
 impl TrustSourceFfi {
+    /// Transfer trust to one client, rejecting repeated consumption or an unavailable lock.
     pub(crate) fn take(&self) -> Result<libtinkle::TrustSource, FfiError> {
         self.0
             .lock()
@@ -103,6 +107,7 @@ impl TrustSourceFfi {
     }
 }
 
+/// Validate native metadata and route settings before creating the core client configuration.
 pub(crate) fn validated_core_config(
     c: ClientConfigFfi,
 ) -> Result<libtinkle::ClientConfig, FfiError> {
@@ -117,6 +122,7 @@ pub(crate) fn validated_core_config(
 mod tests {
     use super::*;
 
+    /// Supply a structurally valid public pin for one-use trust ownership tests.
     fn trust() -> ServerTrustFfi {
         ServerTrustFfi {
             server_public_key: vec![1; 32],
@@ -126,6 +132,7 @@ mod tests {
     }
 
     #[test]
+    /// A trust object may transfer its core source exactly once.
     fn trust_objects_transfer_ownership_once() {
         let source = TrustSourceFfi::bootstrap(trust()).unwrap();
         assert!(matches!(

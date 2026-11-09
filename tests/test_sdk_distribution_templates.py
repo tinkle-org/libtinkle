@@ -253,6 +253,21 @@ class DistributionTemplateTests(unittest.TestCase):
         self.assertIn("  jitpack:\n    needs: authorize\n", template("kotlin", "release.yml"))
         self.assertIn("-p buildSrc test", template("kotlin", "ci.yml"))
 
+    def test_kotlin_fixture_protocol_checks_do_not_require_source_or_native_artifacts(self):
+        """Run the existing Python fixture suite even before provenance is available."""
+        build_logic = jobs(template("kotlin", "ci.yml"))["build-logic"]
+        job_header = build_logic.split("    steps:", 1)[0]
+        self.assertNotIn("needs:", job_header)
+        self.assertNotIn("if:", job_header)
+        fixture_step = next(step for step in steps(build_logic) if
+                            "run: python3 -B -m unittest discover -s tests -v" in step)
+        self.assertNotIn("if:", fixture_step)
+        self.assertNotIn("working-directory:", fixture_step)
+        self.assertNotIn("continue-on-error:", fixture_step)
+        self.assertIn("fixture protocol", fixture_step)
+        self.assertIn("def test_gateway_json_control_requests(",
+                      (ROOT / "packages/kotlin/tests/test_smoke_fixture.py").read_text())
+
     def test_action_pins_and_evidence_upload_scope(self):
         for sdk in SDKS:
             for name in ("ci.yml", "release.yml"):

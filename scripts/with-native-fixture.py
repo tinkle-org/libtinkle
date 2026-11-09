@@ -58,6 +58,7 @@ try:
         if args.port != 0 and port != args.port:
             raise RuntimeError("encrypted native fixture failed to become ready")
     def forward_output(stream):
+        """Drain fixture stdout while the consumer runs, forwarding each line."""
         for line in stream:
             print(line, end="", flush=True)
 

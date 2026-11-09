@@ -740,6 +740,7 @@ mod review_tests {
     use crate::enrollment::review_tests::{client, expired_store};
 
     #[tokio::test]
+    /// Expired credentials retain negative-only lookup metadata without blocking future admission.
     async fn review_expired_restore_retains_observable_metadata_without_admission_barrier() {
         let client = client(false);
         let store = expired_store(&client);
@@ -756,6 +757,7 @@ mod review_tests {
     }
 
     #[tokio::test]
+    /// A busy periodic observer must not count as completion of a new status-first restore.
     async fn review_status_first_restore_waits_for_busy_periodic_observer() {
         let client = client(false);
         let store = expired_store(&client);

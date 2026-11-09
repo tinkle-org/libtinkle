@@ -644,6 +644,9 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
  */
 public protocol EnrollmentOperationProtocol: AnyObject, Sendable {
 
+    /**
+     * Return the durable operation identifier without exposing its recovery capability.
+     */
     func operationId()  -> String
 
 }
@@ -703,6 +706,9 @@ open class EnrollmentOperation: EnrollmentOperationProtocol, @unchecked Sendable
 
 
 
+    /**
+     * Return the durable operation identifier without exposing its recovery capability.
+     */
 open func operationId() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
         uniffiCallStatus in
@@ -1260,10 +1266,19 @@ public protocol FfiSecureEnrollmentStore: AnyObject, Sendable {
      */
     func clear() async throws
 
+    /**
+     * Acknowledge an atomic durable write with the transaction semantics described above.
+     */
     func commit(kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord) async throws
 
+    /**
+     * Load a retained operation or candidate by operation ID from protected storage.
+     */
     func loadOperation(operationId: String) async throws  -> ProtectedEnrollmentRecord?
 
+    /**
+     * Load the acknowledged active slot, returning None when no active enrollment exists.
+     */
     func loadActive() async throws  -> ProtectedEnrollmentRecord?
 
 }
@@ -1471,6 +1486,9 @@ open func clear()async throws   {
         )
 }
 
+    /**
+     * Acknowledge an atomic durable write with the transaction semantics described above.
+     */
 open func commit(kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord)async throws   {
     return
         try  await uniffiRustCallAsync(
@@ -1487,6 +1505,9 @@ open func commit(kind: SecureEnrollmentWrite, operationId: String, record: Prote
         )
 }
 
+    /**
+     * Load a retained operation or candidate by operation ID from protected storage.
+     */
 open func loadOperation(operationId: String)async throws  -> ProtectedEnrollmentRecord?  {
     return
         try  await uniffiRustCallAsync(
@@ -1503,6 +1524,9 @@ open func loadOperation(operationId: String)async throws  -> ProtectedEnrollment
         )
 }
 
+    /**
+     * Load the acknowledged active slot, returning None when no active enrollment exists.
+     */
 open func loadActive()async throws  -> ProtectedEnrollmentRecord?  {
     return
         try  await uniffiRustCallAsync(
@@ -2705,6 +2729,9 @@ public func FfiConverterTypeSqliteStorage_lower(_ value: SqliteStorage) -> UInt6
  */
 public protocol StoredEnrollmentProtocol: AnyObject, Sendable {
 
+    /**
+     * Return candidate metadata without exposing its authorization key or capability.
+     */
     func status()  -> EnrollmentStatus
 
 }
@@ -2764,6 +2791,9 @@ open class StoredEnrollment: StoredEnrollmentProtocol, @unchecked Sendable {
 
 
 
+    /**
+     * Return candidate metadata without exposing its authorization key or capability.
+     */
 open func status() -> EnrollmentStatus  {
     return try!  FfiConverterTypeEnrollmentStatus_lift(try! rustCall() {
         uniffiCallStatus in
@@ -3047,10 +3077,15 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
      * activation or validated ACTIVE secure-store restoration. A rejected
      * Returning proof never triggers automatic downgrade to Bootstrap.
      *
+     * The pin, server key ID, and scope must match the current source; a change
+     * is rejected. Use a new Client with a separate cache/cursor namespace for
+     * a different deployment.
+     *
      * Successful raw Bootstrap replacement clears the application principal,
-     * tracked targets, watches, and pending catch-up. Callers must establish
-     * the appropriate identity and register interests again before subscriptions
-     * can sync.
+     * tracked targets, watches, and in-memory pending catch-up. Durable resume
+     * jobs are not removed and may hydrate when the same principal is set again.
+     * Callers must establish the appropriate identity and register interests
+     * again before subscriptions can sync.
      */
     func replaceTrustSource(source: TrustSourceFfi) async throws
 
@@ -3174,8 +3209,14 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
      */
     func restoreActiveEnrollment(store: FfiSecureEnrollmentStore) async throws  -> EnrollmentStatus
 
+    /**
+     * Recover and persist delivery on pinned Bootstrap using the retained operation capability.
+     */
     func resumeEnrollment(operation: EnrollmentOperation) async throws  -> StoredEnrollment
 
+    /**
+     * Stage and persist a successor on Returning while preserving the previous active slot.
+     */
     func rotateEnrollment(operation: EnrollmentOperation) async throws  -> StoredEnrollment
 
     /**
@@ -3904,10 +3945,15 @@ open func reconnect()async throws   {
      * activation or validated ACTIVE secure-store restoration. A rejected
      * Returning proof never triggers automatic downgrade to Bootstrap.
      *
+     * The pin, server key ID, and scope must match the current source; a change
+     * is rejected. Use a new Client with a separate cache/cursor namespace for
+     * a different deployment.
+     *
      * Successful raw Bootstrap replacement clears the application principal,
-     * tracked targets, watches, and pending catch-up. Callers must establish
-     * the appropriate identity and register interests again before subscriptions
-     * can sync.
+     * tracked targets, watches, and in-memory pending catch-up. Durable resume
+     * jobs are not removed and may hydrate when the same principal is set again.
+     * Callers must establish the appropriate identity and register interests
+     * again before subscriptions can sync.
      */
 open func replaceTrustSource(source: TrustSourceFfi)async throws   {
     return
@@ -4276,6 +4322,9 @@ open func restoreActiveEnrollment(store: FfiSecureEnrollmentStore)async throws  
         )
 }
 
+    /**
+     * Recover and persist delivery on pinned Bootstrap using the retained operation capability.
+     */
 open func resumeEnrollment(operation: EnrollmentOperation)async throws  -> StoredEnrollment  {
     return
         try  await uniffiRustCallAsync(
@@ -4292,6 +4341,9 @@ open func resumeEnrollment(operation: EnrollmentOperation)async throws  -> Store
         )
 }
 
+    /**
+     * Stage and persist a successor on Returning while preserving the previous active slot.
+     */
 open func rotateEnrollment(operation: EnrollmentOperation)async throws  -> StoredEnrollment  {
     return
         try  await uniffiRustCallAsync(
@@ -4582,6 +4634,9 @@ open class TrustSourceFfi: TrustSourceFfiProtocol, @unchecked Sendable {
     }
 
 
+    /**
+     * Construct one-use Bootstrap trust from a validated, independently provisioned server pin.
+     */
 public static func bootstrap(trust: ServerTrustFfi)throws  -> TrustSourceFfi  {
     return try  FfiConverterTypeTrustSourceFfi_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
         uniffiCallStatus in
@@ -7718,7 +7773,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect() != 32861) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_replace_trust_source() != 28156) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_replace_trust_source() != 60334) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_resume() != 27994) {
@@ -7769,10 +7824,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_restore_active_enrollment() != 34764) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_resume_enrollment() != 16014) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_resume_enrollment() != 44521) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_rotate_enrollment() != 55365) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_rotate_enrollment() != 48536) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_send_code() != 30274) {
@@ -7796,7 +7851,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_unregister_push() != 33025) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_enrollmentoperation_operation_id() != 1256) {
+    if (uniffi_tinkle_ffi_checksum_method_enrollmentoperation_operation_id() != 23696) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_begin_restore() != 28725) {
@@ -7820,19 +7875,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_clear() != 25367) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_commit() != 2601) {
+    if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_commit() != 25187) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_load_operation() != 18449) {
+    if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_load_operation() != 15303) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_load_active() != 64614) {
+    if (uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_load_active() != 37446) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_protectedenrollmentrecord_copy_for_secure_storage() != 33978) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_storedenrollment_status() != 16456) {
+    if (uniffi_tinkle_ffi_checksum_method_storedenrollment_status() != 14321) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_clear_principal() != 7934) {
@@ -7877,7 +7932,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite() != 40274) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_constructor_trustsourceffi_bootstrap() != 27011) {
+    if (uniffi_tinkle_ffi_checksum_constructor_trustsourceffi_bootstrap() != 30715) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_constructor_protectedenrollmentrecord_from_secure_storage() != 51245) {

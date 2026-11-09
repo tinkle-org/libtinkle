@@ -371,6 +371,7 @@ fn handle_files(id: u64, req: RpcRequest, state: &Shared) -> Frame {
     }
 }
 
+/// Serve Files RPCs over encrypted TCP, pausing a download response outside the state lock.
 async fn mock_gateway(listener: TcpListener, state: Shared) {
     loop {
         let (stream, _) = match listener.accept().await {
@@ -426,6 +427,7 @@ async fn start_mock_logged() -> (SocketAddr, Shared) {
     (addr, state)
 }
 
+/// Create a fixture-pinned Bootstrap client with no alternate-port fallback.
 fn test_client(addr: SocketAddr) -> libtinkle::Client {
     let cfg = support::config(addr);
     libtinkle::Client::new(

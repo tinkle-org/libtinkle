@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class NativeFixtureRunnerTests(unittest.TestCase):
     def setUp(self):
+        """Stage a fake host build with conflicting cross-compilation settings."""
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name).resolve()
@@ -38,6 +39,7 @@ class NativeFixtureRunnerTests(unittest.TestCase):
         self.cargo_output([self.artifact])
 
     def cargo_output(self, messages):
+        """Install a Cargo stub that checks host selection and emits artifacts."""
         cargo = self.root / "bin/cargo"
         cargo.write_text(
             f"#!{sys.executable}\nimport json, sys\n"
@@ -49,6 +51,7 @@ class NativeFixtureRunnerTests(unittest.TestCase):
         cargo.chmod(0o755)
 
     def fixture(self, body):
+        """Write an executable fixture stub at the path reported by Cargo."""
         self.binary.write_text(f"#!{sys.executable}\n" + body)
         self.binary.chmod(0o755)
 
@@ -86,6 +89,7 @@ class NativeFixtureRunnerTests(unittest.TestCase):
                 self.assertFalse((self.root / "consumer").exists())
 
     def test_drains_and_forwards_more_than_a_pipe_buffer_while_consumer_runs(self):
+        """Large fixture output must not block the consumer or hide its exit code."""
         self.fixture("import signal, sys, time\nfrom pathlib import Path\n"
                      "def stop(*_):\n    print('fixture stopped', flush=True)\n    sys.exit(0)\n"
                      "signal.signal(signal.SIGTERM, stop)\n"
@@ -104,6 +108,7 @@ class NativeFixtureRunnerTests(unittest.TestCase):
         self.assertNotIn("48080\n", result.stdout)
 
     def test_wrong_port_or_eof_prevents_consumer_start(self):
+        """Reject a mismatched readiness port or EOF before launching a consumer."""
         for body in ("print('48081', flush=True)\n", "pass\n"):
             with self.subTest(body=body):
                 self.fixture(body)
@@ -113,6 +118,7 @@ class NativeFixtureRunnerTests(unittest.TestCase):
                 self.assertFalse((self.root / "consumer").exists())
 
     def test_readiness_still_precedes_consumer_and_success_propagates(self):
+        """Wait for fixture readiness before running a successful consumer."""
         self.fixture("import time\nfrom pathlib import Path\n"
                      "time.sleep(0.05)\nPath('ready').touch()\n"
                      "print('48080', flush=True)\n"
@@ -121,6 +127,7 @@ class NativeFixtureRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_launches_reported_host_artifact_not_stale_default_path(self):
+        """Select the unique host example artifact, ignoring stale or unrelated paths."""
         stale = self.root / "target/debug/examples/native-fixture"
         stale.parent.mkdir(parents=True)
         stale.write_text(f"#!{sys.executable}\nraise RuntimeError('stale artifact selected')\n")
@@ -133,6 +140,7 @@ class NativeFixtureRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_missing_or_ambiguous_artifacts_do_not_start_consumer(self):
+        """Fail before consumer launch unless Cargo reports one fixture executable."""
         for messages in ([], [self.artifact, dict(self.artifact, executable="another-fixture")]):
             with self.subTest(messages=messages):
                 self.cargo_output(messages)

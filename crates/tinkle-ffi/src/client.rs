@@ -195,11 +195,13 @@ pub struct TinkleClient {
 }
 
 impl TinkleClient {
+    /// Borrow the same core coordinator used by every exported service adapter.
     pub(crate) fn core_client(&self) -> &libtinkle::Client {
         &self.inner
     }
 }
 
+/// Validate native route and metadata inputs through the shared FFI configuration adapter.
 fn build_config(config: ClientConfigFfi) -> Result<libtinkle::ClientConfig, FfiError> {
     crate::config::validated_core_config(config)
 }
@@ -289,10 +291,15 @@ impl TinkleClient {
     /// activation or validated ACTIVE secure-store restoration. A rejected
     /// Returning proof never triggers automatic downgrade to Bootstrap.
     ///
+    /// The pin, server key ID, and scope must match the current source; a change
+    /// is rejected. Use a new Client with a separate cache/cursor namespace for
+    /// a different deployment.
+    ///
     /// Successful raw Bootstrap replacement clears the application principal,
-    /// tracked targets, watches, and pending catch-up. Callers must establish
-    /// the appropriate identity and register interests again before subscriptions
-    /// can sync.
+    /// tracked targets, watches, and in-memory pending catch-up. Durable resume
+    /// jobs are not removed and may hydrate when the same principal is set again.
+    /// Callers must establish the appropriate identity and register interests
+    /// again before subscriptions can sync.
     pub async fn replace_trust_source(
         &self,
         source: Arc<crate::TrustSourceFfi>,

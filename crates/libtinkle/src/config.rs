@@ -41,9 +41,11 @@ pub struct Enrollment {
 }
 
 impl Enrollment {
+    /// Share the revocable key cell with the owning authorization coordinator.
     pub(crate) fn secret(&self) -> std::sync::Arc<crate::authorization::SecretCell> {
         self.authorization_key.clone()
     }
+    /// Return the public handle and epoch identifying this installed enrollment.
     pub(crate) fn binding(&self) -> ([u8; 8], u64) {
         (self.handle, self.epoch)
     }
@@ -71,6 +73,7 @@ impl Enrollment {
         )
     }
 
+    /// Retain nonzero key, handle, and epoch values in a revocable zeroizing owner.
     pub(crate) fn new(
         authorization_key: [u8; 32],
         handle: [u8; 8],
@@ -91,6 +94,7 @@ impl Enrollment {
     }
 }
 impl Drop for Enrollment {
+    /// Revoke shared key access and erase this owner's handle and epoch.
     fn drop(&mut self) {
         self.authorization_key.retire();
         self.handle.zeroize();
@@ -99,6 +103,7 @@ impl Drop for Enrollment {
 }
 
 impl std::fmt::Debug for Enrollment {
+    /// Redact all enrollment material from diagnostic formatting.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Enrollment([redacted])")
     }
@@ -122,6 +127,7 @@ pub enum TrustSource {
 }
 
 impl TrustSource {
+    /// Build exact TCP channel context, rejecting sign-out and retired Returning keys.
     pub(crate) fn security(&self) -> Result<secure_channel::ClientConfig, TinkleError> {
         let (trust, mode, handle, epoch, authorization_key) = match self {
             Self::SignedOut(_) => return Err(TinkleError::SignedOut),

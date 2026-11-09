@@ -2,12 +2,14 @@
 //! this test never starts/builds Go or substitutes the SDK/transport.
 use libtinkle::{Client, ClientConfig, ClientInfo, InMemoryCursorStore, ServerTrust, TrustSource};
 
+/// Require a runner-provisioned input without echoing its value when it is missing.
 fn env(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("required external fixture input: {name}"))
 }
 
 #[tokio::test]
 #[ignore = "requires externally started client-api; see docs/device-enrollment.md"]
+/// Verify pinned Bootstrap initialization accepts SendCode without establishing an account principal.
 async fn pinned_client_api_bootstrap_initializes_and_accepts_send_code() {
     let pin = env("TINKLE_E2E_SERVER_PIN");
     assert!(

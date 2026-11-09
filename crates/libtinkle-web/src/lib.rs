@@ -28,11 +28,13 @@ pub fn validate_connectivity(payload: &[u8]) -> Result<(), JsValue> {
 #[cfg(test)]
 mod tests {
     #[test]
+    /// Keep browser networking explicitly disabled in the portable schema package.
     fn browser_network_is_unsupported() {
         assert!(!super::network_supported());
     }
 
     #[test]
+    /// Malformed connectivity bytes must fail portable validation without opening a socket.
     fn portable_schema_checks_reject_malformed_payload() {
         assert!(tinkle_schema::sync::validate_connectivity_notification(&[0xff]).is_err());
     }

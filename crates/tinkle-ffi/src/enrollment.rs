@@ -94,22 +94,26 @@ pub trait FfiSecureEnrollmentStore: Send + Sync {
     /// this namespace. Return success only after durable clearing/tombstoning
     /// that also rejects pending old writes. Idempotent; failure is not an ack.
     async fn clear(&self) -> Result<(), FfiError>;
+    /// Acknowledge an atomic durable write with the transaction semantics described above.
     async fn commit(
         &self,
         kind: SecureEnrollmentWrite,
         operation_id: String,
         record: Arc<ProtectedEnrollmentRecord>,
     ) -> Result<(), FfiError>;
+    /// Load a retained operation or candidate by operation ID from protected storage.
     async fn load_operation(
         &self,
         operation_id: String,
     ) -> Result<Option<Arc<ProtectedEnrollmentRecord>>, FfiError>;
+    /// Load the acknowledged active slot, returning None when no active enrollment exists.
     async fn load_active(&self) -> Result<Option<Arc<ProtectedEnrollmentRecord>>, FfiError>;
 }
 
 struct Adapter(Arc<dyn FfiSecureEnrollmentStore>);
 #[async_trait::async_trait]
 impl libtinkle::SecureEnrollmentStore for Adapter {
+    /// Forward exact restore tokens and opaque active bytes, sanitizing host failures.
     async fn begin_restore(
         &self,
         incarnation: &str,
@@ -129,12 +133,14 @@ impl libtinkle::SecureEnrollmentStore for Adapter {
             .await
             .map_err(|_| libtinkle::SecureStoreError)
     }
+    /// Await host permit release while hiding foreign diagnostic text from the coordinator.
     async fn end_restore(&self, id: &str) -> Result<(), libtinkle::SecureStoreError> {
         self.0
             .end_restore(id.into())
             .await
             .map_err(|_| libtinkle::SecureStoreError)
     }
+    /// Preserve atomic namespace metadata and copy active bytes into a zeroizing Rust owner.
     async fn namespace_snapshot(
         &self,
     ) -> Result<Option<libtinkle::EnrollmentNamespaceSnapshot>, libtinkle::SecureStoreError> {
@@ -154,6 +160,7 @@ impl libtinkle::SecureEnrollmentStore for Adapter {
             })
             .map_err(|_| libtinkle::SecureStoreError)
     }
+    /// Forward conditional writes without replacing a superseded result with a legacy write.
     async fn commit_current(
         &self,
         expected: &str,
@@ -173,24 +180,28 @@ impl libtinkle::SecureEnrollmentStore for Adapter {
             .await
             .map_err(|_| libtinkle::SecureStoreError)
     }
+    /// Await the host's revision-checked cleanup-marker acknowledgement.
     async fn begin_clear(&self, expected: &str) -> Result<bool, libtinkle::SecureStoreError> {
         self.0
             .begin_clear(expected.into())
             .await
             .map_err(|_| libtinkle::SecureStoreError)
     }
+    /// Await conditional durable clearing, preserving rejection and sanitizing failures.
     async fn finish_clear(&self, expected: &str) -> Result<bool, libtinkle::SecureStoreError> {
         self.0
             .finish_clear(expected.into())
             .await
             .map_err(|_| libtinkle::SecureStoreError)
     }
+    /// Await legacy full-namespace clearing without exposing foreign error details.
     async fn clear(&self) -> Result<(), libtinkle::SecureStoreError> {
         self.0
             .clear()
             .await
             .map_err(|_| libtinkle::SecureStoreError)
     }
+    /// Transfer write intent and opaque bytes, returning only after host acknowledgement.
     async fn commit(
         &self,
         kind: libtinkle::SecureWrite,
@@ -209,6 +220,7 @@ impl libtinkle::SecureEnrollmentStore for Adapter {
             .await
             .map_err(|_| libtinkle::SecureStoreError)
     }
+    /// Adopt optional protected operation bytes and replace foreign errors with storage failure.
     async fn load_operation(
         &self,
         id: &str,
@@ -221,6 +233,7 @@ impl libtinkle::SecureEnrollmentStore for Adapter {
             })
             .map_err(|_| libtinkle::SecureStoreError)
     }
+    /// Adopt optional protected active bytes into a zeroizing coordinator-owned record.
     async fn load_active(
         &self,
     ) -> Result<Option<libtinkle::SecretBlob>, libtinkle::SecureStoreError> {
@@ -250,6 +263,7 @@ pub struct EnrollmentOperation {
 }
 #[uniffi::export]
 impl EnrollmentOperation {
+    /// Return the durable operation identifier without exposing its recovery capability.
     pub fn operation_id(&self) -> String {
         self.inner.operation_id().into()
     }
@@ -262,6 +276,7 @@ pub struct StoredEnrollment {
 }
 #[uniffi::export]
 impl StoredEnrollment {
+    /// Return candidate metadata without exposing its authorization key or capability.
     pub fn status(&self) -> EnrollmentStatus {
         status(self.inner.status())
     }
@@ -281,6 +296,7 @@ pub struct EnrollmentStatus {
     pub user_id: i64,
     pub account_auth_epoch: u64,
 }
+/// Preserve enrollment metadata and split expiry into seconds and nanoseconds for native hosts.
 fn status(value: &tinkle_schema::proto::DeviceEnrollmentStatus) -> EnrollmentStatus {
     let expiry = value.expires_at.unwrap_or_default();
     EnrollmentStatus {
@@ -396,6 +412,7 @@ impl TinkleClient {
             }),
         })
     }
+    /// Recover and persist delivery on pinned Bootstrap using the retained operation capability.
     pub async fn resume_enrollment(
         &self,
         operation: Arc<EnrollmentOperation>,
@@ -408,6 +425,7 @@ impl TinkleClient {
                 .await?,
         }))
     }
+    /// Stage and persist a successor on Returning while preserving the previous active slot.
     pub async fn rotate_enrollment(
         &self,
         operation: Arc<EnrollmentOperation>,
@@ -460,6 +478,7 @@ mod tests {
         release: tokio::sync::Notify,
     }
 
+    /// Check each write kind crosses the adapter with its expected identifier and exact bytes.
     fn assert_write(kind: SecureEnrollmentWrite, id: &str, record: &ProtectedEnrollmentRecord) {
         let (expected_id, expected_record) = match kind {
             SecureEnrollmentWrite::Operation => ("operation-only", vec![4, 5]),
@@ -472,6 +491,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl FfiSecureEnrollmentStore for PendingHost {
+        /// Validate the complete restore request and simulate a denied install permit.
         async fn begin_restore(
             &self,
             incarnation: String,
@@ -485,10 +505,12 @@ mod tests {
             assert_eq!(id, "restore-permit");
             Ok(false)
         }
+        /// Validate the permit ID and inject a foreign release error for sanitization checks.
         async fn end_restore(&self, id: String) -> Result<(), FfiError> {
             assert_eq!(id, "restore-permit");
             Err(FfiError::Storage("untrusted release diagnostic".into()))
         }
+        /// Return fixed atomic namespace metadata with an opaque active record.
         async fn namespace_snapshot(
             &self,
         ) -> Result<Option<ProtectedEnrollmentNamespace>, FfiError> {
@@ -500,6 +522,7 @@ mod tests {
                 active: Some(ProtectedEnrollmentRecord::from_secure_storage(vec![9])),
             }))
         }
+        /// Validate conditional write arguments and simulate superseded ACTIVE persistence.
         async fn commit_current(
             &self,
             revision: String,
@@ -514,17 +537,21 @@ mod tests {
                 _ => Some("revision:8".into()),
             })
         }
+        /// Verify the expected revision and simulate rejection of a cleanup marker.
         async fn begin_clear(&self, revision: String) -> Result<bool, FfiError> {
             assert_eq!(revision, "revision:7");
             Ok(false)
         }
+        /// Verify the expected revision and inject a sensitive foreign cleanup error.
         async fn finish_clear(&self, revision: String) -> Result<bool, FfiError> {
             assert_eq!(revision, "revision:7");
             Err(FfiError::Storage("untrusted host diagnostic".into()))
         }
+        /// Inject a foreign legacy-clear failure that must not escape unsanitized.
         async fn clear(&self) -> Result<(), FfiError> {
             Err(FfiError::Storage("untrusted host clear diagnostic".into()))
         }
+        /// Hold acknowledgement after validating the write, then return a foreign storage error.
         async fn commit(
             &self,
             kind: SecureEnrollmentWrite,
@@ -538,12 +565,14 @@ mod tests {
                 "untrusted sensitive host diagnostic".into(),
             ))
         }
+        /// Model a host without a retained operation record.
         async fn load_operation(
             &self,
             _: String,
         ) -> Result<Option<Arc<ProtectedEnrollmentRecord>>, FfiError> {
             Ok(None)
         }
+        /// Model a host without a retained active slot.
         async fn load_active(&self) -> Result<Option<Arc<ProtectedEnrollmentRecord>>, FfiError> {
             Ok(None)
         }
@@ -621,6 +650,7 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Every write must await its host acknowledgement and sanitize sensitive failure text.
     async fn adapter_awaits_host_acknowledgement_and_sanitizes_failure() {
         let host = Arc::new(PendingHost {
             entered: tokio::sync::Notify::new(),
@@ -637,6 +667,7 @@ mod tests {
                 "candidate-operation",
                 vec![6, 7, 8],
             ),
+            (libtinkle::SecureWrite::Active, "operation", vec![1, 2, 3]),
         ] {
             let adapter = Adapter(host.clone());
             let write = tokio::spawn(async move {

@@ -44,6 +44,7 @@ struct Store {
 }
 #[async_trait]
 impl SecureEnrollmentStore for Store {
+    /// Clear all fixture records after any configured delay, or inject a storage failure.
     async fn clear(&self) -> Result<(), SecureStoreError> {
         self.clears.fetch_add(1, Ordering::SeqCst);
         if self.clear_gate.load(Ordering::SeqCst) {
@@ -58,6 +59,7 @@ impl SecureEnrollmentStore for Store {
         rows.1 = None;
         Ok(())
     }
+    /// Enforce operation ordering and acknowledge writes only after the configured gate opens.
     async fn commit(
         &self,
         kind: SecureWrite,
@@ -93,6 +95,7 @@ impl SecureEnrollmentStore for Store {
         });
         Ok(())
     }
+    /// Copy a retained operation record without consuming its recovery capability.
     async fn load_operation(&self, id: &str) -> Result<Option<SecretBlob>, SecureStoreError> {
         Ok(self
             .rows
@@ -102,6 +105,7 @@ impl SecureEnrollmentStore for Store {
             .get(id)
             .map(|b| SecretBlob::new(b.expose_secret().to_vec())))
     }
+    /// Copy the last acknowledged active slot for restart and rotation assertions.
     async fn load_active(&self) -> Result<Option<SecretBlob>, SecureStoreError> {
         Ok(self
             .rows
@@ -174,6 +178,7 @@ struct ProbeControl {
 }
 struct Keys(Arc<Mutex<State>>);
 impl KeyStore for Keys {
+    /// Resolve only a matching, nonrevoked active handle and epoch to its fixture key.
     fn lookup(&self, context: &Context) -> Result<Secret32, secure_channel::Error> {
         let state = self.0.lock().unwrap();
         let active = state
@@ -201,6 +206,7 @@ impl KeyStore for Keys {
     }
 }
 
+/// Create a staged account delivery with epoch-specific keys and a future expiry.
 fn staged(operation_id: String, epoch: u64) -> DeviceEnrollment {
     DeviceEnrollment {
         operation_id,
@@ -222,6 +228,7 @@ fn staged(operation_id: String, epoch: u64) -> DeviceEnrollment {
         account_auth_epoch: 1,
     }
 }
+/// Project enrollment metadata without copying its authorization key.
 fn status(value: &DeviceEnrollment) -> DeviceEnrollmentStatus {
     DeviceEnrollmentStatus {
         operation_id: value.operation_id.clone(),
@@ -246,13 +253,17 @@ fn reference(value: &DeviceEnrollment) -> DeviceEnrollmentReference {
         account_auth_epoch: value.account_auth_epoch,
     }
 }
+/// Encode a typed fixture response while leaving transport correlation to the SDK.
 fn payload(message: impl Message) -> HandlerOutcome {
     HandlerOutcome::Payload(message.encode_to_vec())
 }
+/// Return a fixed unauthenticated response without echoing credential material.
 fn denied() -> HandlerOutcome {
     HandlerOutcome::error(ErrorCode::Unauthenticated, "rejected")
 }
 
+/// Serve enrollment, disposition, and session RPCs with configurable negative responses.
+/// Record authority transitions and enforce admission mode and persistence ordering.
 fn application(state: &mut State, mode: Mode, method: &str, bytes: &[u8]) -> HandlerOutcome {
     match method {
         "/tinkle.v1.AuthService/GetEnrollmentDisposition" => {
@@ -479,6 +490,7 @@ fn application(state: &mut State, mode: Mode, method: &str, bytes: &[u8]) -> Han
     }
 }
 
+/// Read bounded public routing context without consuming bytes or treating it as proof.
 async fn peek_mode(stream: &tokio::net::TcpStream) -> Mode {
     tokio::time::timeout(Duration::from_secs(3), async {
         let mut bytes = vec![0; secure_channel::MAX_WRAPPER + 2];
@@ -506,11 +518,13 @@ struct Fixture {
     task: tokio::task::JoinHandle<()>,
 }
 impl Drop for Fixture {
+    /// Abort the listener and its owned connection tasks when the fixture is dropped.
     fn drop(&mut self) {
         self.task.abort();
     }
 }
 impl Fixture {
+    /// Start the encrypted authority fixture with shared persistence and response gates.
     async fn new() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let config = support::config(listener.local_addr().unwrap());
@@ -665,6 +679,7 @@ impl Fixture {
             task,
         }
     }
+    /// Create an isolated Bootstrap client targeting this fixture without fallback.
     fn client(&self) -> Client {
         Client::new(
             self.config.clone(),
@@ -673,6 +688,7 @@ impl Fixture {
         )
     }
 }
+/// Supply valid sign-in fields matching the fixture's verification challenge.
 fn details() -> SignInDetails {
     SignInDetails::new(
         "+14155550123".into(),
@@ -739,6 +755,7 @@ impl FencedStore {
 }
 #[async_trait]
 impl SecureEnrollmentStore for FencedStore {
+    /// Pin exact active bytes and namespace tokens until the matching restore permit releases.
     async fn begin_restore(
         &self,
         incarnation: &str,
@@ -769,6 +786,7 @@ impl SecureEnrollmentStore for FencedStore {
         permits.held.insert(id.into(), install);
         Ok(true)
     }
+    /// Cancel late acquisition and release held exclusion unless failure is injected.
     async fn end_restore(&self, id: &str) -> Result<(), SecureStoreError> {
         if self.fail_restore_release.load(Ordering::SeqCst) {
             return Err(SecureStoreError);
@@ -778,9 +796,11 @@ impl SecureEnrollmentStore for FencedStore {
         permits.held.remove(id);
         Ok(())
     }
+    /// Fail the test if the coordinator bypasses revision-checked cleanup.
     async fn clear(&self) -> Result<(), SecureStoreError> {
         panic!("fenced hosts must use conditional cleanup")
     }
+    /// Fail the test if the coordinator bypasses conditional namespace writes.
     async fn commit(
         &self,
         _: SecureWrite,
@@ -789,6 +809,7 @@ impl SecureEnrollmentStore for FencedStore {
     ) -> Result<(), SecureStoreError> {
         panic!("fenced hosts must use conditional writes")
     }
+    /// Reject operation recovery after cleanup is marked; otherwise read the inner store.
     async fn load_operation(&self, id: &str) -> Result<Option<SecretBlob>, SecureStoreError> {
         let state = self.state.lock().await;
         if state.1 {
@@ -796,6 +817,7 @@ impl SecureEnrollmentStore for FencedStore {
         }
         self.inner.load_operation(id).await
     }
+    /// Reject active restoration after cleanup is marked; otherwise read the inner slot.
     async fn load_active(&self) -> Result<Option<SecretBlob>, SecureStoreError> {
         let state = self.state.lock().await;
         if state.1 {
@@ -803,6 +825,7 @@ impl SecureEnrollmentStore for FencedStore {
         }
         self.inner.load_active().await
     }
+    /// Capture one namespace revision, optionally holding its delivery to exercise stale reads.
     async fn namespace_snapshot(
         &self,
     ) -> Result<Option<libtinkle::EnrollmentNamespaceSnapshot>, SecureStoreError> {
@@ -825,6 +848,7 @@ impl SecureEnrollmentStore for FencedStore {
         }
         Ok(Some(snapshot))
     }
+    /// Commit only at the current unmarked revision and update pending-work bookkeeping.
     async fn commit_current(
         &self,
         expected: &str,
@@ -846,6 +870,7 @@ impl SecureEnrollmentStore for FencedStore {
         state.0 += 1;
         Ok(Some(self.revision(state.0)))
     }
+    /// Mark matching revision cleanup while excluding concurrent restore installation.
     async fn begin_clear(&self, expected: &str) -> Result<bool, SecureStoreError> {
         let _install = self.restore_gate.lock().await;
         let mut state = self.state.lock().await;
@@ -855,6 +880,7 @@ impl SecureEnrollmentStore for FencedStore {
         state.1 = true;
         Ok(true)
     }
+    /// Clear records only under the expected tombstone, preserving it across retries.
     async fn finish_clear(&self, expected: &str) -> Result<bool, SecureStoreError> {
         let _install = self.restore_gate.lock().await;
         let state = self.state.lock().await;
@@ -2675,6 +2701,7 @@ async fn active_restore_reestablishes_principal_without_inheriting_raw_replaceme
 }
 
 #[tokio::test]
+/// Verify each durable acknowledgement precedes activation and fresh Returning admission.
 async fn secure_persistence_precedes_bootstrap_activation_and_fresh_returning() {
     let fixture = Fixture::new().await;
     let client = fixture.client();
@@ -2741,6 +2768,7 @@ async fn secure_persistence_precedes_bootstrap_activation_and_fresh_returning() 
 }
 
 #[tokio::test]
+/// Recover a lost SignIn delivery after restart using the retained capability, not another SMS.
 async fn lost_sign_in_result_resumes_after_restart_without_sms_reuse() {
     let fixture = Fixture::new().await;
     let client = fixture.client();
@@ -2782,6 +2810,7 @@ async fn lost_sign_in_result_resumes_after_restart_without_sms_reuse() {
 }
 
 #[tokio::test]
+/// Storage failures must block the next enrollment phase and preserve recoverability.
 async fn failed_storage_never_acknowledges_or_attempts_staged_returning() {
     for phase in [
         SecureWrite::Operation,
@@ -2819,6 +2848,7 @@ async fn failed_storage_never_acknowledges_or_attempts_staged_returning() {
 }
 
 #[tokio::test]
+/// Reject malformed or operation-mismatched deliveries before activation or active persistence.
 async fn malformed_or_wrongly_bound_delivery_is_never_activated() {
     for corruption in [
         "key",
@@ -2846,6 +2876,7 @@ async fn malformed_or_wrongly_bound_delivery_is_never_activated() {
 }
 
 #[tokio::test]
+/// Staging a rotation must preserve the old active slot until its successor activates.
 async fn rotation_retains_old_active_slot_until_acknowledged_install() {
     let fixture = Fixture::new().await;
     let client = fixture.client();
@@ -2885,6 +2916,7 @@ async fn rotation_retains_old_active_slot_until_acknowledged_install() {
 }
 
 #[tokio::test]
+/// Invalid activation binding must not persist; later admission failure must not erase ACTIVE.
 async fn active_restore_keeps_committed_status_despite_reconnect_rejection() {
     let fixture = Fixture::new().await;
     let client = fixture.client();
@@ -3053,6 +3085,7 @@ async fn lifecycle_returning_logout_without_store_can_bind_and_retry() {
 }
 
 #[tokio::test]
+/// SignIn must not release its candidate receipt before the host acknowledges persistence.
 async fn candidate_receipt_is_not_available_until_async_secure_write_completes() {
     let fixture = Fixture::new().await;
     let client = fixture.client();
@@ -3080,6 +3113,7 @@ async fn candidate_receipt_is_not_available_until_async_secure_write_completes()
 }
 
 #[tokio::test]
+/// Serialize first-call initialization without dispatching queued calls whose budgets expired.
 async fn client_initialization_is_once_per_connection_and_first_call_queue_is_bounded() {
     use syntra_core::proto::{frame::Body, rpc_result::Outcome, Frame, RpcResult};
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -3178,6 +3212,7 @@ async fn client_initialization_is_once_per_connection_and_first_call_queue_is_bo
 }
 
 #[tokio::test]
+/// Initialize once per socket and resend the complete metadata snapshot after reconnect.
 async fn fresh_reconnect_installs_the_whole_metadata_snapshot_again() {
     let fixture = Fixture::new().await;
     let client = fixture.client();
@@ -3209,6 +3244,7 @@ async fn fresh_reconnect_installs_the_whole_metadata_snapshot_again() {
     client.close().await;
 }
 
+/// Complete fixture enrollment and retain both operation and candidate receipts for reuse tests.
 async fn enrolled(
     fixture: &Fixture,
 ) -> (
@@ -3230,6 +3266,7 @@ async fn enrolled(
     (client, operation, result.enrollment)
 }
 
+/// Assert irreversible local sign-out blocks dialing, restoration, provisioning, and wake.
 async fn assert_signed_out(client: &Client, fixture: &Fixture) {
     assert!(client.is_signed_out());
     assert!(!client.is_connected().await);
@@ -3261,6 +3298,7 @@ async fn assert_signed_out(client: &Client, fixture: &Fixture) {
 }
 
 #[tokio::test]
+/// Offline logout must clear active and pending capabilities without claiming remote revocation.
 async fn offline_logout_retires_keys_and_clears_active_and_all_pending_operations() {
     let fixture = Fixture::new().await;
     let (client, operation, receipt) = enrolled(&fixture).await;
@@ -3300,6 +3338,7 @@ async fn offline_logout_retires_keys_and_clears_active_and_all_pending_operation
 }
 
 #[tokio::test]
+/// Logout before network use must erase the pending operation and prevent later recovery.
 async fn pending_operation_logout_without_network_clears_provisioning_capability() {
     let fixture = Fixture::new().await;
     let client = fixture.client();
@@ -3321,6 +3360,7 @@ async fn pending_operation_logout_without_network_clears_provisioning_capability
 }
 
 #[tokio::test]
+/// A remote error or lost acknowledgement must not undo local sign-out or replay Logout.
 async fn remote_failure_or_lost_ack_never_reverses_local_logout() {
     for lost_ack in [false, true] {
         let fixture = Fixture::new().await;
@@ -3346,6 +3386,7 @@ async fn remote_failure_or_lost_ack_never_reverses_local_logout() {
 }
 
 #[tokio::test]
+/// Report failed durable clearing while keeping the current coordinator permanently signed out.
 async fn clear_failure_is_reported_but_cannot_restore_keys_on_the_same_client() {
     let fixture = Fixture::new().await;
     let (client, operation, receipt) = enrolled(&fixture).await;
@@ -3366,6 +3407,7 @@ async fn clear_failure_is_reported_but_cannot_restore_keys_on_the_same_client() 
 }
 
 #[tokio::test]
+/// A successful Logout must confirm remote revocation as well as complete local clearing.
 async fn confirmed_remote_revocation_is_distinct_from_acknowledged_local_clearing() {
     let fixture = Fixture::new().await;
     let (client, _, _) = enrolled(&fixture).await;
@@ -3627,6 +3669,7 @@ async fn queued_initialization_call_observes_sign_out_before_dispatch() {
 }
 
 #[tokio::test]
+/// Late enrollment writes must drain before cleanup and must not reinstall keys after sign-out.
 async fn late_sign_in_rotation_and_active_install_cannot_repopulate_after_logout() {
     for phase in 0..3 {
         let fixture = Fixture::new().await;

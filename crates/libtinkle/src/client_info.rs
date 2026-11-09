@@ -17,6 +17,7 @@ pub struct ClientOptions {
 #[derive(Debug, Clone)]
 pub struct ClientInfo(tinkle_schema::proto::ClientInfo);
 
+/// Validate printable ASCII before trimming spaces, then enforce presence and byte limits.
 fn label(raw: String, maximum: usize, required: bool) -> Result<String, TinkleError> {
     if !raw.bytes().all(|byte| (0x20..=0x7e).contains(&byte)) {
         return Err(TinkleError::Configuration(
@@ -57,6 +58,7 @@ impl ClientInfo {
         }))
     }
 
+    /// Copy the complete validated snapshot for initialization on a fresh connection.
     pub(crate) fn proto(&self) -> tinkle_schema::proto::ClientInfo {
         self.0.clone()
     }
@@ -66,6 +68,7 @@ impl ClientInfo {
 mod tests {
     use super::*;
     #[test]
+    /// Reject invalid raw labels before trimming while preserving leading zeroes in build IDs.
     fn labels_validate_raw_ascii_before_trimming_and_preserve_build_identifiers() {
         for bad in ["", "   ", "\tios", "ios\n", "é"] {
             assert!(ClientInfo::new(

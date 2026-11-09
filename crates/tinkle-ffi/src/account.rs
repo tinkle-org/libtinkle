@@ -197,6 +197,7 @@ impl TinkleClient {
     }
 }
 
+/// Keep ambiguous revocation outcomes nonretryable without changing other error mappings.
 fn revoke_other_sessions_error(error: libtinkle::TinkleError) -> FfiError {
     if error.is_unknown_outcome() {
         FfiError::Network("revocation outcome unknown; do not retry automatically".into())
@@ -209,7 +210,155 @@ fn revoke_other_sessions_error(error: libtinkle::TinkleError) -> FfiError {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    #[ignore = "run via scripts/with-native-fixture.py --port 0 cargo test -p tinkle-ffi exported_revocation_lost_response -- --ignored"]
+    /// Drop a real encrypted reply and verify the export reports unknown outcome, not sign-out.
+    async fn exported_revocation_lost_response_is_network_unknown() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        use tokio::{
+            io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+            net::{TcpListener, TcpStream},
+        };
+
+        let regression = async {
+            let port: u16 = std::env::var("TINKLE_NATIVE_FIXTURE_CONTROL_PORT")
+                .expect("run with the native fixture wrapper")
+                .parse()
+                .unwrap();
+            let mut control =
+                BufReader::new(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
+            control
+                .get_mut()
+                .write_all(b"{\"op\":\"create\"}\n")
+                .await
+                .unwrap();
+            let mut reply = String::new();
+            control.read_line(&mut reply).await.unwrap();
+            // This fixture control reply contains only numeric id/port/pin fields.
+            // Application payloads and Syntra framing remain entirely SDK-owned.
+            let field = |name: &str| {
+                reply
+                    .split_once(&format!("\"{name}\":"))
+                    .expect("missing fixture field")
+                    .1
+            };
+            let id: u64 = field("id")
+                .split([',', '}'])
+                .next()
+                .unwrap()
+                .parse()
+                .unwrap();
+            let gateway_port: u16 = field("port")
+                .split([',', '}'])
+                .next()
+                .unwrap()
+                .parse()
+                .unwrap();
+            let pin: Vec<u8> = field("pin")
+                .strip_prefix('[')
+                .unwrap()
+                .split(']')
+                .next()
+                .unwrap()
+                .split(',')
+                .map(|byte| byte.parse().unwrap())
+                .collect();
+            assert_eq!(pin.len(), 32);
+            let relay = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let relay_port = relay.local_addr().unwrap().port();
+            let discard = Arc::new(AtomicBool::new(false));
+            let discarded = Arc::new(AtomicBool::new(false));
+            let discard_next = discard.clone();
+            let observed = discarded.clone();
+            let relay_task = tokio::spawn(async move {
+                let (client, _) = relay.accept().await.unwrap();
+                let gateway = TcpStream::connect(("127.0.0.1", gateway_port))
+                    .await
+                    .unwrap();
+                let (mut client_read, mut client_write) = client.into_split();
+                let (mut gateway_read, mut gateway_write) = gateway.into_split();
+                tokio::select! {
+                    result = tokio::io::copy(&mut client_read, &mut gateway_write) => { result.unwrap(); }
+                    _ = async {
+                        let mut bytes = [0; 8192];
+                        loop {
+                            let count = gateway_read.read(&mut bytes).await.unwrap();
+                            if count == 0 { break; }
+                            if discard_next.load(Ordering::SeqCst) {
+                                observed.store(true, Ordering::SeqCst);
+                                break;
+                            }
+                            client_write.write_all(&bytes[..count]).await.unwrap();
+                        }
+                    } => {}
+                }
+            });
+            let client = TinkleClient::new(
+                crate::ClientConfigFfi {
+                    host: "127.0.0.1".into(),
+                    primary_port: relay_port,
+                    fallback_port: None,
+                    client_info: crate::ClientInfoFfi {
+                        device_model: "fixture".into(),
+                        platform: "test".into(),
+                        os_version: "1".into(),
+                        app_version: "1".into(),
+                        app_build: "1".into(),
+                        options: crate::ClientOptionsFfi {
+                            agent: String::new(),
+                            device_id: String::new(),
+                            install_id: String::new(),
+                            accept_language: String::new(),
+                            time_zone: String::new(),
+                            user_agent: String::new(),
+                        },
+                    },
+                },
+                crate::TrustSourceFfi::bootstrap(crate::ServerTrustFfi {
+                    server_public_key: pin,
+                    server_key_id: 7,
+                    scope: "tinkle-mobile-fixture".into(),
+                })
+                .unwrap(),
+                crate::InMemoryFfiStore::new(),
+            )
+            .unwrap();
+            client.connect().await.unwrap();
+            // Drop the fixture's terminal RPC reply, not any handshake traffic.
+            // The fixture does not implement revocation; this claims response loss,
+            // not successful remote mutation or rollback.
+            discard.store(true, Ordering::SeqCst);
+            let error = client.revoke_other_sessions().await.unwrap_err();
+            assert!(
+                discarded.load(Ordering::SeqCst),
+                "the peer reply must actually be lost"
+            );
+            assert!(matches!(error, FfiError::Network(message)
+                if message == "revocation outcome unknown; do not retry automatically"));
+            assert!(!client.is_signed_out());
+            client.shutdown().await;
+            relay_task.await.unwrap();
+            let mut control =
+                BufReader::new(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
+            control
+                .get_mut()
+                .write_all(format!("{{\"op\":\"close\",\"id\":{id}}}\n").as_bytes())
+                .await
+                .unwrap();
+            let mut reply = String::new();
+            control.read_line(&mut reply).await.unwrap();
+            assert_eq!(reply.trim(), "{\"closed\":true}");
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), regression)
+            .await
+            .expect("native FFI response-loss regression timed out");
+    }
+
     #[test]
+    /// Ambiguous transport and RPC outcomes must not become retryable revocation errors.
     fn revocation_unknown_outcomes_are_not_retryable() {
         use syntra_core::{ErrorCode, SyntraError};
         let mut errors = vec![
@@ -241,6 +390,7 @@ mod tests {
     }
 
     #[test]
+    /// Preserve normal FFI error categories and messages for nonambiguous failures.
     fn revocation_preserves_other_error_mappings() {
         use syntra_core::{ErrorCode, SyntraError};
         let mut errors = vec![

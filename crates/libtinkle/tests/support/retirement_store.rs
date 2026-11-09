@@ -32,6 +32,14 @@ struct DiskRestoreLocks {
 impl DiskStore {
     /// Reopen an existing namespace in another process, without in-memory state.
     pub fn new(path: PathBuf) -> Self {
+        // Canonicalize the parent so a not-yet-created record has the same identity.
+        let path = std::path::absolute(path).expect("absolute fixture namespace path");
+        let path = path
+            .parent()
+            .expect("fixture namespace parent")
+            .canonicalize()
+            .expect("existing fixture namespace parent")
+            .join(path.file_name().expect("fixture namespace filename"));
         // Cancellation must survive adapter replacement until this process exits.
         static PERMITS: OnceLock<
             Mutex<std::collections::HashMap<PathBuf, Arc<Mutex<DiskRestoreLocks>>>>,
@@ -147,6 +155,7 @@ fn record(value: &Value) -> Result<Option<SecretBlob>, SecureStoreError> {
 
 #[async_trait]
 impl SecureEnrollmentStore for DiskStore {
+    /// Pin matching active material under install exclusion unless its restore ID was cancelled.
     async fn begin_restore(
         &self,
         incarnation: &str,
@@ -172,12 +181,14 @@ impl SecureEnrollmentStore for DiskStore {
         permits.held.insert(id.into(), install);
         Ok(true)
     }
+    /// Release an install permit and remember cancellation across adapters in this process.
     async fn end_restore(&self, id: &str) -> Result<(), SecureStoreError> {
         let mut permits = self.restore_permits.lock().unwrap();
         permits.cancelled.insert(id.into());
         permits.held.remove(id);
         Ok(())
     }
+    /// Read incarnation, revision, cleanup marker, and record presence in one transaction.
     async fn namespace_snapshot(
         &self,
     ) -> Result<Option<EnrollmentNamespaceSnapshot>, SecureStoreError> {
@@ -197,6 +208,7 @@ impl SecureEnrollmentStore for DiskStore {
             }))
         })
     }
+    /// Publish a record only at the expected unmarked revision and report acknowledged writes.
     async fn commit_current(
         &self,
         expected: &str,
@@ -239,6 +251,7 @@ impl SecureEnrollmentStore for DiskStore {
         }
         Ok(result)
     }
+    /// Persist the cleanup tombstone only when the namespace revision still matches.
     async fn begin_clear(&self, expected: &str) -> Result<bool, SecureStoreError> {
         self.transaction(|state| {
             if revision(state)? != expected {
@@ -248,6 +261,7 @@ impl SecureEnrollmentStore for DiskStore {
             Ok(true)
         })
     }
+    /// Erase records at the marked revision while retaining the cleanup tombstone.
     async fn finish_clear(&self, expected: &str) -> Result<bool, SecureStoreError> {
         self.transaction(|state| {
             if revision(state)? != expected || state["marker"] != true {
@@ -259,9 +273,11 @@ impl SecureEnrollmentStore for DiskStore {
             Ok(true)
         })
     }
+    /// Reject legacy clearing because this fixture requires revision-checked cleanup.
     async fn clear(&self) -> Result<(), SecureStoreError> {
         Err(SecureStoreError)
     }
+    /// Reject legacy writes that bypass the namespace revision comparison.
     async fn commit(
         &self,
         _: SecureWrite,
@@ -270,6 +286,7 @@ impl SecureEnrollmentStore for DiskStore {
     ) -> Result<(), SecureStoreError> {
         Err(SecureStoreError)
     }
+    /// Load an operation record unless a durable cleanup marker blocks access.
     async fn load_operation(&self, id: &str) -> Result<Option<SecretBlob>, SecureStoreError> {
         self.transaction(|state| {
             if state["marker"] == true {
@@ -278,6 +295,7 @@ impl SecureEnrollmentStore for DiskStore {
             record(&state["operations"][id])
         })
     }
+    /// Load active material unless a durable cleanup marker blocks access.
     async fn load_active(&self) -> Result<Option<SecretBlob>, SecureStoreError> {
         self.transaction(|state| {
             if state["marker"] == true {
@@ -293,10 +311,21 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    /// Verify adapter aliases share install exclusion and remember cancelled restore IDs.
     async fn restore_release_and_cancellation_are_shared_across_adapters() {
-        let directory = tempfile::tempdir().unwrap();
+        let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let directory = tempfile::tempdir_in(&cwd).unwrap();
         let path = directory.path().join("namespace.json");
-        let first = DiskStore::new(path.clone());
+        let relative = path.strip_prefix(&cwd).unwrap().to_path_buf();
+        let alternate = directory
+            .path()
+            .join("..")
+            .join(directory.path().file_name().unwrap())
+            .join("namespace.json");
+        assert!(!path.exists());
+        let first = DiskStore::new(relative);
+        let peer = DiskStore::with_events(alternate, Default::default());
+        peer.end_restore("cancelled-before-create").await.unwrap();
         let initial = first.namespace_snapshot().await.unwrap().unwrap();
         let active = SecretBlob::new(vec![1, 2, 3]);
         let pending = first
@@ -314,11 +343,19 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        assert!(!first
+            .begin_restore(
+                &initial.incarnation,
+                &current,
+                &active,
+                "cancelled-before-create"
+            )
+            .await
+            .unwrap());
         assert!(first
             .begin_restore(&initial.incarnation, &current, &active, "install")
             .await
             .unwrap());
-        let peer = DiskStore::with_events(path.clone(), Default::default());
         assert!(peer.begin_clear(&current).await.is_err());
         let unrelated = DiskStore::new(directory.path().join("other.json"));
         unrelated.end_restore("install").await.unwrap();

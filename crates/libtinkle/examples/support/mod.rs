@@ -13,6 +13,7 @@ use zeroize::Zeroize;
 struct PlatformStore(String);
 #[async_trait::async_trait]
 impl libtinkle::SecureEnrollmentStore for PlatformStore {
+    /// Await helper-reported clearing and erase captured output without exposing diagnostics.
     async fn clear(&self) -> Result<(), libtinkle::SecureStoreError> {
         let output = tokio::process::Command::new(&self.0)
             .arg("clear")
@@ -28,6 +29,7 @@ impl libtinkle::SecureEnrollmentStore for PlatformStore {
             Err(libtinkle::SecureStoreError)
         }
     }
+    /// Reject writes because these examples restore enrollment rather than provision it.
     async fn commit(
         &self,
         _: libtinkle::SecureWrite,
@@ -36,12 +38,14 @@ impl libtinkle::SecureEnrollmentStore for PlatformStore {
     ) -> Result<(), libtinkle::SecureStoreError> {
         Err(libtinkle::SecureStoreError) // These examples only restore; never acknowledge a write.
     }
+    /// Reject pending-operation recovery, which the restore-only helper does not implement.
     async fn load_operation(
         &self,
         _: &str,
     ) -> Result<Option<libtinkle::SecretBlob>, libtinkle::SecureStoreError> {
         Err(libtinkle::SecureStoreError)
     }
+    /// Load opaque active bytes from the secure-store helper, erasing its diagnostic output.
     async fn load_active(
         &self,
     ) -> Result<Option<libtinkle::SecretBlob>, libtinkle::SecureStoreError> {
@@ -60,6 +64,7 @@ impl libtinkle::SecureEnrollmentStore for PlatformStore {
     }
 }
 
+/// Validate environment-provisioned trust and metadata, then restore via the secure-store helper.
 pub async fn client() -> anyhow::Result<Client> {
     let pin = std::env::var("TINKLE_SERVER_PIN")?;
     anyhow::ensure!(
