@@ -4937,7 +4937,7 @@ mod tests {
         use super::*;
         use std::time::Duration;
         let (client, handler, server) =
-            budget_fixture(true, Duration::from_secs(2), Duration::from_millis(40)).await;
+            budget_fixture(true, Duration::from_secs(2), Duration::from_secs(1)).await;
         let (_, initialized) = client.live_conn().await.unwrap();
         let lock = initialized.lock().await;
         let generation = client
@@ -4955,7 +4955,7 @@ mod tests {
         );
         tokio::pin!(waiting);
         assert!(futures_util::poll!(&mut waiting).is_pending());
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
         assert!(futures_util::poll!(&mut waiting).is_pending());
         assert!(handler.0.lock().unwrap().is_empty());
         assert!(generation.open.load(Ordering::SeqCst));
