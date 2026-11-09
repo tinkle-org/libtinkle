@@ -2,21 +2,22 @@
 //! concurrent RPCs, cancellation, opaque-hint interleaving, reconnect,
 //! journal paging (`GetTargetChanges` + `PageMore` tri-state), `accept_seq`
 //! dedup, chunked `GetMessages`, `GetHistory.more_available`, and storage v3
-//! migration. Spins an in-process Syntra WSS-equivalent mock gateway.
+//! migration. Spins an encrypted native TCP gateway using the published SDK.
 
-use futures_util::{SinkExt, StreamExt};
+mod support;
 use prost::Message;
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use syntra_core::proto::{
-    frame::Body, rpc_result::Outcome, Frame, Notification, RpcError as ProtoRpcError, RpcRequest,
-    RpcResult,
+    frame::Body, rpc_result::Outcome, Frame, RpcError as ProtoRpcError, RpcRequest, RpcResult,
 };
-use syntra_core::{decode_frame, encode_frame, ConnectionState, ValidationContext};
 use tinkle_schema::proto::{
     target, ConnectivityChanged, GetHistoryRequest, GetHistoryResponse, GetMessagesRequest,
     GetMessagesResponse, GetTargetChangesRequest, GetTargetChangesResponse,
@@ -32,6 +33,8 @@ struct MockLogInner {
     messages: Mutex<Vec<(String, Vec<i64>)>>,
     history: Mutex<Vec<(String, i32)>>,
     observe: Mutex<Vec<Vec<i64>>>,
+    init_response_gate: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
+    init_response_pending: AtomicBool,
     kill: Mutex<Vec<oneshot::Sender<()>>>,
     /// When a target key is present, `GetHistory` with a non-None
     /// `offset_id` (i.e. the 2nd+ window) fails with an injected error.
@@ -135,6 +138,7 @@ fn room7_changes() -> Vec<TargetChange> {
     ]
 }
 
+/// Serve encrypted fixture RPCs with controllable response gates, hints, and connection shutdown.
 async fn mock_gateway(listener: TcpListener, log: MockLog) {
     loop {
         let (stream, _) = match listener.accept().await {
@@ -143,141 +147,52 @@ async fn mock_gateway(listener: TcpListener, log: MockLog) {
         };
         let task_log = log.clone();
         tokio::spawn(async move {
-            use tokio_tungstenite::tungstenite::handshake::server::ErrorResponse;
-            use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
-            #[allow(clippy::result_large_err)]
-            let callback = |req: &Request, mut resp: Response| -> Result<Response, ErrorResponse> {
-                let offered = req
-                    .headers()
-                    .get("sec-websocket-protocol")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("");
-                if offered
-                    .split(',')
-                    .map(|s| s.trim())
-                    .any(|s| s == "syntra.v1")
-                {
-                    resp.headers_mut()
-                        .insert("sec-websocket-protocol", "syntra.v1".parse().unwrap());
-                }
-                Ok(resp)
-            };
-            let ws = match tokio_tungstenite::accept_hdr_async(stream, callback).await {
-                Ok(w) => w,
-                Err(_) => return,
-            };
-            let log = task_log.clone();
             let (kill_tx, mut kill_rx) = oneshot::channel();
-            log.kill.lock().unwrap().push(kill_tx);
-            let (mut write, mut read) = ws.split();
-            let hello_msg = match read.next().await {
-                Some(Ok(m)) => m,
-                _ => return,
-            };
-            let bytes = hello_msg.into_data();
-            let frame = match decode_frame(
-                &bytes,
-                ValidationContext::pre_handshake(ConnectionState::Connected),
-            ) {
-                Ok(f) => f,
-                Err(_) => return,
-            };
-            if !matches!(frame.body, Some(Body::Hello(_))) {
-                return;
-            }
-            let ready = Frame {
-                version: 1,
-                request_id: 0,
-                body: Some(Body::Ready(syntra_core::proto::ServerReady {
-                    connection_id: format!("mock-{}", rand::random::<u32>()),
-                })),
-            };
-            let buf = encode_frame(
-                &ready,
-                ValidationContext::pre_handshake(ConnectionState::Authenticating),
-            )
-            .unwrap();
-            if write
-                .send(tokio_tungstenite::tungstenite::Message::Binary(buf.into()))
-                .await
-                .is_err()
-            {
-                return;
-            }
-            loop {
-                let msg = tokio::select! {
-                    msg = read.next() => match msg {
-                        Some(Ok(m)) => m,
-                        _ => break,
-                    },
-                    _ = &mut kill_rx => break,
-                };
-                if msg.is_close() {
-                    break;
-                }
-                if msg.is_ping() || msg.is_pong() || msg.is_text() {
-                    continue;
-                }
-                let data = msg.into_data();
-                if data.is_empty() {
-                    continue;
-                }
-                let frame = match decode_frame(&data, ValidationContext::active(1)) {
-                    Ok(f) => f,
-                    Err(_) => continue,
-                };
-                let (id, req) = match frame.body {
-                    Some(Body::Request(r)) => (frame.request_id, r),
-                    Some(Body::Cancel(_)) => continue,
-                    _ => continue,
-                };
-                let wants_hint = is_observe(&req);
-                let resp_frame = handle_mock_request(id, req, &log).await;
-                if resp_frame_needs_notif(&resp_frame) {
-                    // Opaque hint carrying ConnectivityChanged bytes directly.
-                    let obs = ConnectivityChanged {
-                        user_id: 42,
-                        online: true,
-                        known: true,
-                        revision: 1,
+            task_log.kill.lock().unwrap().push(kill_tx);
+            let handle = support::accept(stream, move |req, host| {
+                let log = task_log.clone();
+                async move {
+                    let gate = if req.method == "/tinkle.v1.MessagesService/SendMessage" {
+                        log.init_response_gate.lock().unwrap().take()
+                    } else {
+                        None
                     };
-                    let mut pbuf = Vec::new();
-                    obs.encode(&mut pbuf).unwrap();
-                    let nf = Frame {
-                        version: 1,
-                        request_id: 0,
-                        body: Some(Body::Notification(Notification { payload: pbuf })),
-                    };
-                    let nbuf = encode_frame(&nf, ValidationContext::active(1)).unwrap();
-                    let _ = write
-                        .send(tokio_tungstenite::tungstenite::Message::Binary(nbuf.into()))
-                        .await;
+                    let wants_hint = is_observe(&req);
+                    let resp_frame = handle_mock_request(1, req, &log).await;
+                    if let Some((entered, release)) = gate {
+                        log.init_response_pending.store(true, Ordering::SeqCst);
+                        let _ = entered.send(());
+                        let _ = release.await;
+                        log.init_response_pending.store(false, Ordering::SeqCst);
+                    }
+                    if resp_frame_needs_notif(&resp_frame) {
+                        // Opaque hint carrying ConnectivityChanged bytes directly.
+                        let obs = ConnectivityChanged {
+                            user_id: 42,
+                            online: true,
+                            known: true,
+                            revision: 1,
+                        };
+                        let mut pbuf = Vec::new();
+                        obs.encode(&mut pbuf).unwrap();
+                        let _ = host.notify(pbuf).await;
+                    }
+                    if is_slow(&resp_frame) {
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    }
+                    if wants_hint {
+                        let _ = host.notify(b"hint".to_vec()).await;
+                    }
+                    resp_frame
                 }
-                if is_slow(&resp_frame) {
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            })
+            .await;
+            if let Ok(handle) = handle {
+                tokio::select! {
+                    _ = &mut kill_rx => {},
+                    _ = async { while !handle.is_closed() { tokio::time::sleep(std::time::Duration::from_millis(10)).await; } } => {},
                 }
-                let out = encode_frame(&resp_frame, ValidationContext::active(1)).unwrap();
-                if write
-                    .send(tokio_tungstenite::tungstenite::Message::Binary(out.into()))
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
-                if wants_hint {
-                    // Extra opaque hint after observe establishment.
-                    let nf = Frame {
-                        version: 1,
-                        request_id: 0,
-                        body: Some(Body::Notification(Notification {
-                            payload: b"hint".to_vec(),
-                        })),
-                    };
-                    let nbuf = encode_frame(&nf, ValidationContext::active(1)).unwrap();
-                    let _ = write
-                        .send(tokio_tungstenite::tungstenite::Message::Binary(nbuf.into()))
-                        .await;
-                }
+                handle.close().await;
             }
         });
     }
@@ -356,6 +271,10 @@ async fn handle_mock_request(id: u64, req: RpcRequest, log: &MockLog) -> Frame {
             }
         }
         "/tinkle.v1.UpdatesService/ObserveConnectivity" => {
+            assert!(
+                !log.init_response_pending.load(Ordering::SeqCst),
+                "ObserveConnectivity dispatched while InitConnect response is held"
+            );
             let r = ObserveConnectivityRequest::decode(&*req.payload)
                 .unwrap_or(ObserveConnectivityRequest { user_ids: vec![] });
             log.observe.lock().unwrap().push(r.user_ids);
@@ -1274,11 +1193,12 @@ async fn start_mock() -> SocketAddr {
     start_mock_logged().await.0
 }
 
+/// Create a Bootstrap client pinned to the encrypted fixture's allocated listener.
 fn test_client(addr: SocketAddr) -> libtinkle::Client {
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
+    let cfg = support::config(addr);
     libtinkle::Client::new(
         cfg,
-        libtinkle::Credential::from_session_token("test-token"),
+        support::source(),
         libtinkle::InMemoryCursorStore::new(),
     )
 }
@@ -1287,6 +1207,54 @@ fn room_target(id: i64) -> Target {
     Target {
         kind: Some(target::Kind::ChatId(id)),
     }
+}
+
+/// Hold the first unary response inside InitConnect while unrelated I/O still completes.
+async fn initialize_with_held_response(client: &libtinkle::Client, log: &MockLog) -> usize {
+    let before = log.observe.lock().unwrap().len();
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    assert!(log
+        .init_response_gate
+        .lock()
+        .unwrap()
+        .replace((entered_tx, release_rx))
+        .is_none());
+    let caller = client.clone();
+    let mut calls = tokio::task::JoinSet::new();
+    calls.spawn(async move {
+        caller
+            .call_raw("/tinkle.v1.MessagesService/SendMessage", vec![], 2_000)
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), entered_rx)
+        .await
+        .expect("initialization must reach the response gate")
+        .unwrap();
+    assert_eq!(
+        client
+            .call_raw("/example.Echo/Echo", b"pending-init".to_vec(), 2_000)
+            .await
+            .unwrap(),
+        b"pending-init"
+    );
+    assert!(
+        calls.try_join_next().is_none(),
+        "initialization is still held"
+    );
+    assert_eq!(
+        log.observe.lock().unwrap().len(),
+        before,
+        "no ObserveConnectivity before InitConnect completes"
+    );
+    release_tx.send(()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), calls.join_next())
+        .await
+        .expect("released initialization must complete")
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    before
 }
 
 // -- Tests -----------------------------------------------------------------
@@ -1337,6 +1305,41 @@ async fn concurrent_out_of_order() {
     assert_eq!(fast, b"fast");
     assert_eq!(slow, b"SLOW");
     c.close().await;
+}
+
+#[tokio::test]
+/// Defer watch restoration until unary initialization completes, preserving the union on reconnect.
+async fn lifecycle_watch_waits_for_unary_initialization_and_restores_on_reconnect() {
+    let (addr, log) = start_mock_logged().await;
+    let client = test_client(addr);
+    client.connect().await.unwrap();
+    for (watch, expected) in [(vec![42, 7, 42], vec![42, 7]), (vec![9], vec![42, 7, 9])] {
+        client.set_watch(watch).await.unwrap();
+        assert_eq!(client.watch_list().await, expected);
+        let before = initialize_with_held_response(&client, &log).await;
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while log.observe.lock().unwrap().len() == before {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(*log.observe.lock().unwrap().last().unwrap(), expected);
+        client.reconnect().await.unwrap();
+    }
+    // The connection-owned restore and immediate ready path keep the same union.
+    let before = initialize_with_held_response(&client, &log).await;
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while !log.observe.lock().unwrap()[before..].contains(&vec![42, 7, 9]) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the new connection must restore the retained union before set_watch");
+    client.set_watch(vec![11]).await.unwrap();
+    assert_eq!(client.watch_list().await, vec![42, 7, 9, 11]);
+    assert!(log.observe.lock().unwrap().contains(&vec![42, 7, 9, 11]));
+    client.stop().await;
 }
 
 #[tokio::test]
@@ -1403,15 +1406,12 @@ async fn unknown_method_maps_to_unimplemented() {
 }
 
 #[tokio::test]
+/// Apply journal edits and removals to SQLite and emit the resulting conversation/body events.
 async fn subscribe_tracks_and_reconciles_journal() {
     let (addr, log) = start_mock_logged().await;
     let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
-    let c = libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage.clone(),
-    );
+    let cfg = support::config(addr);
+    let c = libtinkle::Client::new_sqlite(cfg, support::source(), storage.clone());
     c.connect().await.unwrap();
     c.set_principal_user_id(42).await;
     c.subscribe(vec![room_target(7)]).await.unwrap();
@@ -1543,15 +1543,12 @@ async fn unknown_more_does_one_bounded_repage_then_stops() {
 }
 
 #[tokio::test]
+/// Heal a retained-journal skip through history while applying the disclosed journal position.
 async fn journal_skip_heals_via_history_fallback() {
     let (addr, log) = start_mock_logged().await;
     let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
-    let c = libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage.clone(),
-    );
+    let cfg = support::config(addr);
+    let c = libtinkle::Client::new_sqlite(cfg, support::source(), storage.clone());
     c.connect().await.unwrap();
     c.set_principal_user_id(42).await;
     // Journal starts at 10 while the cursor is 0: retention skip.
@@ -1703,15 +1700,12 @@ async fn supervisor_reconnects_after_pump_death() {
 }
 
 #[tokio::test]
+/// Loading read-only snapshots must not manufacture durable mutation-journal positions.
 async fn load_history_and_dialogs_do_not_forge_journal_cursors() {
     let addr = start_mock().await;
     let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
-    let c = libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage.clone(),
-    );
+    let cfg = support::config(addr);
+    let c = libtinkle::Client::new_sqlite(cfg, support::source(), storage.clone());
     c.connect().await.unwrap();
     c.set_principal_user_id(42).await;
     let history = c
@@ -1748,18 +1742,15 @@ async fn load_history_and_dialogs_do_not_forge_journal_cursors() {
 }
 
 #[tokio::test]
+/// Discover and persist new-message bodies through history without advancing an empty journal.
 async fn reconcile_new_message_catchup_persists_to_sqlite() {
     // Journal covers edits/removals only: room:10's journal is empty, but
     // history discloses two new messages. Reconcile must persist them via
     // the shared ingest path without moving the journal cursor.
     let (addr, _log) = start_mock_logged().await;
     let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
-    let c = libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage.clone(),
-    );
+    let cfg = support::config(addr);
+    let c = libtinkle::Client::new_sqlite(cfg, support::source(), storage.clone());
     c.connect().await.unwrap();
     c.set_principal_user_id(42).await;
     let applied = c.reconcile_target("target:room:10").await.unwrap();
@@ -1784,18 +1775,15 @@ async fn reconcile_new_message_catchup_persists_to_sqlite() {
 }
 
 #[tokio::test]
+/// A stale history/body response must not resurrect a message removed by the same journal run.
 async fn delayed_fetch_does_not_resurrect_deleted() {
     // Room:11 deletes 50 in the journal while history (stale) still
     // returns 50 and GetMessages (race) returns the body. Both gates —
     // same-run removal skip + pre-commit re-check — must prevent ingest.
     let (addr, _log) = start_mock_logged().await;
     let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
-    let c = libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage.clone(),
-    );
+    let cfg = support::config(addr);
+    let c = libtinkle::Client::new_sqlite(cfg, support::source(), storage.clone());
     c.connect().await.unwrap();
     c.set_principal_user_id(42).await;
     let applied = c.reconcile_target("target:room:11").await.unwrap();
@@ -1813,17 +1801,14 @@ async fn delayed_fetch_does_not_resurrect_deleted() {
 }
 
 #[tokio::test]
+/// IDs omitted from authoritative GetMessages responses must not be ingested from history.
 async fn catchup_omitted_ids_are_not_ingested() {
     // Room:12 history returns 60, but GetMessages omits it (deleted /
     // invisible). Omitted ids carry no information and must not be cached.
     let (addr, _log) = start_mock_logged().await;
     let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
-    let c = libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage.clone(),
-    );
+    let cfg = support::config(addr);
+    let c = libtinkle::Client::new_sqlite(cfg, support::source(), storage.clone());
     c.connect().await.unwrap();
     c.set_principal_user_id(42).await;
     let applied = c.reconcile_target("target:room:12").await.unwrap();
@@ -1839,18 +1824,15 @@ async fn catchup_omitted_ids_are_not_ingested() {
 }
 
 #[tokio::test]
+/// Hydrating history must persist bodies without substituting message IDs for journal cursors.
 async fn history_ingest_does_not_move_cursor() {
     // load_history hydrates bodies via the shared ingest helper with a
     // same-cursor commit: messages persist, the journal cursor does not
     // advance to message ids.
     let (addr, _log) = start_mock_logged().await;
     let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
-    let c = libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage.clone(),
-    );
+    let cfg = support::config(addr);
+    let c = libtinkle::Client::new_sqlite(cfg, support::source(), storage.clone());
     c.connect().await.unwrap();
     c.set_principal_user_id(42).await;
     let resp = c
@@ -1923,18 +1905,15 @@ fn seed_cached_messages(
 }
 
 #[tokio::test]
+/// Page the full backlog and clear durable catch-up demand only after reaching its boundary.
 async fn reconcile_multi_window_backlog_ingests_250_and_clears_demand() {
     // Room:13 serves a 250-message backlog as 3 explicit windows:
     // newest-100 (more=true) + next-100 (more=true) + oldest-50
     // (more=false boundary). Paging drives off `offset_id`.
     let (addr, log) = start_mock_logged().await;
     let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
-    let c = libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage.clone(),
-    );
+    let cfg = support::config(addr);
+    let c = libtinkle::Client::new_sqlite(cfg, support::source(), storage.clone());
     c.connect().await.unwrap();
     c.set_principal_user_id(42).await;
     let applied = c.reconcile_target("target:room:13").await.unwrap();
@@ -1971,18 +1950,15 @@ async fn reconcile_multi_window_backlog_ingests_250_and_clears_demand() {
 }
 
 #[tokio::test]
+/// A fully cached newest window must not clear demand before missing older bodies are ingested.
 async fn reconcile_boundary_only_clearing_no_premature_clear() {
     // Room:14 has 2 windows: newest-100 pre-cached, older-30 missing.
     // Demand must stay until the boundary is reached and everything is
     // ingested (i.e. no premature clear after the fully-cached window).
     let (addr, log) = start_mock_logged().await;
     let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
-    let c = libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage.clone(),
-    );
+    let cfg = support::config(addr);
+    let c = libtinkle::Client::new_sqlite(cfg, support::source(), storage.clone());
     c.connect().await.unwrap();
     c.set_principal_user_id(42).await;
     seed_cached_messages(&storage, "target:room:14", 14, 31..=130);
@@ -2027,18 +2003,15 @@ async fn reconcile_boundary_only_clearing_no_premature_clear() {
 }
 
 #[tokio::test]
+/// An entirely omitted middle window must not stop paging before the final history boundary.
 async fn reconcile_all_deleted_middle_window_continues() {
     // Room:15 has 3 windows; the middle window (21..=40) is all omitted
     // by GetMessages. An all-deleted window must not end the loop: paging
     // continues to the final window and clears demand.
     let (addr, log) = start_mock_logged().await;
     let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
-    let c = libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage.clone(),
-    );
+    let cfg = support::config(addr);
+    let c = libtinkle::Client::new_sqlite(cfg, support::source(), storage.clone());
     c.connect().await.unwrap();
     c.set_principal_user_id(42).await;
     let applied = c.reconcile_target("target:room:15").await.unwrap();
@@ -2073,18 +2046,15 @@ async fn reconcile_all_deleted_middle_window_continues() {
 }
 
 #[tokio::test]
+/// Without continuation reports, page a full legacy window and stop at the short final window.
 async fn reconcile_absent_report_legacy_rule_pages_full_window() {
     // Room:16 returns more_available None throughout. A full 100-window
     // continues at the edge; the short final window stops (legacy rule,
     // mirroring load_history expectations).
     let (addr, log) = start_mock_logged().await;
     let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
-    let c = libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage.clone(),
-    );
+    let cfg = support::config(addr);
+    let c = libtinkle::Client::new_sqlite(cfg, support::source(), storage.clone());
     c.connect().await.unwrap();
     c.set_principal_user_id(42).await;
     let applied = c.reconcile_target("target:room:16").await.unwrap();
@@ -2118,18 +2088,15 @@ async fn reconcile_absent_report_legacy_rule_pages_full_window() {
 }
 
 #[tokio::test]
+/// Persist the failed history edge and resume without fetching already covered bodies again.
 async fn reconcile_mid_loop_failure_persists_demand() {
     // Room:17 fails GetHistory on the 2nd window. Reconcile stays Ok
     // (best-effort) with window-1 count only, persists demand, then
     // completes and clears once the error arm is removed.
     let (addr, log) = start_mock_logged().await;
     let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
-    let c = libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage.clone(),
-    );
+    let cfg = support::config(addr);
+    let c = libtinkle::Client::new_sqlite(cfg, support::source(), storage.clone());
     c.connect().await.unwrap();
     c.set_principal_user_id(42).await;
     log.history_fail_second
@@ -2203,6 +2170,7 @@ async fn reconcile_mid_loop_failure_persists_demand() {
 }
 
 #[tokio::test]
+/// Exhausting the window budget must persist a resume edge and leave the journal cursor unchanged.
 async fn reconcile_window_budget_persists_edge_and_resumes() {
     // Room:18 serves a 1200-message backlog in 12 windows of 100, forcing
     // the per-run window budget (10). Run 1 ingests 1000, persists demand
@@ -2210,12 +2178,8 @@ async fn reconcile_window_budget_persists_edge_and_resumes() {
     // (one quick newest pass, then the remaining windows) and clears.
     let (addr, log) = start_mock_logged().await;
     let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
-    let c = libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage.clone(),
-    );
+    let cfg = support::config(addr);
+    let c = libtinkle::Client::new_sqlite(cfg, support::source(), storage.clone());
     c.connect().await.unwrap();
     c.set_principal_user_id(42).await;
     let first = c.reconcile_target("target:room:18").await.unwrap();
@@ -2289,6 +2253,7 @@ async fn reconcile_window_budget_persists_edge_and_resumes() {
 }
 
 #[tokio::test]
+/// A fresh client must hydrate durable catch-up state and fetch the uncached boundary message.
 async fn set_principal_hydrates_resume_edge_from_durable_row() {
     // Restart scenario: an earlier run ingested 151..=250 and persisted
     // its resume state, then the process died (no in-memory edge). A fresh
@@ -2316,12 +2281,8 @@ async fn set_principal_hydrates_resume_edge_from_durable_row() {
         .unwrap();
     // Seed the cache as if the earlier run ingested down through 152, leaving the boundary message 151 uncached.
     seed_cached_messages(&storage, "target:room:20", 20, 152..=250);
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
-    let c = libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage.clone(),
-    );
+    let cfg = support::config(addr);
+    let c = libtinkle::Client::new_sqlite(cfg, support::source(), storage.clone());
     c.connect().await.unwrap();
     c.set_principal_user_id(42).await;
     let applied = c.reconcile_target("target:room:20").await.unwrap();
@@ -2370,6 +2331,7 @@ async fn set_principal_hydrates_resume_edge_from_durable_row() {
 }
 
 #[tokio::test]
+/// Legacy resume state must preserve its edge without claiming an unproven contiguous cover top.
 async fn legacy_resume_row_keeps_cover_top_empty() {
     // Legacy row: an edge persisted before cover tops existed. A resumed
     // run that stalls must retain the edge WITHOUT claiming a top: claiming
@@ -2395,12 +2357,8 @@ async fn legacy_resume_row_keeps_cover_top_empty() {
         .unwrap();
     // Seed the cache as if the earlier run ingested down through 152, leaving the boundary message 151 uncached.
     seed_cached_messages(&storage, "target:room:20", 20, 152..=250);
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
-    let c = libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage.clone(),
-    );
+    let cfg = support::config(addr);
+    let c = libtinkle::Client::new_sqlite(cfg, support::source(), storage.clone());
     c.connect().await.unwrap();
     c.set_principal_user_id(42).await;
     // Fail the second window: quick newest pass succeeds (all cached),
@@ -2457,6 +2415,7 @@ async fn legacy_resume_row_keeps_cover_top_empty() {
 }
 
 #[tokio::test]
+/// Persist an interrupted covering chain and resume through its tail without repaging covered windows.
 async fn covering_cursor_spans_budget_runs_and_fetches_tail() {
     // Resume state {edge: 201, cover_top: 250} with a 1,050-message backlog
     // above the cover top (251..=1300). The covering chain needs 11
@@ -2483,12 +2442,8 @@ async fn covering_cursor_spans_budget_runs_and_fetches_tail() {
         )
         .unwrap();
     seed_cached_messages(&storage, "target:room:21", 21, 201..=250);
-    let cfg = libtinkle::ClientConfig::new(format!("ws://{addr}/syntra/v1/ws")).insecure_dev();
-    let c = libtinkle::Client::new_sqlite(
-        cfg,
-        libtinkle::Credential::from_session_token("test-token"),
-        storage.clone(),
-    );
+    let cfg = support::config(addr);
+    let c = libtinkle::Client::new_sqlite(cfg, support::source(), storage.clone());
     c.connect().await.unwrap();
     c.set_principal_user_id(42).await;
 

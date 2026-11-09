@@ -64,7 +64,9 @@ macOS, which this package does not support. The generated module keeps SwiftPM's
 default nonisolated context and compiles in Swift 5 language mode.
 
 The XCTest suite initializes Rust, constructs native stores and clients, checks
-typed async errors and shutdown, and runs a loopback WebSocket/Syntra gateway.
+typed async errors and shutdown, and uses the host Rust encrypted TCP fixture.
+Start it from the core repository with
+`python3 scripts/with-native-fixture.py <simulator test command...>`.
 The gateway decodes actual `GetTargetChanges` requests to verify that Rust awaits
 Swift's async journal-store callbacks and uses principal- and target-specific
 `Int64` acceptance positions. Storage failures are checked through Rust target
@@ -80,6 +82,10 @@ require separate compatible runtime/device lanes.
 
 ## Application API
 
+This startup example is for a returning device with an unexpired ACTIVE enrollment
+persisted in `secureEnrollmentStore`. First-run enrollment uses the sequence below
+instead of `restoreActiveEnrollment`.
+
 ```swift
 import TinkleSDK
 
@@ -90,26 +96,51 @@ tinkleFfiInit()
 let storage = try await SqliteStorage.openAsync(path: databasePath)
 let client = try TinkleClient.newSqlite(
     config: ClientConfigFfi(
-        url: gatewayURL, allowInsecure: false,
-        userAgent: "MyApp", grpcEndpoint: nil
+        clientInfo: clientInfo,
+        host: gatewayHost, primaryPort: 443, fallbackPort: 80
     ),
-    credential: sessionToken,
+    trustSource: try TrustSourceFfi.bootstrap(
+        trust: ServerTrustFfi(serverPublicKey: serverPin, serverKeyId: serverKeyId, scope: scope)),
     storage: storage
 )
-try await client.setPrincipalUserId(userId: authenticatedUserID)
+let active = try await client.restoreActiveEnrollment(store: secureEnrollmentStore)
 try await client.start(targets: [TargetSub(targetKind: "room", targetId: roomID)], watch: [])
 // Consume nextEvent() and read the shared cache in response to sync events.
 // Call shutdown() when this client's owner ends its lifecycle.
 ```
 
+For first-run enrollment, replace the restore call with this sequence before
+calling `start`. Supply `code` and `verificationId` from the verification flow:
+
+```swift
+let operation = try await client.prepareEnrollment(store: secureEnrollmentStore)
+let signedIn = try await client.signIn(
+    phoneNumber: phoneNumber, code: code, verificationId: verificationId,
+    operation: operation
+)
+let active = try await client.activateEnrollment(candidate: signedIn.enrollment)
+```
+
 Alternatively, pass an application-owned `FfiCursorStore` to the throwing
-`TinkleClient(config:credential:store:)` constructor. Implement async
+`TinkleClient(config:trustSource:store:)` constructor. Keep enrollment keys in
+protected platform storage separately from this application store. Implement async
 `loadJournal`, `saveJournal`, `removeTarget`, and `clearPrincipal`, with durable
 positions isolated by principal and target key (`target:room:<id>` or
 `target:user:<id>`). The actor-backed test implementation is ephemeral.
 Use `FfiError` for typed failures. Stop the client before clearing its SQLite
 principal so live in-memory positions cannot race the deletion. No SwiftUI or
 application lifecycle policy is included in the SDK.
+
+`clientInfo` is `ClientInfoFfi` with required device model, platform, OS version,
+host app version/build, plus a complete `ClientOptionsFfi`. It is immutable in
+Rust and InitConnect-wraps the first unary call on each new connection.
+Implement `FfiSecureEnrollmentStore` in confidential durable platform storage.
+Success from `commit` must mean the whole record is durably installed. The SDK
+does not acknowledge an enqueued or missing write. New enrollment is explicit:
+`prepareEnrollment` → `signIn` (returns the persisted receipt in
+`EnrollmentSignInResult.enrollment`) → `activateEnrollment`; recovery uses the retained operation with
+`resumeEnrollment`. Release opaque protected-record handles and erase byte
+copies after storage. See the core `docs/device-enrollment.md` contract.
 
 ## Release metadata
 

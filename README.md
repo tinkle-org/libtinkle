@@ -1,249 +1,205 @@
-# libtinkle — Tinkle client runtime over Syntra
+# libtinkle
 
-A reusable Rust client runtime for the Tinkle `client-api` over Syntra,
-consuming Syntra protocol types from the published crates.io crates
-(`syntra-core`, `syntra-runtime`, `syntra-ws`) and BSR-generated
-`tinkle-proto` application messages, implementing application behavior in
-this SDK (generated bindings alone are not an SDK).
+Native Rust client runtime for Tinkle, with Swift/Kotlin bindings. Application
+RPCs, history, cache hydration, journal reconciliation and file transfers use
+encrypted Syntra TCP. The SDK uses exact rc.4 pins for
+`syntra-core`, `syntra-runtime`, and TCP-only `syntra-net`; see
+[dependency pins, upstream release links, and scoped paired qualification](PROTO_PINNING.md#sdk-pins-and-qualification).
+`Cargo.toml` / `Cargo.lock` own the installed pins.
 
-The same logical client runtime is reusable across iOS, Android, and
-WebAssembly/browser via thin platform adapters. No gRPC client is
-required for standard Syntra application calls. Protocol and application
-boundaries remain distinct.
+## Native configuration
 
-## Workspace audit (Phase 1)
+```rust,no_run
+use libtinkle::{Client, ClientConfig, ClientInfo, InMemoryCursorStore, ServerTrust, TrustSource};
 
-This directory was empty on 2026-10-20; no prior Cargo workspace,
-transport dependencies, protocol crates, native bindings, iOS/Android
-integration, WASM configuration, or test architecture existed. The layout
-below follows the existing naming and architecture conventions of the
-sibling repositories (`syntra/`, `tinkle-proto/`):
-
-```text
-libtinkle/
-  Cargo.toml                  workspace (workspace-owned crates publish=false; git tags + GitHub releases only; syntra-core/runtime/ws from crates.io)
-  .cargo/config.toml          public BSR Cargo index (no token for public modules)
-  crates/tinkle-schema/       PRIVATE Tinkle bindings + realtime validation (publish=false)
-  crates/libtinkle/           PUBLIC Rust API: Client, Credential, CursorStore, typed facades
-  crates/tinkle-ffi/          PUBLIC UniFFI: TinkleClient object for Swift/Kotlin
-  crates/libtinkle-web/       PUBLIC wasm-bindgen wrapper for browsers
-  docs/                       architecture, platforms, lifecycle, security
-  PROTO_PINNING.md            BSR crate versions + upgrade
-```
-
-Apps never depend on the Syntra crates (`syntra-core`/`syntra-runtime`/`syntra-ws`
-from crates.io) or `tinkle-schema` directly — same rule as TDLib, where
-MTProto internals never leak and clients speak only the stable `Client` /
-UniFFI / web surface. Two deliberate exceptions: cancellation
-(`Client::call_raw_cancellable` takes `&syntra_runtime::CancelToken`,
-re-exported as `libtinkle::CancelToken`, so apps need not add a direct
-`syntra-runtime` dependency), and `TinkleError::Syntra` transparently
-wraps `syntra_core::error::SyntraError` (with `ErrorCode` re-exported as
-`libtinkle::ErrorCode`, so apps need not add a direct `syntra-core`
-dependency).
-
-## Quick start
-
-```rust
-let client = libtinkle::Client::new(
-    libtinkle::ClientConfig::new("wss://gateway.example.com/syntra/v1/ws"),
-    libtinkle::Credential::from_session_token(&token),
-    libtinkle::InMemoryCursorStore::new(),
+// Provision these public trust values through a trusted application channel.
+let trust = ServerTrust {
+    server_public_key: provisioned_pin,
+    server_key_id: provisioned_key_id,
+    scope: provisioned_scope,
+};
+let client = Client::new(
+    ClientConfig::new("gateway.example.com", ClientInfo::new(
+        device_model, platform, os_version, app_version, app_build, Default::default())?),
+    TrustSource::Bootstrap(trust),
+    InMemoryCursorStore::new(),
 );
 client.connect().await?;
-let resp = client.messages().send_message(req).await?;
 ```
 
-Run the examples against the Tinkle test gateway:
+`ClientConfig` fields:
+
+| Field | Default / meaning |
+|---|---|
+| `host: String` | Bare hostname or IP, required; no URL |
+| `client_info: ClientInfo` | All five device/app labels plus the entire immutable optional snapshot |
+| `primary_port: u16` | `443` |
+| `fallback_port: Option<u16>` | `Some(80)` |
+| `connect_timeout: Duration` | 10 seconds per dial, within one 15-second establishment budget |
+| `connection: syntra_runtime::ConnectionConfig` | Published runtime defaults |
+| `reconnect: ReconnectPolicy` | Supervisor backoff: 500 ms base, ×2, 30-second cap, 10 attempts |
+
+Both ports use the same host, pin, scope, key ID and mode. Only an initial TCP dial
+failure permits trying the fallback port. Once a socket connects, any channel,
+authentication, framing, timeout or I/O failure parks automatic reconnect. There is no
+HTTP/TLS wrapper or alternate network transport. Custom ports use the same
+encryption and trust checks as the defaults.
+
+Socket selection is retained across reconnects and suspend/resume. The TCP-only
+SDK does not expose its private post-ready failure category, so opaque channel
+loss cannot authorize trying another port. Explicit `replace_trust_source`
+resets port selection; callers can then establish afresh under that source.
+
+## Trust and enrollment
+
+- `TrustSource::Bootstrap(ServerTrust)` explicitly selects Bootstrap with an
+  empty Core credential and no authorization key.
+- `TrustSource::Returning { trust, enrollment }` requires validated ACTIVE
+  material. The normal flow obtains it through activation or protected-store
+  restoration. `Enrollment::from_active_status` rejects STAGED status.
+- `Enrollment` is not Clone, redacts Debug and zeroizes on drop. Syntra receives
+  a fresh zeroizing key owner for each establishment. Neither the application
+  cache nor cursor storage persists keys. Hosts load/store the returned tuple
+  in their protected platform secret store, bound to the provisioned trust.
+- `replace_trust_source(next).await` retires the connection and installs a raw
+  source only with identical `ServerTrust` (pin, key ID, and scope). It clears
+  the application principal and retained targets, watches, and pending catch-up
+  state; raw credentials do not establish a verified user identity. A different
+  deployment requires a new client with a separate cache/cursor namespace.
+  Normal enrollment/rotation uses the typed coordinator described below.
+  Rejected Returning proof never changes to Bootstrap automatically.
+
+The typed `Auth` facade supports SendCode, SignIn, ResumeEnrollment,
+RotateEnrollment and ActivateEnrollment. Prepare a durable operation before
+SignIn/rotation; persist the delivered candidate through the acknowledged secure
+store; activate explicitly over pinned Bootstrap; then establish fresh Returning.
+The first public unary call on every connection is InitConnect-wrapped. See
+[device enrollment](docs/device-enrollment.md) for the exact staged API, storage
+contract, recovery path and runnable checks.
+
+Schema #57 merged at `2b15bb6db2e282f8f962742a800cab1f15ab54c5` and includes the
+enrollment-disposition contract in the published BSR prost artifact
+`0.5.0-20261107080548-dc41c2199c76.2`. Release qualification uses the published
+Cargo pin and ordinary `--locked` checks in this workspace, without Buf or a
+schema-candidate dependency in required CI. See [public pins](PROTO_PINNING.md).
+
+`client.account().get_sessions()`, `revoke_session(session_id)` and
+`revoke_other_sessions()` expose device-session management. UniFFI exports the
+same names directly on `TinkleClient`. These calls never replay a mutation or
+interpret a denied request as proof of retirement.
+
+`logout()` fences authorization before awaiting anything, then joins retained
+cleanup. Dropping a waiter leaves cleanup running. Retrying a local failure
+preserves the original cache principal and cumulative remote confirmation, with
+no repeated remote mutation. `session_status()` distinguishes transport
+availability, unknown authorization, signed-out state and cleanup progress.
+Restart-safe cleanup additionally requires a conditional secure-store host and
+`cleanup == Complete`; legacy hosts report `restart_safe_store == false`.
+
+Conditional ACTIVE restoration observes permanent retirement before attempting
+Returning. Independent foreground entry and a fixed 60-second foreground timer
+also observe; Returning failures never create or accelerate that work. Each
+status-only encrypted connection shares the selected route/trust and has its own
+five-second absolute budget. Exact current RETIRED evidence starts local-only
+cleanup; unknown/error outcomes retain credentials. Expired records supply
+structural lookup metadata only and cannot install a Returning key.
+
+## Application lifecycle and synchronization
+
+Use `start(targets)` for supervised operation, or manual `connect`, `subscribe`
+and `reconnect`. `reconnect` performs one attempt; the existing supervisor alone
+owns automatic retry scheduling. Trust/configuration and unverified establishment failures park
+automatic reconnect until an explicit trust replacement. `suspend` closes the
+connection and suppresses dialing; `resume` permits the supervisor to reconnect.
+`stop`/`shutdown` release live state while keeping durable application state.
+
+Typed/raw request interfaces, `load_history`, `load_dialogs`, `get_messages`,
+`get_target_changes`, file transfers and push-driven synchronization share the
+native channel. The application coordinator retains paged history continuation,
+per-target journals, cache/cursor atomic commits, scope fencing, deduplication
+and bounded catch-up. Consume `next_event()` and inspect `target_cursor`,
+`target_status` and `tracked_targets`. Unsafe mutations are never auto-replayed.
+See [reconnect/sync](docs/reconnect-sync.md) and [mobile lifecycle](docs/mobile-lifecycle.md).
+
+## Swift and Kotlin
+
+`ClientConfigFfi { client_info, host, primary_port, fallback_port }` uses bare TCP addresses.
+`ServerTrustFfi { server_public_key, server_key_id, scope }` carries public trust.
+`TrustSourceFfi.bootstrap(trust)` produces the one-use provisioning source.
+`FfiSecureEnrollmentStore` supplies acknowledged atomic platform persistence;
+opaque `EnrollmentOperation` and `StoredEnrollment` objects guard the staged
+flow. Activation or `restoreActiveEnrollment` installs Returning only from
+validated ACTIVE records. Hosts must erase their foreign secret byte copies.
+
+Check binding parity with `bash scripts/generate-bindings.sh --check`; regenerate
+with `bash scripts/generate-bindings.sh --write` against the published schema pin.
+See [platform integration](docs/platform-ios-android-wasm.md).
+
+## Logout
+
+`logout().await` fences the Client permanently, erases SDK-owned key/capability
+cells, joins liveness work, and clears every bound protected namespace through
+the acknowledged `SecureEnrollmentStore::clear` callback. Late enrollment
+responses cannot revive it. `Ok(true)` confirms remote revocation; `Ok(false)`
+means remote revocation is unconfirmed but local durable clearing succeeded.
+Cleanup errors leave `is_signed_out()` true and are never a durable-logout ack.
+Resolve failed host invalidation before allowing restoration after restart.
+Use a new Client for deliberate sign-in. The
+[high-level Logout contract](docs/device-enrollment.md#local-sign-out-and-remote-revocation)
+requires a single remote-eligibility budget of up to three seconds, captured before fencing
+or lifecycle waits, retained without renewal on join/retry. Local durable clearing
+is independent and may outlast three seconds. The
+[scoped paired result](PROTO_PINNING.md#sdk-pins-and-qualification) does not imply
+a global three-second wall-clock guarantee for `logout()`.
+Raw calls retain their selected timeout; see the
+[request-budget integration contract](docs/architecture.md#request-budget-integration-contract).
+
+## Portable schema checks
+
+Browser networking is unsupported. `libtinkle-web` has no dependency on the
+native client. It exports `network_supported() == false`, an explicit unsupported
+`tinkle_connect()`, and portable connectivity schema validation. Portable schema
+checks remain available in `tinkle-schema`.
+
+## Checks
 
 ```sh
-TINKLE_URL=wss://gateway.test.example.com/syntra/v1/ws \
-TINKLE_TOKEN=<session-token> \
-cargo run -p libtinkle --example send-message -- 7 "hello"
-
-TINKLE_URL=wss://gateway.test.example.com/syntra/v1/ws \
-TINKLE_TOKEN=<session-token> \
-cargo run -p libtinkle --example subscribe
+cargo test --locked --workspace --all-features --verbose
+cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings
+cargo fmt --all -- --check
+bash scripts/generate-bindings.sh --check
+cargo check --locked -p libtinkle-web -p tinkle-schema --target wasm32-unknown-unknown
 ```
 
-## Protocol layers (Phase 2)
+`scripts/test-schema-candidate.sh` is optional tooling for future-schema
+development, not release qualification. See [public pinning](PROTO_PINNING.md).
 
-Syntra comes from published crates.io crates (`syntra-core`,
-`syntra-runtime`, `syntra-ws`, all `=1.0.0-rc.1`); the local prototype
-crates were removed. `syntra-core` implements each layer separately, per
-the specifications in `../syntra/specifications/`:
+Rust integration fixtures use the published SDK for encrypted native TCP,
+including trust failures and configurable primary/fallback ports. Swift/Kotlin
+consumer tests use the host-only `native-fixture` example, also built on that
+SDK. `scripts/with-native-fixture.py <consumer command...>` starts it on the host
+and cleans it up. Its separate loopback JSON control socket allocates fixtures
+and reads application request logs; it is test harness code only.
 
-1. WSS transport adapter — `syntra-ws::native` (tokio-tungstenite +
-   rustls TLS 1.3) and `syntra-ws::wasm` (browser WebSocket, same
-   one-message-one-Frame rule).
-2. Syntra binary Frame codec — `syntra-core::codec` (prost, 1 MiB bound,
-   reserved 16/17 rejection, empty-payload semantics).
-3. Connection state machine — `syntra-core::state` (exactly six states,
-   no shortcuts, no re-handshake on one transport).
-4. ClientHello/ServerReady handshake — `syntra-core::handshake`
-   (version overlap, 5 s deadline, opaque `connection_id`).
-5. Request ID allocation — `syntra-core::ids` (nonzero u64, outstanding
-   uniqueness, fresh space per connection).
-6. Pending RPC correlation — `syntra-core::pending` (bounded, duplicate
-   rejection, unknown-result ignore, transport-loss drain).
-7. Request timeouts — per-RPC budget (`timeout_ms==0` selects bounded
-   host default), initiator timer ≤ budget, `DEADLINE_EXCEEDED`.
-8. Cancellation — best-effort `Cancel{}`, completion wins, unknown ids
-   ignored; `call_cancellable` with `CancelToken`.
-9. Error translation — 17-code registry, unknown future codes map to
-   `UNKNOWN` with numeric preserved, branch on code not text.
-10. Notification reception — `request_id==0`, never completes an RPC,
-    bounded queue, pre-ACTIVE ignored with diagnostic.
-11. Reconnection — fresh handshake + fresh ids, `UNAVAILABLE` with unknown
-    outcome, bounded backoff, explicit resubscribe.
-12. Tinkle event decoding — `tinkle-schema::sync` single-decoder
-    journal validation (`validate_changes_page`: `accept_seq`
-    strictly ascending within a page, `last_accept_seq` must cover the
-    page, edited messages carry bodies with matching ids, removals carry
-    none, empty pages only with explicit completion), span-aware dedup
-    (`accept_seq` equal tokens fall back to `edit_date`), gap/stale rules,
-    floor/head checks.
-
-The generic Syntra implementation is independent of Tinkle types wherever
-practical; `syntra-core` never imports `tinkle-schema`. Syntra internals
-use prost 0.13.5 while the Tinkle boundary (`tinkle-schema`, `libtinkle`)
-uses prost 0.14; payload bytes cross as opaque `Vec<u8>`, so the two prost
-versions never mix at the type level.
-
-## Public client API (Phase 3)
-
-`libtinkle::Client` provides supervised `start` (connect + subscribe +
-supervisor owning recovery/reconnect) plus manual `connect` / `subscribe` /
-`reconnect` primitives, `call_raw`, typed facades (`messages()`, `auth()`,
-`updates()`), demand-driven `next_event`, snapshot
-`load_history` / `load_dialogs`, reconciliation RPCs
-(`get_messages` / `get_target_changes`), and `target_cursor` /
-`target_status` / `tracked_targets` queries. Method bindings
-(`tinkle-schema::methods::ALL_METHODS`) are verified against the BSR
-service definitions backing the prost crates — no manual duplication of
-all signatures. Representative typed helpers (`SendMessage`, `GetHistory`,
-`GetDialogs`, `GetMessages`, `GetTargetChanges`) demonstrate the encode →
-`RpcRequest` → `request_id` → send → await `RpcResult` → decode →
-typed-error path; all other methods use the same generic `call_typed` path.
-
-Demand-driven contract: consume `next_event()`; refresh on
-`ConversationChanged` / `MessagesChanged` (journal pages are applied and
-checkpointed atomically by the coordinator — receipt alone needs no host
-action). Poll `target_cursor` for authoritative UI progress and
-`target_status` (`Idle`/`Reconciling`/`Failed`) for demand state instead of
-inferring it from events. History/dialog snapshots live outside the journal
-and never move accept positions. Recovery reconciles per-target
-`GetTargetChanges` journals over Syntra by default (gRPC opt-in), with
-authoritative `more_available`, per-target `ReconcileFailed` parking, and
-`reconcile_now()` retry. Opaque notification hints and reconnects drive
-reconciliation; there is no replay cursor and no rebuild path.
-
-UniFFI (`tinkle-ffi::TinkleClient`) and browser (`libtinkle-web::
-TinkleWebClient`) expose the same flow: `start`/`subscribe`, `next_event`,
-`get_messages`/`get_target_changes`, `load_history`/`load_dialogs` (with
-cache/network policy), `target_cursor`/`target_status`/`tracked_targets`,
- `reconcile_now`, `suspend`/`resume`; teardown is `stop`/`shutdown` on
- `tinkle-ffi` while the browser wrapper exposes `shutdown`, not `stop`.
-Structured errors preserve codes across the boundary (`Auth`, `Retryable`
-— never collapsed to a network string).
-
-## Concurrency (Phase 4)
-
-Multiple concurrent requests with out-of-order completion (correlated by
-`request_id` only), bounded outstanding (default 64, minimum 16),
-per-request cancellation tokens, per-request timeouts, graceful shutdown,
-and unknown-outcome reporting (`UNAVAILABLE`/`DEADLINE_EXCEEDED` with
-`is_unknown_outcome()`). Unsafe mutations are never auto-retried; retry
-requires idempotency or an application operation key (`random_id` for
-sends) with fresh transport correlation and bounded backoff.
-
-## Realtime (Phase 5)
-
-`ObserveConnectivity` over Syntra (not gRPC),
-`ConnectivityChanged` single-decoder validation, per-conversation
-`accept_seq` dedup (absent ⇒ order by date only), journal paging with
-`more_available` completion, `GetMessages` hydration (chunked ≤100,
-`edit_date` freshness), opaque-hint-driven reconciliation (sweep tracked
-targets, single-flight per target — never skip), per-target failure
-parking with retry, reconnect re-authentication + explicit resubscribe,
-supervisor-owned recovery with per-target demand + backoff, and durable
-accept-position persistence through the injected `CursorStore` trait
-(`InMemoryCursorStore` default; SQLite/Keychain/DataStore in production,
-IndexedDB stub on web). Persistent user state lives outside the generic
-Syntra core.
-
-## Platforms (Phase 6)
-
-See `docs/platform-ios-android-wasm.md`. Native uses tokio +
-tokio-tungstenite + rustls; browser uses `ws_stream_wasm` with identical
-protocol logic. No browser-only APIs in native code; no `Authorization`
-headers on browser WebSockets — authentication uses the approved Syntra
-handshake. Async runtime and cancellation cross platform boundaries via
-`tokio` (native) / `wasm-bindgen-futures` + `syntra_runtime::CancelToken`
-(re-exported as `libtinkle::CancelToken`) on all targets. Mobile
-bridging: Swift `Task.cancel()` / Kotlin coroutine cancellation maps to
-`CancelToken::cancel()` — the platform adapter owns a `CancelToken` per
-cancellable call and invokes `cancel()` when the Swift task or Kotlin
-coroutine is cancelled, which sends best-effort `Cancel{}` for the
-allocated request id (completion wins races).
-
-## Security (Phase 7)
-
-See `docs/security.md`. `wss://` required in production; `ws://` is
-loopback/isolated-dev only with explicit opt-in. Credentials are redacted
-from `Debug`, zeroized on drop, never logged (generated debug output can
-leak them), never in URLs/query/headers, never in panic reports or event
-callbacks, never cloned beyond the handshake. No Signal cryptography is
-implemented; E2EE ciphertext, if added later, is constructed at the
-application layer before entering Syntra.
-
-## Mobile lifecycle (Phase 8)
-
-See `docs/mobile-lifecycle.md`. Supervised `start(rooms, watch)` (or
-foreground `connect` + `subscribe` on the manual path), background
-`suspend` (graceful close, keep cursors; supervisor blocked until
-`resume`), `reconnect`/`resume` with backoff + resubscribe,
-`rotate_credential` on token expiry, durable store survives process
- termination/app restart. No permanent background WebSocket is assumed;
- push notifications trigger `PushManager::process_push` (reconnect +
- resubscribe from persisted accept positions). Hosts drive `next_event` and
-poll `target_cursor`/`target_status`; `read_state_pending` on dialogs
-means refresh via `load_dialogs(HydrateCache)`.
-
-## Testing (Phase 9)
+For host tests, use `--port 0` to avoid fixed-port collisions in Linux's ephemeral
+range. The wrapper passes the OS-assigned control port to the consumer through
+`TINKLE_NATIVE_FIXTURE_CONTROL_PORT`, which `crates/libtinkle/tests/mobile_fixture.rs`
+reads. Omit `--port` for Swift/Kotlin native-distribution consumers, which retain
+the fixed default 48080; see [native consumer fixtures](docs/platform-ios-android-wasm.md#native-consumer-fixtures).
 
 ```sh
-cargo test --workspace
-cargo test -p libtinkle --test client_integration -- --nocapture
+python3 scripts/with-native-fixture.py --port 0 cargo test --locked -p libtinkle --test mobile_fixture -- --ignored
 ```
 
-- `tinkle-schema/tests/sync_conformance.rs` — journal page grammar,
-  accept_seq decisions, fetch chunking, body freshness, target keys,
-  connectivity-only method inventory.
-- `libtinkle/tests/client_integration.rs` — live in-process mock gateway:
-  handshake/auth, concurrent out-of-order RPCs, cancellation, opaque-hint
-  reconciliation, journal paging + `more_available` tri-state, history
-  healing of journal skips, reconnect + journal recovery, errors,
-  malformed-frame tolerance. Syntra protocol conformance lives upstream in the published
-  crates; these integration tests cover only the Syntra paths exercised by
-  libtinkle, not the complete upstream suite.
-- Platform compilation: native `cargo check --workspace`; wasm via
-  `cargo check -p libtinkle-web --target wasm32-unknown-unknown` (requires the
-  target + `ws_stream_wasm`; native never touches browser APIs; the
-  crates.io `syntra-ws` dependency builds transitively).
-
-## Acceptance
-
-- Rust SDK calls Tinkle RPCs over Syntra (typed + raw paths tested).
-- Same logical runtime across iOS/Android/WASM (platform adapters wrap
-  this core; see docs).
-- No gRPC client for standard Syntra calls.
-- Protocol/application boundaries distinct (`syntra-core` ↔ `tinkle-schema`).
-- Reconnect + sync safe and documented (`docs/reconnect-sync.md`).
-
-## Deliverables
-
-Runtime (`syntra-core`, `syntra-ws`, `tinkle-schema`, `libtinkle`), transport
-adapters, typed client + 169 method descriptors, tests (50 cases),
-platform/lifecycle/security docs, and runnable examples (`send-message`,
-`subscribe`).
+The native examples `send-message` and `subscribe` require `TINKLE_HOST`,
+`TINKLE_SERVER_PIN` (64 hex characters), `TINKLE_SERVER_KEY_ID`, `TINKLE_SCOPE`,
+all five `TINKLE_DEVICE_MODEL` / `TINKLE_PLATFORM` / `TINKLE_OS_VERSION` /
+`TINKLE_APP_VERSION` / `TINKLE_APP_BUILD`, and `TINKLE_SECURE_STORE_HELPER`.
+Optional `TINKLE_PORT` accepts a nonzero TCP port (1–65535); an explicit port
+disables fallback. Without it, the examples use primary 443 and fallback 80,
+available only after an initial primary dial failure before socket selection.
+The `TINKLE_SECURE_STORE_HELPER` executable receives `load-active` and returns the SDK's opaque
+record from protected platform storage on stdout. It must also implement `clear`,
+returning exit status zero only after full durable namespace invalidation. These
+examples do not perform enrollment writes. Production hosts use the Rust or FFI
+callback contract directly.

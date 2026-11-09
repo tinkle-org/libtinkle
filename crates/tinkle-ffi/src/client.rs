@@ -3,7 +3,12 @@
 //! [`TinkleClient`] wraps [`libtinkle::Client`]. All method params are
 //! owned (`String`/`Vec`/records); no `&str`, no Syntra/prost types, and
 //! no cancellation tokens cross the boundary. Dropping the foreign
-//! future cancels the in-flight Rust future.
+//! future cancels the in-flight Rust future. Logout waiters detach from retained
+//! cleanup; dropping one never cancels the independently owned cleanup task.
+//!
+//! Constructors consume a one-use Bootstrap TrustSourceFfi. Returning is installed
+//! by explicit enrollment activation or validated ACTIVE secure-store restoration,
+//! never by constructing a Returning TrustSourceFfi or automatic fallback.
 //!
 //! Lifecycle (supervised, demand-driven):
 //! `new` → `connect` (or `start` for supervised) → `subscribe` →
@@ -190,11 +195,13 @@ pub struct TinkleClient {
 }
 
 impl TinkleClient {
+    /// Borrow the same core coordinator used by every exported service adapter.
     pub(crate) fn core_client(&self) -> &libtinkle::Client {
         &self.inner
     }
 }
 
+/// Validate native route and metadata inputs through the shared FFI configuration adapter.
 fn build_config(config: ClientConfigFfi) -> Result<libtinkle::ClientConfig, FfiError> {
     crate::config::validated_core_config(config)
 }
@@ -230,23 +237,22 @@ async fn observe_watch(inner: &libtinkle::Client, watch: Vec<i64>) -> Result<(),
 
 #[uniffi::export(async_runtime = "tokio")]
 impl TinkleClient {
-    /// Create a client. `credential` is the opaque session token;
+    /// Create a client with explicit Bootstrap channel trust;
     /// `store` is the foreign (or in-memory) durable cursor store.
     ///
-    /// Fails fast with [`FfiError::Internal`] on an invalid non-blank
-    /// `grpc_endpoint` (missing scheme, non-`https` without
-    /// `allow_insecure`) instead of surfacing a retried network failure
-    /// at reconciliation time.
+    /// Consumes a one-use Bootstrap trust source. Returning requires enrollment
+    /// activation or validated ACTIVE secure-store restoration.
+    /// Invalid configuration fails fast.
     #[uniffi::constructor]
     pub fn new(
         config: ClientConfigFfi,
-        credential: String,
+        trust_source: Arc<crate::TrustSourceFfi>,
         store: Arc<dyn FfiCursorStore>,
     ) -> Result<Arc<Self>, FfiError> {
         crate::runtime::init();
         let inner = libtinkle::Client::new(
             build_config(config)?,
-            libtinkle::Credential::from_session_token(&credential),
+            trust_source.take()?,
             Arc::new(crate::store::FfiStoreAdapter(store)),
         );
         Ok(Arc::new(Self { inner }))
@@ -256,27 +262,52 @@ impl TinkleClient {
     /// journals and commits cache + accept positions atomically, then emits
     /// `ConversationChanged`/`MessagesChanged`; UI reads the shared cache.
     ///
-    /// Fails fast on invalid `grpc_endpoint` like [`Self::new`].
+    /// Consumes a one-use Bootstrap trust source like [`Self::new`]. Returning
+    /// requires activation or validated ACTIVE secure-store restoration.
     #[uniffi::constructor]
     pub fn new_sqlite(
         config: ClientConfigFfi,
-        credential: String,
+        trust_source: Arc<crate::TrustSourceFfi>,
         storage: Arc<crate::sqlite::SqliteStorage>,
     ) -> Result<Arc<Self>, FfiError> {
         crate::runtime::init();
         let inner = libtinkle::Client::new_sqlite(
             build_config(config)?,
-            libtinkle::Credential::from_session_token(&credential),
+            trust_source.take()?,
             storage.native_handle(),
         );
         Ok(Arc::new(Self { inner }))
     }
 
-    /// Foreground connect: WSS upgrade + Syntra handshake to ACTIVE.
+    /// Foreground connect: encrypted TCP + Syntra handshake to ACTIVE.
     /// Reissues the retained watch set on the fresh connection, so presence
     /// observations survive reconnects.
     pub async fn connect(&self) -> Result<(), FfiError> {
         self.inner.connect().await.map_err(FfiError::from)
+    }
+
+    /// Consume a one-use Bootstrap source and retire the current channel.
+    /// This explicitly selects Bootstrap; Returning credentials require enrollment
+    /// activation or validated ACTIVE secure-store restoration. A rejected
+    /// Returning proof never triggers automatic downgrade to Bootstrap.
+    ///
+    /// The pin, server key ID, and scope must match the current source; a change
+    /// is rejected. Use a new Client with a separate cache/cursor namespace for
+    /// a different deployment.
+    ///
+    /// Successful raw Bootstrap replacement clears the application principal,
+    /// tracked targets, watches, and in-memory pending catch-up. Durable resume
+    /// jobs are not removed and may hydrate when the same principal is set again.
+    /// Callers must establish the appropriate identity and register interests
+    /// again before subscriptions can sync.
+    pub async fn replace_trust_source(
+        &self,
+        source: Arc<crate::TrustSourceFfi>,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .replace_trust_source(source.take()?)
+            .await
+            .map_err(FfiError::from)
     }
 
     /// Supervised lifecycle: connect (if needed), subscribe, and start the
@@ -744,6 +775,12 @@ impl TinkleClient {
     /// notification pump has not exited).
     pub async fn is_connected(&self) -> bool {
         self.inner.is_connected().await
+    }
+
+    /// True even if durable clearing failed. This Client cannot restore any
+    /// credentials or reconnect after local logout; resolve clearing explicitly.
+    pub fn is_signed_out(&self) -> bool {
+        self.inner.is_signed_out()
     }
 
     /// Number of outstanding RPCs on the live connection (zero offline).

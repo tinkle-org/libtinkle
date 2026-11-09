@@ -12,7 +12,7 @@ updates:
         patterns:
           - syntra-core
           - syntra-runtime
-          - syntra-ws
+          - syntra-net
     # .cargo/config.toml remains the source of Cargo's sparse index URL.
   - package-ecosystem: github-actions
     directory: /

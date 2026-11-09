@@ -53,14 +53,17 @@ pub enum FfiError {
 }
 
 impl From<libtinkle::TinkleError> for FfiError {
+    /// Map core failures by typed code while preserving storage, sync, and lifecycle distinctions.
     fn from(e: libtinkle::TinkleError) -> Self {
         match e {
+            libtinkle::TinkleError::SignedOut => Self::Auth(e.to_string()),
+            libtinkle::TinkleError::SecureStore => Self::Storage(e.to_string()),
             libtinkle::TinkleError::Syntra(s) => {
                 let msg = s.to_string();
                 match s.code() {
                     syntra_core::ErrorCode::Cancelled => Self::Cancelled,
                     // DeadlineExceeded is retryable (bounded retry with
-                    // backoff), matching `GrpcStatus` + `RecoveryDecision::Retry`.
+                    // backoff), matching `RecoveryDecision::Retry`.
                     // `Timeout` is retained for API compat but currently unmapped.
                     syntra_core::ErrorCode::DeadlineExceeded
                     | syntra_core::ErrorCode::Unavailable
@@ -84,28 +87,10 @@ impl From<libtinkle::TinkleError> for FfiError {
             libtinkle::TinkleError::ReconnectExhausted { .. } => Self::ReconnectExhausted,
             libtinkle::TinkleError::Sync(msg) => Self::Sync(msg),
             libtinkle::TinkleError::SyncError(e) => Self::Sync(e.to_string()),
-            // Transport-level gRPC failures without a status are transient
-            // by construction (connect/read framing, no status code).
-            libtinkle::TinkleError::Grpc(msg) => Self::Retryable(msg),
-            libtinkle::TinkleError::GrpcStatus { code, message } => match code {
-                syntra_core::ErrorCode::Cancelled => Self::Cancelled,
-                syntra_core::ErrorCode::Unauthenticated
-                | syntra_core::ErrorCode::PermissionDenied => Self::Auth(message),
-                syntra_core::ErrorCode::Unavailable
-                | syntra_core::ErrorCode::DeadlineExceeded
-                | syntra_core::ErrorCode::Aborted
-                | syntra_core::ErrorCode::ResourceExhausted
-                | syntra_core::ErrorCode::Internal
-                | syntra_core::ErrorCode::Unknown
-                | syntra_core::ErrorCode::DataLoss => Self::Retryable(message),
-                _ => Self::Network(message),
-            },
-            // Malformed locally-supplied credentials are auth-domain, never
-            // retryable: re-authenticate, don't back off.
-            libtinkle::TinkleError::GrpcAuth(msg) => Self::Auth(msg),
-            // Local setup errors (bad endpoint) are permanent and never
-            // retryable: surface as internal config errors, not network.
-            libtinkle::TinkleError::GrpcConfig(msg) => Self::Internal(msg),
+            libtinkle::TinkleError::NetworkUnavailable => Self::Retryable(e.to_string()),
+            libtinkle::TinkleError::TrustRejected => Self::Auth(e.to_string()),
+            libtinkle::TinkleError::EstablishmentFailed => Self::Network(e.to_string()),
+            libtinkle::TinkleError::Configuration(msg) => Self::Internal(msg),
             libtinkle::TinkleError::Codec(msg) => Self::Codec(msg),
             libtinkle::TinkleError::CursorStore(msg) => Self::Storage(msg),
             // Subscription setup failures are sync-domain failures.
@@ -142,13 +127,6 @@ mod tests {
         })
     }
 
-    fn grpc_status(code: syntra_core::ErrorCode) -> libtinkle::TinkleError {
-        libtinkle::TinkleError::GrpcStatus {
-            code,
-            message: "injected".into(),
-        }
-    }
-
     fn discriminant(e: &FfiError) -> &'static str {
         match e {
             FfiError::Network(_) => "Network",
@@ -166,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn error_code_matrix_syntra_and_grpc_status() {
+    fn error_code_matrix_syntra() {
         use syntra_core::ErrorCode as C;
         // (code, expected FFI discriminant) — both paths must agree.
         let cases: [(C, &str); 17] = [
@@ -194,12 +172,6 @@ mod tests {
                 discriminant(&syntra_ffi),
                 expected,
                 "Syntra {code:?} must map to {expected}"
-            );
-            let grpc_ffi = FfiError::from(grpc_status(code));
-            assert_eq!(
-                discriminant(&grpc_ffi),
-                expected,
-                "GrpcStatus {code:?} must map to {expected}"
             );
         }
     }

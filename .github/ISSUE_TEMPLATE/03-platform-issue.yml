@@ -51,13 +51,13 @@ body:
       description: Xcode/Gradle/browser steps, UniFFI regen commands, wasm build commands, minimal host-language snippet.
       placeholder: |
         ```swift
-        let client = TinkleClient(url: "wss://...", token: "<redacted>")
+        let client = try TinkleClient(config: nativeTcpConfig, trustSource: provisionedTrustSource, store: store)
         try await client.connect()
         // background, then APNs wake...
         ```
         ```sh
         cargo check -p tinkle-ffi
-        cargo check -p syntra-ws -p libtinkle-web --target wasm32-unknown-unknown
+        cargo check -p tinkle-schema -p libtinkle-web --target wasm32-unknown-unknown
         ```
     validations:
       required: true

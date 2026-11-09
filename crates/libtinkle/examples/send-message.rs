@@ -1,24 +1,11 @@
-//! Send a Tinkle message over Syntra.
-//!
-//! Run against the Tinkle test gateway:
-//! ```sh
-//! TINKLE_URL=wss://gateway.test.example.com/syntra/v1/ws \
-//! TINKLE_TOKEN=<session-token> \
-//! cargo run -p libtinkle --example send-message -- 7 "hello"
-//! ```
-//!
-//! For local development against the in-process mock shape, point
-//! `TINKLE_URL` at `ws://127.0.0.1:<port>/syntra/v1/ws` with
-//! `allow_insecure` (loopback only, never public traffic).
+//! Send over encrypted native TCP with provisioned trust and enrollment.
+//! See `support::client` for required inputs.
 
-use libtinkle::{Client, ClientConfig, Credential, InMemoryCursorStore};
+mod support;
 use tinkle_schema::proto::{target, SendMessageRequest, Target};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let url =
-        std::env::var("TINKLE_URL").unwrap_or_else(|_| "ws://127.0.0.1:8080/syntra/v1/ws".into());
-    let token = std::env::var("TINKLE_TOKEN").unwrap_or_else(|_| "dev-token".into());
     let peer_id: i64 = std::env::args()
         .nth(1)
         .and_then(|s| s.parse().ok())
@@ -27,15 +14,7 @@ async fn main() -> anyhow::Result<()> {
         .nth(2)
         .unwrap_or_else(|| "hello from libtinkle".into());
 
-    let mut cfg = ClientConfig::new(url);
-    if std::env::var("TINKLE_INSECURE").is_ok() {
-        cfg = cfg.insecure_dev();
-    }
-    let client = Client::new(
-        cfg,
-        Credential::from_session_token(&token),
-        InMemoryCursorStore::new(),
-    );
+    let client = support::client().await?;
     client.connect().await?;
     println!("connected: id={:?}", client.connection_id().await);
 

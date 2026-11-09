@@ -186,11 +186,11 @@ impl TinkleClient {
             .map_err(FfiError::from)
     }
 
-    /// Logout + local cleanup: best-effort `AccountService/Logout`, then
-    /// wipes the principal's SQLite rows, drops catch-up demand, and
-    /// resets the session so in-flight push/reconcile work fences out.
-    /// Returns the server's `logged_out` flag (`false` when the RPC was
-    /// skipped or failed; the local wipe still happened).
+    /// Permanently sign this Client out, retire keys/channel/liveness work and
+    /// require acknowledged full secure-store clearing. True confirms remote
+    /// revocation; false leaves it unconfirmed after successful local clearing.
+    /// A cleanup error never reverses isSignedOut and never claims durability;
+    /// resolve host clearing before permitting restoration on a new Client.
     pub async fn logout(&self) -> Result<bool, FfiError> {
         self.core_client().logout().await.map_err(FfiError::from)
     }

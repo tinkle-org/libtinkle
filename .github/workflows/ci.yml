@@ -65,6 +65,10 @@ jobs:
         with:
           cache-on-failure: true
       - run: cargo test --locked --workspace --all-features --verbose
+      - name: Native fixture shutdown and response delivery regressions
+        run: cargo test --locked -p libtinkle --example native-fixture
+      - name: Published-SDK native mobile fixture regression
+        run: python3 scripts/with-native-fixture.py --port 0 cargo test --locked -p libtinkle --test mobile_fixture -- --ignored
       - if: matrix.os == 'ubuntu-latest'
         run: python3 -m unittest discover -s tests -p 'test_*.py' -v
       - if: matrix.os == 'ubuntu-latest'
@@ -82,7 +86,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           cache-on-failure: true
-      - run: cargo check --locked -p syntra-ws -p libtinkle-web --target wasm32-unknown-unknown
+      - run: cargo check --locked -p libtinkle-web -p tinkle-schema --target wasm32-unknown-unknown
   msrv:
     # Required context is still `msrv (cargo-hack)` (see branch ruleset
     # `Protect main - require PR + CI`). Implementation checks the declared

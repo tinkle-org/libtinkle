@@ -3,7 +3,7 @@
 //! The durable update feed retired from the public surface: `updates.proto`
 //! is connectivity-only (`ObserveConnectivity`), and reconciliation runs
 //! over unary `MessagesService/GetMessages` + `GetTargetChanges` pages.
-//! Covers tonic client surface presence, prost shapes for
+//! Covers descriptor/method inventory and prost shapes for
 //! `Target`/`GetMessages*`/`GetTargetChanges*`/`TargetChangeKind`, and the
 //! `sync` validation helpers.
 
@@ -108,22 +108,6 @@ fn updates_inventory_is_connectivity_only() {
         "GetTargetChangesRequest",
         "GetTargetChangesResponse"
     )));
-}
-
-// Absence of `read_updates`/`follow_updates` on the tonic clients is
-// compile-enforced: naming them fails the build (the generated
-// `updates_service_client` module no longer defines them). Presence of the
-// surviving client types is pinned here; the exact RPC inventory is pinned
-// against the compiled file descriptor set below, which is the same ground
-// truth the tonic clients are generated from.
-#[cfg(not(target_arch = "wasm32"))]
-#[test]
-fn tonic_clients_expose_surviving_services() {
-    use tinkle_schema::proto::grpc::{
-        messages_service_client::MessagesServiceClient,
-        updates_service_client::UpdatesServiceClient,
-    };
-    fn _clients<T>(_: MessagesServiceClient<T>, _: UpdatesServiceClient<T>) {}
 }
 
 #[test]

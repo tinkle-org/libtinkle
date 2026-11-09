@@ -12,6 +12,7 @@ SDK = ROOT / "packages/kotlin"
 
 class KotlinSdkLayoutTest(unittest.TestCase):
     def test_fresh_package_has_handwritten_build_and_consumer_inputs(self):
+        """Require the Kotlin build and smoke-consumer sources before staging."""
         required = (
             ".gitignore", "README.md", "LICENSE", "build.gradle.kts",
             "settings.gradle.kts", "gradle.properties", "gradlew", "gradlew.bat",
@@ -29,9 +30,6 @@ class KotlinSdkLayoutTest(unittest.TestCase):
             "sample/src/main/kotlin/com/tinkle/sdk/smoke/SmokeChecks.kt",
             "sample/src/androidTest/kotlin/com/tinkle/sdk/smoke/NativeSmokeTest.kt",
             "scripts/verify-consumer.sh",
-            "fixture-tests/settings.gradle.kts", "fixture-tests/build.gradle.kts",
-            "fixture-tests/src/test/kotlin/android/util/Base64.kt",
-            "fixture-tests/src/test/kotlin/com/tinkle/sdk/smoke/LoopbackGatewayTest.kt",
         )
         for name in required:
             with self.subTest(path=name):
@@ -83,14 +81,14 @@ class KotlinSdkLayoutTest(unittest.TestCase):
                 self.assertNotIn("tinklehq", content)
                 self.assertIn("tinkle-org", content)
 
-    def test_kotlin_2_3_uses_compatible_r8_and_fixture_tests_are_jvm_only(self):
+    def test_kotlin_2_3_uses_compatible_r8_and_sdk_owned_tcp_fixture(self):
         build = (SDK / "build.gradle.kts").read_text()
         self.assertIn('id("org.jetbrains.kotlin.android") version "2.3.0"', build)
         self.assertEqual(build.count('version "8.13.2"'), 2)
-        fixture = (SDK / "fixture-tests/build.gradle.kts").read_text()
-        self.assertIn('kotlin("jvm") version "2.3.0"', fixture)
-        self.assertIn('kotlin.srcDir("../sample/src/main/kotlin")', fixture)
-        self.assertIn('kotlin.exclude("**/SmokeChecks.kt")', fixture)
+        fixture = (SDK / "sample/src/main/kotlin/com/tinkle/sdk/smoke/LoopbackGateway.kt").read_text()
+        self.assertIn('TrustSourceFfi.bootstrap', fixture)
+        self.assertNotIn('MessageDigest', fixture)
+        self.assertNotIn('readBinary', fixture)
         self.assertNotIn("fixture-tests", (SDK / "sample/build.gradle.kts").read_text())
 
 

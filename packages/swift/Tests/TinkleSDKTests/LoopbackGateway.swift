@@ -1,20 +1,22 @@
-import CryptoKit
 import Darwin
 import Foundation
+import TinkleSDK
 
-/// One-client test fixture, mirroring libtinkle's client_integration gateway.
-/// Implements only WebSocket upgrade, Syntra hello/ready, and GetTargetChanges.
-/// Field IDs match syntra.v1.Frame and tinkle.v1.GetTargetChangesResponse. This is not
-/// a transport implementation for application use.
+/// Supplies complete, nonsecret client labels for native fixture connections.
+func fixtureClientInfo() -> ClientInfoFfi {
+    ClientInfoFfi(deviceModel: "fixture-device", platform: "ios", osVersion: "18",
+        appVersion: "1", appBuild: "0001", options: ClientOptionsFfi(agent: "", deviceId: "",
+            installId: "", acceptLanguage: "", timeZone: "", userAgent: ""))
+}
+
+/// Controls the host-only Rust fixture. All application encryption, framing and
+/// handshakes live in the published Syntra SDK used by that fixture.
 final class LoopbackGateway: @unchecked Sendable {
-    private let lock = NSLock()
-    private let worker = DispatchGroup()
-    private let listener: Int32
-    private var connection: Int32 = -1
+    private let id: Int64
     private var stopped = false
-    private var failure: Error?
-    private var requests: [TargetChangesRequest] = []
     let port: UInt16
+    let pin: Data
+    private let scope: String
 
     struct TargetChangesRequest: Equatable {
         let targetKind: String
@@ -22,262 +24,131 @@ final class LoopbackGateway: @unchecked Sendable {
         let afterAcceptSeq: Int64
     }
 
+    /// Allocates a Bootstrap gateway; enrollment review opts into the synthetic vector's key.
+    init(enrollmentReview: Bool = false) throws {
+        let response = try Self.control(["op": "create", "deletions": [], "enrollment_review": enrollmentReview])
+        id = (response["id"] as! NSNumber).int64Value
+        port = (response["port"] as! NSNumber).uint16Value
+        pin = Data((response["pin"] as! [NSNumber]).map(\.uint8Value))
+        scope = enrollmentReview ? "fixture" : "tinkle-mobile-fixture"
+    }
+
+    /// Recorded by Syntra's verified-identity callback, never inferred from RPCs.
+    var admittedModes: [String] {
+        get throws {
+            let response = try Self.control(["op": "requests", "id": id])
+            guard let modes = response["admissions"] as? [String] else {
+                throw FixtureError("fixture response lacks authenticated admissions")
+            }
+            return modes
+        }
+    }
+
+    /// Returns journal positions decoded from actual encrypted application requests.
     var targetChangesRequests: [TargetChangesRequest] {
-        lock.lock()
-        defer { lock.unlock() }
-        return requests
-    }
-
-    init() throws {
-        let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw FixtureError("socket failed") }
-        do {
-            var address = sockaddr_in()
-            address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-            address.sin_family = sa_family_t(AF_INET)
-            address.sin_addr.s_addr = inet_addr("127.0.0.1")
-            let bound = withUnsafePointer(to: &address) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-                }
-            }
-            guard bound == 0, Darwin.listen(fd, 1) == 0 else { throw FixtureError("bind/listen failed") }
-            var size = socklen_t(MemoryLayout<sockaddr_in>.size)
-            let named = withUnsafeMutablePointer(to: &address) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &size) }
-            }
-            guard named == 0 else { throw FixtureError("getsockname failed") }
-            port = UInt16(bigEndian: address.sin_port)
-            listener = fd
-        } catch {
-            Darwin.close(fd)
-            throw error
-        }
-        worker.enter()
-        DispatchQueue(label: "tinkle-swift-smoke-gateway").async {
-            defer { self.worker.leave() }
-            do {
-                try self.serve()
-            } catch {
-                self.lock.lock()
-                if !self.stopped { self.failure = error }
-                self.lock.unlock()
+        get throws {
+            let response = try Self.control(["op": "requests", "id": id])
+            return (response["requests"] as! [[String: Any]]).map {
+                TargetChangesRequest(targetKind: $0["target_kind"] as! String,
+                    targetId: ($0["target_id"] as! NSNumber).int64Value,
+                    afterAcceptSeq: ($0["after_accept_seq"] as! NSNumber).int64Value)
             }
         }
     }
 
+    /// Creates a fresh one-use Bootstrap source pinned to this gateway.
+    func trustSource() throws -> TrustSourceFfi {
+        try TrustSourceFfi.bootstrap(trust: ServerTrustFfi(
+            serverPublicKey: pin, serverKeyId: 7, scope: scope))
+    }
+
+    /// Idempotently stops the gateway and waits for its accepted transports to drain.
     func finish() throws {
-        lock.lock()
         if !stopped {
+            _ = try Self.control(["op": "close", "id": id])
             stopped = true
-            Darwin.shutdown(listener, SHUT_RDWR)
-            Darwin.close(listener)
-            if connection >= 0 { Darwin.shutdown(connection, SHUT_RDWR) }
         }
-        lock.unlock()
-        guard worker.wait(timeout: .now() + 3) == .success else { throw FixtureError("gateway did not stop") }
-        lock.lock()
-        let error = failure
-        lock.unlock()
-        if let error { throw error }
     }
 
-    private func serve() throws {
-        let fd = Darwin.accept(listener, nil, nil)
-        guard fd >= 0 else { throw FixtureError("accept failed") }
-        lock.lock()
-        if stopped {
-            Darwin.close(fd)
-            lock.unlock()
-            return
+    /// Performs one bounded loopback control exchange outside the SDK transport.
+    private static func control(_ request: [String: Any]) throws -> [String: Any] {
+        let op = request["op"] as? String ?? "unknown"
+        let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw FixtureError("control \(op) socket failed errno=\(errno) bytes=0") }
+        defer { Darwin.close(fd) }
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        guard setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)) == 0 else {
+            throw FixtureError("control \(op) SO_RCVTIMEO failed errno=\(errno) bytes=0")
         }
-        connection = fd
-        lock.unlock()
-        defer {
-            lock.lock()
-            connection = -1
-            Darwin.close(fd)
-            lock.unlock()
+        guard setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)) == 0 else {
+            throw FixtureError("control \(op) SO_SNDTIMEO failed errno=\(errno) bytes=0")
         }
-        var timeout = timeval(tv_sec: 20, tv_usec: 0)
-        var noSignal: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
-        var request: [UInt8] = []
-        while !request.suffix(4).elementsEqual([13, 10, 13, 10]) {
-            guard request.count < 16_384 else { throw FixtureError("HTTP header too long") }
-            request += try read(fd, 1)
-        }
-        let headers = String(decoding: request, as: UTF8.self).components(separatedBy: "\r\n")
-        guard let keyLine = headers.first(where: { $0.lowercased().hasPrefix("sec-websocket-key:") }),
-              let separator = keyLine.firstIndex(of: ":") else { throw FixtureError("missing WebSocket key") }
-        let key = keyLine[keyLine.index(after: separator)...].trimmingCharacters(in: .whitespaces)
-        let digest = Insecure.SHA1.hash(data: Data((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").utf8))
-        let accept = Data(digest).base64EncodedString()
-        try write(fd, Array(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n" +
-            "Connection: Upgrade\r\nSec-WebSocket-Protocol: syntra.v1\r\n" +
-            "Sec-WebSocket-Accept: \(accept)\r\n\r\n").utf8))
-        guard let helloBody = try readBinary(fd) else {
-            throw FixtureError("missing Syntra hello")
-        }
-        let helloFrame = try fields(helloBody)
-        guard helloFrame[1]?.number == 1, (helloFrame[2]?.number ?? 0) == 0,
-              let hello = helloFrame[10]?.bytes else { throw FixtureError("invalid Syntra hello frame") }
-        let greeting = try fields(hello)
-        guard greeting[1]?.number == 1, greeting[2]?.number == 1,
-              let credential = greeting[3]?.bytes, !credential.isEmpty else {
-            throw FixtureError("invalid Syntra hello")
-        }
-        try send(fd, number(1, 1) + bytes(11, bytes(1, Array("swift-smoke".utf8))))
-        while let body = try readBinary(fd) {
-            let frame = try fields(body)
-            guard let request = frame[12]?.bytes else { continue }
-            let rpc = try fields(request)
-            guard frame[1]?.number == 1,
-                  rpc[1]?.bytes == Array("/tinkle.v1.MessagesService/GetTargetChanges".utf8),
-                  let id = frame[2]?.number, id > 0 else { throw FixtureError("unexpected fixture RPC") }
-            let payload = try fields(rpc[2]?.bytes ?? [])
-            let target = try fields(payload[1]?.bytes ?? [])
-            guard (target[1] != nil) != (target[2] != nil),
-                  let targetId = target[1]?.number ?? target[2]?.number,
-                  targetId > 0, targetId <= UInt64(Int64.max),
-                  let limit = payload[3]?.number, (1...500).contains(limit) else {
-                throw FixtureError("invalid target changes request")
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(48080).bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
-            let afterAcceptSeq = payload[2]?.number ?? 0
-            guard afterAcceptSeq <= UInt64(Int64.max) else { throw FixtureError("negative acceptance position") }
-            let decoded = TargetChangesRequest(
-                targetKind: target[1] != nil ? "user" : "room",
-                targetId: Int64(targetId), afterAcceptSeq: Int64(afterAcceptSeq)
-            )
-            lock.lock()
-            requests.append(decoded)
-            lock.unlock()
-            // Empty page: explicitly caught up, with the request's cursor.
-            // Omitting optional more_available would mean unknown, not false.
-            let response = number(2, 0) + number(3, afterAcceptSeq)
-            try send(fd, number(1, 1) + number(2, id) + bytes(13, bytes(1, response)))
         }
+        guard connected == 0 else { throw FixtureError("control \(op) connect failed errno=\(errno) bytes=0; start cargo run --locked -p libtinkle --example native-fixture before mobile tests") }
+        let bytes = try JSONSerialization.data(withJSONObject: request) + Data([10])
+        try sendAll(bytes, fd: fd, op: op)
+        let response = try readLine(fd: fd, op: op)
+        return try JSONSerialization.jsonObject(with: response) as! [String: Any]
     }
 
-    private func read(_ fd: Int32, _ count: Int, allowEOF: Bool = false) throws -> [UInt8] {
-        var result = [UInt8](repeating: 0, count: count)
-        var offset = 0
-        while offset < count {
-            let received = result.withUnsafeMutableBytes {
-                Darwin.recv(fd, $0.baseAddress!.advanced(by: offset), count - offset, 0)
-            }
-            if received < 0 && errno == EINTR { continue }
-            if received == 0 && allowEOF && offset == 0 { return [] }
-            guard received > 0 else { throw FixtureError("socket read failed/EOF") }
-            offset += received
-        }
-        return result
-    }
-
-    private func write(_ fd: Int32, _ bytes: [UInt8]) throws {
+    /// Completes partial writes, retrying only interruptions without replaying bytes.
+    static func sendAll(_ bytes: Data, fd: Int32, op: String,
+        send: (Int32, UnsafeRawPointer?, Int, Int32) -> Int = Darwin.send) throws {
         var offset = 0
         while offset < bytes.count {
-            let sent = bytes.withUnsafeBytes {
-                Darwin.send(fd, $0.baseAddress!.advanced(by: offset), bytes.count - offset, 0)
+            let sent = bytes.withUnsafeBytes { send(fd, $0.baseAddress!.advanced(by: offset), bytes.count - offset, 0) }
+            if sent < 0 {
+                let code = errno
+                if code == EINTR { continue }
+                throw ioError(op: op, action: "send", code: code, bytes: offset)
             }
-            if sent < 0 && errno == EINTR { continue }
-            guard sent > 0 else { throw FixtureError("socket write failed") }
+            guard sent > 0 else { throw FixtureError("control \(op) send made no progress bytes=\(offset)") }
             offset += sent
         }
     }
 
-    private func readBinary(_ fd: Int32) throws -> [UInt8]? {
-        while true {
-            let first = try read(fd, 1, allowEOF: true)
-            if first.isEmpty { return nil }
-            guard first[0] & 0x80 != 0 else { throw FixtureError("fragmented fixture frame") }
-            let second = try read(fd, 1)[0]
-            var length = UInt64(second & 0x7f)
-            if length == 126 || length == 127 {
-                let size = length == 126 ? 2 : 8
-                length = try read(fd, size).reduce(0) { ($0 << 8) | UInt64($1) }
+    /// Reads one capped newline-terminated response, with deterministic I/O injection for tests.
+    static func readLine(fd: Int32, op: String,
+        recv: (Int32, UnsafeMutableRawPointer?, Int, Int32) -> Int = Darwin.recv) throws -> Data {
+        var response = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while response.count < 65536 {
+            let capacity = min(buffer.count, 65536 - response.count)
+            let received = buffer.withUnsafeMutableBytes { recv(fd, $0.baseAddress, capacity, 0) }
+            if received < 0 {
+                let code = errno
+                if code == EINTR { continue }
+                throw ioError(op: op, action: "recv", code: code, bytes: response.count)
             }
-            guard length <= 1_048_576 else { throw FixtureError("oversized fixture frame") }
-            let mask = second & 0x80 != 0 ? try read(fd, 4) : []
-            var body = try read(fd, Int(length))
-            if !mask.isEmpty {
-                for index in body.indices { body[index] ^= mask[index % 4] }
+            guard received > 0 else { throw FixtureError("control \(op) recv EOF before newline bytes=\(response.count)") }
+            if let newline = buffer[..<received].firstIndex(of: 10) {
+                response.append(contentsOf: buffer[...newline])
+                return response
             }
-            switch first[0] & 0x0f {
-            case 2: return body
-            case 8: try send(fd, body, opcode: 8); return nil
-            case 9: try send(fd, body, opcode: 10)
-            case 10: continue
-            default: throw FixtureError("unexpected fixture opcode")
-            }
+            response.append(contentsOf: buffer[..<received])
         }
+        throw FixtureError("control \(op) recv oversized response limit=65536 bytes=\(response.count)")
     }
 
-    private func send(_ fd: Int32, _ body: [UInt8], opcode: UInt8 = 2) throws {
-        guard body.count < 126 else { throw FixtureError("fixture response too long") }
-        try write(fd, [0x80 | opcode, UInt8(body.count)] + body)
+    /// Formats transport diagnostics without including request or response contents.
+    private static func ioError(op: String, action: String, code: Int32, bytes: Int) -> FixtureError {
+        let kind = code == EAGAIN || code == EWOULDBLOCK || code == ETIMEDOUT ? "timeout" : "system error"
+        return FixtureError("control \(op) \(action) \(kind) errno=\(code) bytes=\(bytes)")
     }
+}
 
-    private func varint(_ value: UInt64) -> [UInt8] {
-        var remaining = value
-        var result: [UInt8] = []
-        repeat {
-            let byte = UInt8(remaining & 127)
-            remaining >>= 7
-            result.append(byte | (remaining == 0 ? 0 : 128))
-        } while remaining != 0
-        return result
-    }
-
-    private func number(_ field: Int, _ value: UInt64) -> [UInt8] {
-        varint(UInt64(field * 8)) + varint(value)
-    }
-
-    private func bytes(_ field: Int, _ value: [UInt8]) -> [UInt8] {
-        varint(UInt64(field * 8 + 2)) + varint(UInt64(value.count)) + value
-    }
-
-    private enum Value {
-        case integer(UInt64), buffer([UInt8])
-        var number: UInt64? { if case .integer(let value) = self { return value }; return nil }
-        var bytes: [UInt8]? { if case .buffer(let value) = self { return value }; return nil }
-    }
-
-    private func fields(_ message: [UInt8]) throws -> [Int: Value] {
-        var offset = 0
-        func next() throws -> UInt64 {
-            var result: UInt64 = 0
-            for shift in stride(from: 0, through: 63, by: 7) {
-                guard offset < message.count else { throw FixtureError("truncated varint") }
-                let byte = message[offset]
-                offset += 1
-                guard shift < 63 || byte <= 1 else { throw FixtureError("varint overflow") }
-                result |= UInt64(byte & 127) << shift
-                if byte & 128 == 0 { return result }
-            }
-            throw FixtureError("invalid varint")
-        }
-        var result: [Int: Value] = [:]
-        while offset < message.count {
-            let key = try next()
-            guard key >> 3 > 0, key >> 3 <= UInt64(Int.max) else { throw FixtureError("invalid field") }
-            switch key & 7 {
-            case 0: result[Int(key >> 3)] = .integer(try next())
-            case 2:
-                let length = try next()
-                guard length <= UInt64(message.count - offset) else { throw FixtureError("truncated bytes") }
-                result[Int(key >> 3)] = .buffer(Array(message[offset..<(offset + Int(length))]))
-                offset += Int(length)
-            default: throw FixtureError("unsupported fixture field")
-            }
-        }
-        return result
-    }
-
-    private struct FixtureError: Error, CustomStringConvertible {
-        let description: String
-        init(_ description: String) { self.description = description }
-    }
+private struct FixtureError: Error, CustomStringConvertible {
+    let message: String
+    /// Retains a control-channel diagnostic for XCTest failure reporting.
+    init(_ message: String) { self.message = message }
+    var description: String { message }
 }

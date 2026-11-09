@@ -2,6 +2,13 @@
 
 ## Release chain
 
+Required Rust checks and native packaging use the same published BSR prost pin
+and committed `Cargo.lock`. Schema #57 is included in
+`0.5.0-20261107080548-dc41c2199c76.2`; no schema checkout, registry patch, Buf
+installation or repository variable is required in these jobs. The optional
+schema-candidate helper is for future-contract integration only, not release
+qualification. See [public pinning](../../PROTO_PINNING.md).
+
 1. Release-plz retains the workspace's `publish = false` git-only policy. Its
    `releases` action output is a JSON array of `{package_name, tag, version, prs}`
    ([official output schema](https://release-plz.dev/docs/github/output)). Only
@@ -182,11 +189,11 @@ Kotlin package integration:
 
 * Root Android library outputs `build/outputs/aar/*-release.aar` and supports
    `assembleRelease` / `testReleaseUnitTest` with its checked-in Gradle wrapper.
-* Before Android assembly, `sdk-ci.py android-build` runs independent JVM
-  `fixture-tests` and `buildSrc` tests. The wire fixture supports journal paging
-  and the subsequent SQLite `GetHistory` catch-up; an empty terminal history
-  response does not advance the acceptance cursor. The fixture's Android Base64
-  shim lives only in the JVM test project, never in consumer APKs or the SDK AAR.
+* Before Android assembly, `sdk-ci.py android-build` runs `buildSrc` tests.
+  Consumer runtime tests use the SDK-owned encrypted TCP fixture started by
+  `scripts/with-native-fixture.py`, not a JVM reimplementation of the wire
+  protocol. It supports journal paging and subsequent SQLite `GetHistory`
+  catch-up; an empty terminal history response does not advance the cursor.
 * Local CI override: `TINKLE_SDK_ARTIFACT_DIR` is the absolute directory holding
   the exact Android/binding ZIPs, and `TINKLE_SDK_ANDROID_SHA256` /
   `TINKLE_SDK_KOTLIN_BINDINGS_SHA256` provide their computed checksums. The SDK

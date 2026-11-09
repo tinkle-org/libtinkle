@@ -2,7 +2,7 @@
 //!
 //! Method bindings are maintained from BSR `tinkle-org/schema` descriptors
 //! (`tinkle-schema::methods::ALL_METHODS`). The generic
-//! [`Service::call_typed`] serializes the request protobuf, constructs the
+//! [`call_typed`] serializes the request protobuf, constructs the
 //! Syntra `RpcRequest`, allocates a nonzero `request_id`, sends through
 //! the active connection, awaits the matching `RpcResult`, decodes the
 //! typed response, and returns typed errors.
@@ -139,6 +139,59 @@ impl<'a> Messages<'a> {
     }
 }
 
+/// Account session management on the authenticated channel.
+pub struct Account<'a> {
+    client: &'a Client,
+}
+
+impl<'a> Account<'a> {
+    /// Bind the facade to this client's admission and transport lifecycle.
+    pub(crate) fn new(client: &'a Client) -> Self {
+        Self { client }
+    }
+
+    /// List active devices with neutral session IDs and descriptive metadata.
+    pub async fn get_sessions(&self) -> Result<Vec<tinkle_schema::proto::Session>, TinkleError> {
+        let response: tinkle_schema::proto::GetSessionsResponse = call_typed(
+            self.client,
+            tinkle_schema::methods::accountservice::GET_SESSIONS,
+            &tinkle_schema::proto::GetSessionsRequest {},
+            3_000,
+        )
+        .await?;
+        Ok(response.sessions)
+    }
+
+    /// Revoke one device UUID once. An unknown transport outcome is never replayed.
+    pub async fn revoke_session(&self, session_id: &str) -> Result<bool, TinkleError> {
+        if !crate::enrollment::uuid(session_id) {
+            return Err(TinkleError::Codec("invalid session identifier".into()));
+        }
+        let response: tinkle_schema::proto::RevokeSessionResponse = call_typed(
+            self.client,
+            tinkle_schema::methods::accountservice::REVOKE_SESSION,
+            &tinkle_schema::proto::RevokeSessionRequest {
+                session_id: session_id.into(),
+            },
+            3_000,
+        )
+        .await?;
+        Ok(response.revoked)
+    }
+
+    /// Revoke every other device, preserving this device and its local enrollment.
+    pub async fn revoke_other_sessions(&self) -> Result<bool, TinkleError> {
+        let response: tinkle_schema::proto::RevokeSessionsResponse = call_typed(
+            self.client,
+            tinkle_schema::methods::accountservice::REVOKE_SESSIONS,
+            &tinkle_schema::proto::RevokeSessionsRequest {},
+            3_000,
+        )
+        .await?;
+        Ok(response.revoked)
+    }
+}
+
 /// Auth service.
 pub struct Auth<'a> {
     client: &'a Client,
@@ -149,46 +202,167 @@ impl<'a> Auth<'a> {
         Self { client }
     }
 
+    /// Request a verification challenge, rejecting a missing identifier and sanitizing auth errors.
     pub async fn send_code(
         &self,
         req: tinkle_schema::proto::SendCodeRequest,
     ) -> Result<tinkle_schema::proto::SendCodeResponse, TinkleError> {
-        call_typed(
+        let response: tinkle_schema::proto::SendCodeResponse = call_typed(
             self.client,
             tinkle_schema::methods::authservice::SEND_CODE,
             &req,
             30_000,
         )
         .await
+        .map_err(crate::enrollment::sanitize_auth_error)?;
+        if response.verification_id.trim().is_empty() {
+            return Err(TinkleError::Codec(
+                "server omitted verification identifier".into(),
+            ));
+        }
+        Ok(response)
     }
 
+    /// Deliver enrollment on pinned Bootstrap and await validated candidate persistence.
+    /// Reject an account projection that disagrees with the delivered enrollment user.
     pub async fn sign_in(
         &self,
-        req: tinkle_schema::proto::SignInRequest,
-    ) -> Result<tinkle_schema::proto::SignInResponse, TinkleError> {
-        let resp: tinkle_schema::proto::SignInResponse = call_typed(
-            self.client,
+        details: crate::SignInDetails,
+        operation: &crate::DurableOperation,
+    ) -> Result<crate::SignInOutcome, TinkleError> {
+        operation.epoch.check(self.client)?;
+        let _flow = self.client.enrollment_lock.lock().await;
+        operation.epoch.check(self.client)?;
+        let provisioning = self
+            .client
+            .provisioning_client(
+                crate::enrollment::operation_trust(operation),
+                &operation.epoch,
+            )
+            .await?;
+        let result: Result<
+            crate::enrollment::SecretReply<tinkle_schema::proto::SignInResponse>,
+            TinkleError,
+        > = crate::enrollment::secret_call(
+            &provisioning,
             tinkle_schema::methods::authservice::SIGN_IN,
-            &req,
-            30_000,
+            details.request(operation)?,
+            &operation.epoch,
         )
-        .await?;
-        if let Some(user) = resp.user.as_ref() {
-            let id = match user.user_type.as_ref() {
-                Some(tinkle_schema::proto::user::UserType::Data(d)) => Some(d.id),
-                Some(tinkle_schema::proto::user::UserType::Empty(e)) => Some(e.id),
-                None => None,
+        .await;
+        provisioning.close().await;
+        let mut response = result?;
+        let delivery = response
+            .enrollment
+            .as_ref()
+            .ok_or_else(|| TinkleError::Codec("missing enrollment".into()))?;
+        if let Some(user) = &response.user {
+            let id = match &user.user_type {
+                Some(tinkle_schema::proto::user::UserType::Data(data)) => data.id,
+                Some(tinkle_schema::proto::user::UserType::Empty(empty)) => empty.id,
+                None => 0,
             };
-            if let Some(id) = id {
-                if id > 0 {
-                    let next = format!("user:{id}");
-                    if self.client.principal().await != next {
-                        self.client.set_principal_user_id(id).await;
-                    }
-                }
+            if id != delivery.user_id {
+                return Err(TinkleError::Codec("enrollment user mismatch".into()));
             }
         }
-        Ok(resp)
+        let delivery = response
+            .enrollment
+            .take()
+            .ok_or_else(|| TinkleError::Codec("missing enrollment".into()))?;
+        let enrollment = self
+            .client
+            .persist_delivery(operation, delivery, false)
+            .await?;
+        Ok(crate::SignInOutcome {
+            user: response.user.take(),
+            is_new_user: response.is_new_user,
+            enrollment,
+        })
+    }
+
+    /// Recover delivery using only the pre-retained operation/capability.
+    pub async fn resume_enrollment(
+        &self,
+        operation: &crate::DurableOperation,
+    ) -> Result<crate::PersistedEnrollment, TinkleError> {
+        operation.epoch.check(self.client)?;
+        let _flow = self.client.enrollment_lock.lock().await;
+        operation.epoch.check(self.client)?;
+        let provisioning = self
+            .client
+            .provisioning_client(
+                crate::enrollment::operation_trust(operation),
+                &operation.epoch,
+            )
+            .await?;
+        let result: Result<
+            crate::enrollment::SecretReply<tinkle_schema::proto::ResumeEnrollmentResponse>,
+            TinkleError,
+        > = crate::enrollment::secret_call(
+            &provisioning,
+            "/tinkle.v1.AuthService/ResumeEnrollment",
+            crate::enrollment::resume_request(operation)?,
+            &operation.epoch,
+        )
+        .await;
+        provisioning.close().await;
+        self.client
+            .persist_delivery(
+                operation,
+                result?
+                    .enrollment
+                    .take()
+                    .ok_or_else(|| TinkleError::Codec("missing enrollment".into()))?,
+                true,
+            )
+            .await
+    }
+
+    /// Stage rotation on the current ACTIVE Returning connection. The old
+    /// active secure-store slot is preserved until the new candidate activates.
+    pub async fn rotate_enrollment(
+        &self,
+        operation: &crate::DurableOperation,
+    ) -> Result<crate::PersistedEnrollment, TinkleError> {
+        operation.epoch.check(self.client)?;
+        let _flow = self.client.enrollment_lock.lock().await;
+        operation.epoch.check(self.client)?;
+        if !self.client.has_returning_source().await {
+            return Err(TinkleError::Configuration(
+                "rotation requires Returning".into(),
+            ));
+        }
+        let mut result: crate::enrollment::SecretReply<
+            tinkle_schema::proto::RotateEnrollmentResponse,
+        > = crate::enrollment::secret_call(
+            self.client,
+            "/tinkle.v1.AuthService/RotateEnrollment",
+            crate::enrollment::rotate_request(operation)?,
+            &operation.epoch,
+        )
+        .await?;
+        self.client
+            .persist_rotation(
+                operation,
+                result
+                    .enrollment
+                    .take()
+                    .ok_or_else(|| TinkleError::Codec("missing enrollment".into()))?,
+            )
+            .await
+    }
+
+    /// Acknowledge only an already-persisted candidate via pinned Bootstrap.
+    /// Verify ACTIVE, persist that status atomically, then establish fresh Returning.
+    pub async fn activate_enrollment(
+        &self,
+        persisted: &crate::PersistedEnrollment,
+    ) -> Result<tinkle_schema::proto::DeviceEnrollmentStatus, TinkleError> {
+        persisted.epoch.check(self.client)?;
+        let _flow = self.client.enrollment_lock.lock().await;
+        persisted.epoch.check(self.client)?;
+        self.client.activate_persisted(persisted).await
     }
 }
 

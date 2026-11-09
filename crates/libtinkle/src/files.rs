@@ -896,10 +896,6 @@ fn is_digest_error(e: &TinkleError) -> bool {
             (*code == C::InvalidArgument || *code == C::FailedPrecondition)
                 && detail_matches(message)
         }
-        TinkleError::GrpcStatus { code, message } => {
-            (*code == C::InvalidArgument || *code == C::FailedPrecondition)
-                && detail_matches(message)
-        }
         _ => false,
     }
 }

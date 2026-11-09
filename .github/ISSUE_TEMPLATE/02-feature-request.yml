@@ -48,8 +48,7 @@ body:
       multiple: true
       options:
         - syntra-core
-        - syntra-ws native
-        - syntra-ws wasm
+        - syntra-net native TCP
         - tinkle-schema
         - libtinkle
         - tinkle-ffi iOS (Swift)

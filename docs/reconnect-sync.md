@@ -3,7 +3,7 @@
 ## Reconnect
 
 Every new transport connection requires a new Syntra handshake with
-fresh credential presentation. The `request_id` space dies with the
+fresh channel proof under the explicit trust source. The `request_id` space dies with the
 connection; subscriptions, live state, and in-flight RPCs do not
 survive.
 
@@ -16,8 +16,12 @@ retries, and jittered backoff (`ReconnectPolicy`: 500 ms base, ×2,
 
 Supervised apps call `start(targets, watch)` once: the SDK establishes the
 session and owns reconnection from there on (hint-driven plus a
-5 s watchdog tick, 10 s re-establish cooldown). Manual apps use
-`connect` / `subscribe` / `reconnect` directly. `suspend()` tears down
+5 s watchdog tick and bounded jittered backoff). Manual apps use
+`connect` / `subscribe` / `reconnect` directly; manual `reconnect` makes one attempt.
+Trust/configuration rejection parks automatic reconnect until explicit trust replacement.
+The selected port remains fixed across reconnects; opaque post-ready loss cannot
+authorize an alternate port. Trust replacement resets that route choice.
+`suspend()` tears down
 the transport and blocks supervisor reconnects until `resume()` (or a
 fresh `start`); retained events still drain via `next_event`.
 
@@ -30,16 +34,16 @@ and `"room"`/`"chat"` on text surfaces). The canonical per-target key is
 durable update feed and no replay cursor: each conversation carries its
 own mutation journal, and sync reconciles journals per target.
 
-1. Authenticate and establish the principal (`user:<id>`). Set it via
-   `sign_in` or `set_principal_user_id`; per-target accept positions are
+1. Authenticate and establish the principal (`user:<id>`) through acknowledged
+   activation or ACTIVE secure-store restoration and fresh Returning. SignIn
+   delivery alone does not establish it. Per-target accept positions are
    isolated by principal and never reused across accounts.
 2. Subscribe to conversation targets (`subscribe(Vec<Target>)`; absent
    means untracked, never start-live). Connectivity observations
    (`ObserveConnectivity`) are orthogonal: they observe presence, never
    sync state.
 3. Reconcile one target with `GetTargetChanges{target, after_accept_seq,
-   limit}` pages over unary RPC (Syntra unary on the live connection by
-   default; direct-unary gRPC via `grpc_endpoint` is opt-in). The journal
+   limit}` pages over Syntra unary RPC on the encrypted native TCP connection. The journal
    keeps mutations at acceptance order; `after_accept_seq` is the
    exclusive lower bound (zero requests everything retained).
 4. Validate each page (`validate_changes_page`): changes ascend strictly

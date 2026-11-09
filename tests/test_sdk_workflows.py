@@ -45,6 +45,7 @@ class SdkWorkflowTests(unittest.TestCase):
                     self.assertEqual(values(step, "persist-credentials", 10), ["false"])
 
     def test_original_required_jobs_names_and_unconditional_commands_survive(self):
+        """Keep required check identities and commands intact without conditional bypasses."""
         names = {"fmt": "rustfmt", "clippy": "clippy (${{ matrix.os }})",
                  "test": "test (${{ matrix.os }})", "wasm": "wasm32 check",
                  "msrv": "msrv (cargo-hack)"}
@@ -52,7 +53,7 @@ class SdkWorkflowTests(unittest.TestCase):
             "fmt": "cargo fmt --all -- --check",
             "clippy": "cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings",
             "test": "cargo test --locked --workspace --all-features --verbose",
-            "wasm": "cargo check --locked -p syntra-ws -p libtinkle-web --target wasm32-unknown-unknown",
+            "wasm": "cargo check --locked -p libtinkle-web -p tinkle-schema --target wasm32-unknown-unknown",
             "msrv": "['cargo', '+' + version, 'check', '--locked', '--offline', '--workspace', '--all-targets']",
         }
         for name, display in names.items():
@@ -88,6 +89,34 @@ class SdkWorkflowTests(unittest.TestCase):
                                  "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}")
                 prefixes.append(prefix)
         self.assertNotEqual(*prefixes)  # Caller and callee must not cancel each other.
+
+    def test_host_fixture_uses_an_allocated_port_without_changing_mobile_consumers(self):
+        """Host tests must not claim a fixed port in Linux's ephemeral range."""
+        command = ("python3 scripts/with-native-fixture.py --port 0 cargo test --locked "
+                   "-p libtinkle --test mobile_fixture -- --ignored")
+        self.assertIn(command, self.ci["test"])
+        for name in ("swift-consumer", "kotlin-consumer"):
+            self.assertIn("python3 scripts/with-native-fixture.py python3 scripts/sdk-ci.py", self.native[name])
+            self.assertNotIn("--port 0", self.native[name])
+
+    def test_required_checks_and_native_builds_use_the_published_dependency_graph(self):
+        """Build required checks and native artifacts from locked, unpatched dependencies."""
+        for name in ("ci", "native-sdk"):
+            with self.subTest(workflow=name):
+                content = self.workflows[name]
+                self.assertNotIn("SCHEMA_CANDIDATE_REF", content)
+                self.assertNotIn("schema-candidate", content)
+                self.assertNotIn("[patch.", content)
+                self.assertNotIn("@bufbuild/buf", content)
+                # Build from the pinned checkout, not a patched workspace copy.
+                self.assertEqual(values(content, "working-directory", 8), [])
+        self.assertIn("bash scripts/build-ios.sh", self.native["ios"])
+        self.assertIn("bash scripts/build-android.sh", self.native["android"])
+        msrv = self.ci["msrv"]
+        self.assertIn("['cargo', 'fetch', '--locked']", msrv)
+        self.assertIn("['rustup', 'toolchain', 'install', version, '--profile', 'minimal']", msrv)
+        self.assertIn("['cargo', '+' + version, 'check', '--locked', '--offline', '--workspace', '--all-targets']", msrv)
+        self.assertEqual(values(self.native["rust-checks"], "uses", 4), ["./.github/workflows/ci.yml"])
 
     def test_publish_rust_gate_calls_local_ci_at_exact_resolved_sha(self):
         job = self.native["rust-checks"]

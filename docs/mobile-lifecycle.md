@@ -1,10 +1,31 @@
 # Mobile lifecycle
 
-Mobile OSes do not permit a permanent background WebSocket. Design for
+Mobile OSes do not guarantee a permanent background connection. Design for
 suspension, termination, and network churn; durable state survives in
 the `CursorStore`, live state does not.
 
 ## States
+
+ACTIVE Returning transports own one application `ConnectionService.KeepAlive`
+loop: first request after five seconds, five-second cadence, at most one
+outstanding request, and a five-second RPC ceiling. Sequences start at one and
+increase only within that connection. Success must echo the exact sequence;
+errors, malformed echoes and timeouts retire the socket rather than replaying
+the observation. The existing supervisor owns reconnection. Typed terminal
+authorization/protocol failures park it and cannot select an alternate port.
+
+The loop uses the normal `Client::call_raw`/InitConnect path. It is independent
+of Syntra core ping; only requests actually observed and authorized by the
+gateway can renew presence. Bootstrap never sends this protected request. An
+idle Bootstrap OTP connection may reach the core's read timeout and reconnect;
+the retained enrollment operation remains the recovery authority.
+
+Stop, reconnect, suspend, resume/wake, credential rotation and account-context
+retirement cancel and join the old connection's liveness task. Resume retires
+an old socket even if suspend was not explicitly called. A local account switch
+retires and parks a live Returning context until explicit authenticated trust
+installation. Task owners survive cancellation of teardown so a later stop can
+still join them. Dropping the last host Client owner cancels background work.
 
 - **Foreground**: supervised `start(targets, watch)` (or manual `connect()`
   → ACTIVE) — RPCs, subscriptions, presence live; the supervisor owns
@@ -21,15 +42,38 @@ the `CursorStore`, live state does not.
 - **Network change** (WiFi ↔ cellular, captive portal, airplane):
   transport loss → `UNAVAILABLE` (unknown outcome) → `reconnect()` with
   backoff + fresh handshake + explicit resubscribe.
-- **Token expiry**: `UNAUTHENTICATED` → `rotate_credential(next)` (new
-  transport + fresh handshake; re-auth on the same connection is
-  forbidden). Never retry identical bytes in a tight loop.
+- **Enrollment expiry/rotation**: obtain fresh authorization through host policy,
+  then `replace_trust_source(next)` (new transport + fresh channel proof).
+  Store AK material separately from the application cache. Never silently
+  change Returning mode to Bootstrap after a rejection.
 - **App restart**: `Client::new` with the same store → `start()` (or
   `connect()` → `subscribe` with the tracked targets on the manual path);
   durable per-target accept positions resume reconciliation where it left
   off.
 
 ## Push-triggered sync after wake
+
+Logout is distinct from transport stop. It permanently signs this Client out,
+retires its key/channel/liveness work, invalidates late enrollment completions,
+and requires acknowledged full-namespace secure-store clearing. Its boolean is
+remote revocation confirmation only; offline or unknown acknowledgement returns
+false after successful local clearing. Storage failure returns an error while
+the Client stays signed out. Do not automatically restore a new coordinator
+from a namespace whose clearing failed; resolve the host's durable tombstone or
+deletion first. See `device-enrollment.md` for the clear callback contract.
+
+Logout cleanup is retained independently of host waiters. Rejoining or retrying
+keeps cumulative remote confirmation, the original cache principal and completed
+local steps, and never repeats remote Logout. `session_status()` distinguishes
+network unavailability, unknown authorization and signed-out cleanup progress.
+Conditional protected-store hosts persist a revision-bound cleanup marker before
+clearing; it blocks restoration and late writes after restart. Legacy hosts
+explicitly report no restart-safe-store capability. Conditional restoration and
+explicit foreground entry observe permanent enrollment retirement first. An
+independent 60-second foreground timer uses bounded status-only encrypted
+connections on the retained route; returning failures never trigger or accelerate
+it. Suspend/stop cancel and join observation. Exact current negative evidence
+starts local-only cleanup; expired or unknown records never become usable keys.
 
 Push (APNs/FCM, first via OneSignal) carries only a wake hint — never
 message bodies or secrets. Notification display text (`aps.alert`,

@@ -13,7 +13,7 @@ publish = false
 [dependencies]
 syntra-core.workspace = true
 syntra-runtime.workspace = true
-syntra-ws.workspace = true
+syntra-net.workspace = true
 tinkle-schema.workspace = true
 prost.workspace = true
 prost-types.workspace = true
@@ -22,7 +22,6 @@ bytes.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 rand.workspace = true
-url.workspace = true
 zeroize.workspace = true
 async-trait.workspace = true
 
@@ -31,7 +30,6 @@ async-trait.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-tonic.workspace = true
 tinkle-storage.workspace = true
 
 # WASM: reduced tokio (no mio/net) + minimal tokio-util (CancellationToken
@@ -44,6 +42,9 @@ tokio-util = { version = "0.7" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
-tokio-tungstenite = { version = "0.26" }
 futures-util = "0.3"
 anyhow = "1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+rusqlite.workspace = true
+tempfile.workspace = true
