@@ -1261,10 +1261,18 @@ async fn lifecycle_watch_waits_for_unary_initialization_and_restores_on_reconnec
         client.reconnect().await.unwrap();
     }
     // The connection-owned restore and immediate ready path keep the same union.
+    let before = log.observe.lock().unwrap().len();
     client
         .call_raw("/tinkle.v1.MessagesService/SendMessage", vec![], 2_000)
         .await
         .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while !log.observe.lock().unwrap()[before..].contains(&vec![42, 7, 9]) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the new connection must restore the retained union before set_watch");
     client.set_watch(vec![11]).await.unwrap();
     assert_eq!(client.watch_list().await, vec![42, 7, 9, 11]);
     assert!(log.observe.lock().unwrap().contains(&vec![42, 7, 9, 11]));

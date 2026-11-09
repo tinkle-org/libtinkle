@@ -53,6 +53,7 @@ pub(crate) struct RetainedEnrollment {
     identity: Arc<()>,
     install_revision: u64,
     restoring: bool,
+    negative_only: bool,
     enabled: bool,
 }
 
@@ -168,6 +169,7 @@ impl RetirementObserver {
             identity: Arc::new(()),
             install_revision: state.revision,
             restoring,
+            negative_only: false,
             enabled,
         });
         state.current = Some(binding.clone());
@@ -231,6 +233,21 @@ impl RetirementObserver {
         }) {
             state.revision = state.revision.wrapping_add(1);
             state.current = None;
+        }
+    }
+
+    /// An expired record keeps lookup metadata, but releases the admission barrier.
+    pub(crate) fn retain_negative_only(&self, expected: &Arc<RetainedEnrollment>) {
+        let mut state = self.binding.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(current) = state.current.as_ref().filter(|current| {
+            current.restoring && Arc::ptr_eq(&current.identity, &expected.identity)
+        }) {
+            let mut retained = (**current).clone();
+            state.revision = state.revision.wrapping_add(1);
+            retained.install_revision = state.revision;
+            retained.restoring = false;
+            retained.negative_only = true;
+            state.current = Some(Arc::new(retained));
         }
     }
 
@@ -439,9 +456,22 @@ impl Client {
         clock: syntra_runtime::elapsed::ElapsedClock,
         deadline: std::time::Instant,
     ) -> Result<Option<crate::logout::CleanupAttempt>, TinkleError> {
-        let Ok(_single) = self.retirement.observing.try_lock() else {
-            return Ok(None);
-        };
+        let _single = clock
+            .timeout_until(deadline, self.retirement.observing.lock())
+            .await
+            .map_err(|_| {
+                self.retirement.record(EnrollmentObservation::Unavailable);
+                TinkleError::NetworkUnavailable
+            })?;
+        self.observe_retirement_locked_until(clock, deadline).await
+    }
+
+    /// Caller owns observing; an install barrier cannot skip the new binding's check.
+    async fn observe_retirement_locked_until(
+        &self,
+        clock: syntra_runtime::elapsed::ElapsedClock,
+        deadline: std::time::Instant,
+    ) -> Result<Option<crate::logout::CleanupAttempt>, TinkleError> {
         if self.is_signed_out()
             || !self.retirement.foreground.load(Ordering::SeqCst)
             || self.endpoint_rejected.load(Ordering::SeqCst)
@@ -672,7 +702,9 @@ impl Client {
                             binding.reference.enrollment_epoch,
                         )
             }
-            TrustSource::Bootstrap(trust) => binding.restoring && *trust == binding.trust,
+            TrustSource::Bootstrap(trust) => {
+                (binding.restoring || binding.negative_only) && *trust == binding.trust
+            }
             TrustSource::SignedOut(_) => false,
         }
     }
@@ -683,7 +715,14 @@ impl Client {
             return Err(TinkleError::NotConnected("restoration is suspended".into()));
         }
         self.arm_retirement_schedule().await;
-        if let Some(cleanup) = self.observe_retirement().await? {
+        let observed = {
+            let _single = self.retirement.observing.lock().await;
+            let clock = syntra_runtime::elapsed::ElapsedClock::new();
+            let deadline = clock.now() + RETIREMENT_OBSERVATION_BUDGET;
+            self.observe_retirement_locked_until(clock, deadline)
+                .await?
+        };
+        if let Some(cleanup) = observed {
             cleanup.await?;
             return Err(TinkleError::SignedOut);
         }
@@ -692,5 +731,52 @@ impl Client {
             return Err(TinkleError::SignedOut);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    use crate::enrollment::review_tests::{client, expired_store};
+
+    #[tokio::test]
+    async fn review_expired_restore_retains_observable_metadata_without_admission_barrier() {
+        let client = client(false);
+        let store = expired_store(&client);
+        assert!(client.restore_active_enrollment(store).await.is_err());
+        let binding = client
+            .retirement
+            .current()
+            .expect("negative lookup retained");
+        assert!(binding.negative_only);
+        assert!(!binding.restoring);
+        assert!(client.retirement_source_matches(&binding).await);
+        assert!(!client.has_returning_source().await);
+        client.stop().await;
+    }
+
+    #[tokio::test]
+    async fn review_status_first_restore_waits_for_busy_periodic_observer() {
+        let client = client(false);
+        let store = expired_store(&client);
+        let observing = client.retirement.observing.lock().await;
+        let caller = client.clone();
+        let host = store.clone();
+        let restore = tokio::spawn(async move { caller.restore_active_enrollment(host).await });
+        while !client.retirement.is_restoring() {
+            tokio::task::yield_now().await;
+        }
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            !restore.is_finished(),
+            "busy observation is not a status acknowledgement"
+        );
+        assert_eq!(store.snapshots.load(Ordering::SeqCst), 1);
+        drop(observing);
+        assert!(restore.await.unwrap().is_err());
+        assert!(store.snapshots.load(Ordering::SeqCst) >= 2);
+        client.stop().await;
     }
 }

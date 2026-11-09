@@ -132,6 +132,96 @@ final class TinkleSDKTests: XCTestCase {
         XCTAssertEqual(calls, 1)
         await client.shutdown()
     }
+
+    func testPrepareEnrollmentUsesConditionalSuccessorRevisionsWithoutLegacyFallback() async throws {
+        let client = try TinkleClient(config: ClientConfigFfi(clientInfo: fixtureClientInfo(),
+            host: "127.0.0.1", primaryPort: 9, fallbackPort: nil),
+            trustSource: try TrustSourceFfi.bootstrap(trust: ServerTrustFfi(
+                serverPublicKey: Data(repeating: 1, count: 32), serverKeyId: 7, scope: "fixture")),
+            store: MemoryCursorStore())
+        let secure = ConditionalSecureStore()
+        do {
+            let first = try await client.prepareEnrollment(store: secure)
+            let second = try await client.prepareEnrollment(store: secure)
+            XCTAssertNotEqual(first.operationId(), second.operationId())
+            let loaded = try await client.loadEnrollmentOperation(store: secure, operationId: first.operationId())
+            XCTAssertEqual(loaded.operationId(), first.operationId())
+            let revisions = await secure.expectedRevisions
+            XCTAssertEqual(revisions, ["conditional-fixture:0", "conditional-fixture:1"])
+            let current = try await secure.namespaceSnapshot()
+            let snapshot = try XCTUnwrap(current)
+            XCTAssertEqual(snapshot.incarnation, "conditional-fixture")
+            XCTAssertEqual(snapshot.revision, "conditional-fixture:2")
+            XCTAssertTrue(snapshot.hasPending)
+            XCTAssertFalse(snapshot.cleanupPending)
+            XCTAssertNil(snapshot.active)
+            await secure.rejectNextCommit()
+            do {
+                _ = try await client.prepareEnrollment(store: secure)
+                XCTFail("A superseded conditional write must not return an operation receipt")
+            } catch FfiError.Storage {
+                // nil from the foreign callback is a failed CAS, not persistence.
+            }
+            let attempted = await secure.expectedRevisions
+            let unconditional = await secure.unconditionalCommits
+            let operations = await secure.operationIds
+            XCTAssertEqual(attempted, ["conditional-fixture:0", "conditional-fixture:1", "conditional-fixture:2"])
+            XCTAssertEqual(unconditional, 0)
+            XCTAssertEqual(operations, Set([first.operationId(), second.operationId()]))
+        } catch {
+            await client.shutdown()
+            throw error
+        }
+        await client.shutdown()
+    }
+
+    func testRestoreActiveEnrollmentRejectsDeniedInstallPermit() async throws {
+        // Exact opaque bytes checked by review_swift_active_vector_matches_private_record_encoder_and_validates_returning
+        // in crates/libtinkle/src/enrollment.rs; Swift must not recreate the private record format.
+        let hex = Array(EnrollmentReviewVector.activeRecordHex)
+        var bytes = Data(try stride(from: 0, to: hex.count, by: 2).map {
+            try XCTUnwrap(UInt8(String(hex[$0..<$0 + 2]), radix: 16))
+        })
+        defer { bytes.resetBytes(in: 0..<bytes.count) }
+        let secure = DenyingRestoreSecureStore(active: ProtectedEnrollmentRecord.fromSecureStorage(bytes: bytes))
+        let client = try TinkleClient(config: ClientConfigFfi(clientInfo: fixtureClientInfo(),
+            host: "127.0.0.1", primaryPort: 9, fallbackPort: nil),
+            trustSource: try TrustSourceFfi.bootstrap(trust: ServerTrustFfi(
+                serverPublicKey: Data(repeating: 1, count: 32), serverKeyId: 7, scope: "fixture")),
+            store: MemoryCursorStore())
+        do {
+            let before = await client.sessionStatus()
+            XCTAssertEqual(before.authorization, .unknown)
+            XCTAssertEqual(before.network, .unavailable)
+            do {
+                _ = try await client.restoreActiveEnrollment(store: secure)
+                XCTFail("A false beginRestore must not authorize ACTIVE restoration")
+            } catch FfiError.Storage(let message) {
+                XCTAssertTrue(message.contains("protected enrollment storage"))
+            }
+            let begins = await secure.begins
+            XCTAssertEqual(begins.count, 1, "An earlier parsing/storage failure must not satisfy this regression")
+            let begin = try XCTUnwrap(begins.first)
+            XCTAssertEqual(begin.incarnation, "restore-denial-fixture")
+            XCTAssertEqual(begin.revision, "restore-denial-fixture:1")
+            XCTAssertTrue(begin.activeMatches)
+            XCTAssertFalse(begin.permitId.isEmpty)
+            let ends = await secure.endIds
+            XCTAssertEqual(ends, [begin.permitId], "Rust must release the exact denied acquisition")
+            let unexpected = await secure.unexpectedCalls
+            XCTAssertTrue(unexpected.isEmpty, "Restore must not write, clear, or use legacy loads: \(unexpected)")
+            let after = await client.sessionStatus()
+            XCTAssertEqual(after.authorization, before.authorization)
+            XCTAssertEqual(after.network, before.network)
+            XCTAssertEqual(after.cleanup, before.cleanup)
+            // The public API exposes authorization knowledge, not the private principal or trust-source variant.
+        } catch {
+            await client.shutdown()
+            throw error
+        }
+        await client.shutdown()
+    }
+
     func testRuntimeInitializationAndRustStoreConstruction() {
         tinkleFfiInit()
         tinkleFfiInit()
@@ -295,6 +385,94 @@ final class TinkleSDKTests: XCTestCase {
             store: store
         )
     }
+}
+
+/// Restore-denial fixture only: it never grants exclusion or acknowledges a mutation.
+private actor DenyingRestoreSecureStore: FfiSecureEnrollmentStore {
+    private let active: ProtectedEnrollmentRecord
+    private(set) var begins: [(incarnation: String, revision: String, activeMatches: Bool, permitId: String)] = []
+    private(set) var endIds: [String] = []
+    private(set) var unexpectedCalls: [String] = []
+
+    init(active: ProtectedEnrollmentRecord) { self.active = active }
+
+    func namespaceSnapshot() async throws -> ProtectedEnrollmentNamespace? {
+        await Task.yield()
+        return ProtectedEnrollmentNamespace(incarnation: "restore-denial-fixture", revision: "restore-denial-fixture:1",
+            cleanupPending: false, active: active, hasPending: false)
+    }
+    func beginRestore(incarnation: String, revision: String, active: ProtectedEnrollmentRecord, permitId: String) async throws -> Bool {
+        await Task.yield()
+        var expected = self.active.copyForSecureStorage()
+        var received = active.copyForSecureStorage()
+        defer {
+            expected.resetBytes(in: 0..<expected.count)
+            received.resetBytes(in: 0..<received.count)
+        }
+        begins.append((incarnation, revision, received == expected, permitId))
+        return false
+    }
+    func endRestore(permitId: String) async throws {
+        await Task.yield()
+        endIds.append(permitId)
+    }
+    private func unsupported(_ method: String) -> FfiError {
+        unexpectedCalls.append(method)
+        return FfiError.Storage("restore-denial fixture does not support \(method)")
+    }
+    func commitCurrent(expectedRevision: String, kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord) async throws -> String? {
+        throw unsupported("commitCurrent")
+    }
+    func commit(kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord) async throws { throw unsupported("commit") }
+    func beginClear(expectedRevision: String) async throws -> Bool { throw unsupported("beginClear") }
+    func finishClear(expectedRevision: String) async throws -> Bool { throw unsupported("finishClear") }
+    func clear() async throws { throw unsupported("clear") }
+    func loadOperation(operationId: String) async throws -> ProtectedEnrollmentRecord? { throw unsupported("loadOperation") }
+    func loadActive() async throws -> ProtectedEnrollmentRecord? { throw unsupported("loadActive") }
+}
+
+/// Conditional persistence callback fixture, not a confidential or durable store.
+/// It cannot exclude namespace mutation during restore, so it grants no permit.
+private actor ConditionalSecureStore: FfiSecureEnrollmentStore {
+    private var revision = 0
+    private var records: [String: ProtectedEnrollmentRecord] = [:]
+    private var rejectCommit = false
+    private(set) var expectedRevisions: [String] = []
+    private(set) var unconditionalCommits = 0
+    var operationIds: Set<String> { Set(records.keys) }
+
+    func rejectNextCommit() { rejectCommit = true }
+    func beginRestore(incarnation: String, revision: String, active: ProtectedEnrollmentRecord, permitId: String) async throws -> Bool { false }
+    func endRestore(permitId: String) async throws {}
+    func namespaceSnapshot() async throws -> ProtectedEnrollmentNamespace? {
+        ProtectedEnrollmentNamespace(incarnation: "conditional-fixture", revision: "conditional-fixture:\(revision)",
+            cleanupPending: false, active: nil, hasPending: !records.isEmpty)
+    }
+    func commitCurrent(expectedRevision: String, kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord) async throws -> String? {
+        await Task.yield()
+        expectedRevisions.append(expectedRevision)
+        guard expectedRevision == "conditional-fixture:\(revision)" else { return nil }
+        if rejectCommit {
+            rejectCommit = false
+            revision += 1 // Another writer won the comparison; this record is not installed.
+            return nil
+        }
+        guard case .operation = kind, records[operationId] == nil else {
+            throw FfiError.Storage("fixture supports create-only operations")
+        }
+        records[operationId] = record
+        revision += 1
+        return "conditional-fixture:\(revision)"
+    }
+    func beginClear(expectedRevision: String) async throws -> Bool { throw FfiError.Storage("clearing unsupported") }
+    func finishClear(expectedRevision: String) async throws -> Bool { throw FfiError.Storage("clearing unsupported") }
+    func clear() async throws { throw FfiError.Storage("clearing unsupported") }
+    func commit(kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord) async throws {
+        unconditionalCommits += 1
+        throw FfiError.Storage("conditional fixture must not use legacy commit")
+    }
+    func loadOperation(operationId: String) async throws -> ProtectedEnrollmentRecord? { records[operationId] }
+    func loadActive() async throws -> ProtectedEnrollmentRecord? { nil }
 }
 
 /// Failure-only fixture: it deliberately never acknowledges secure persistence.

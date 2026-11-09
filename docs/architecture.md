@@ -29,16 +29,21 @@ messages into zeroizing native owners and secret-free status projections.
 
 The caller provides bare host/ports and a typed `TrustSource`. Both ports share
 the exact source. One 15-second budget covers TCP dial selection, channel proof
-and Core readiness. TCP 443 is primary, TCP 80 is the dial-failure fallback.
+and Core readiness. The primary port defaults to 443; the optional dial-failure
+fallback defaults to 80.
 After socket selection, no establishment error selects another port.
 The selected port remains fixed through reconnects because the TCP-only SDK
-does not publicly expose its private post-ready failure classification. Explicit
-trust replacement authorizes fresh route selection.
+does not publicly expose its private post-ready failure classification. A
+successful explicit same-deployment trust replacement authorizes fresh route selection.
 
 `Bootstrap` and `Returning` are explicit. Returning carries a nonzero AK32,
 handle8 and epoch. The key is copied only into a fresh SDK `Secret32` for each
-attempt. The host owns protected enrollment storage and installs new material
-using `replace_trust_source`. No automatic mode change or key persistence occurs.
+attempt. The host owns protected enrollment storage; the typed enrollment
+coordinator installs verified material and its principal. Raw
+`libtinkle::Client::replace_trust_source` requires identical server trust and clears
+the principal and retained application interests; it is not verified enrollment
+installation or a deployment switch. See [trust replacement](security.md#secret-ownership).
+No automatic mode change or key persistence occurs.
 
 The existing application supervisor schedules reconnect attempts. The SDK's
 reconnecting client is not enabled. Manual `reconnect` makes one attempt and
@@ -111,10 +116,13 @@ The implementation boundary is `client.rs:call_budget`,
 `call_initialized_with_budget`, and `remaining_timeout_ms`, with retained Logout
 ownership in `logout.rs`. Forwarding the original `timeout_ms` after locks or
 starting a new 3000 ms call after lifecycle waits would violate this contract.
-The [scoped paired result](../../chorus/src/controllers/client-api/tests/native_acceptance/README.md#current-qualification)
+The [scoped paired result](https://github.com/tinkle-org/chorus/blob/d639d617a30bf3c2246e9491dd4af0a9c7674fc3/src/controllers/client-api/tests/native_acceptance/README.md#current-qualification)
 qualifies the tested consumer implementation/published pins. Changed pins or
 budgets require fresh scoped qualification; the result is not a global
 suspension or `logout()` wall-clock guarantee.
+The linked Chorus record requires private-repository access; no public copy of
+the qualification or runner instructions was found. See the
+[access limitation](../PROTO_PINNING.md#sdk-pins-and-qualification).
 
 ### Data flow
 

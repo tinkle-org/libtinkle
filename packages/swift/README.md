@@ -82,6 +82,10 @@ require separate compatible runtime/device lanes.
 
 ## Application API
 
+This startup example is for a returning device with an unexpired ACTIVE enrollment
+persisted in `secureEnrollmentStore`. First-run enrollment uses the sequence below
+instead of `restoreActiveEnrollment`.
+
 ```swift
 import TinkleSDK
 
@@ -105,6 +109,18 @@ try await client.start(targets: [TargetSub(targetKind: "room", targetId: roomID)
 // Call shutdown() when this client's owner ends its lifecycle.
 ```
 
+For first-run enrollment, replace the restore call with this sequence before
+calling `start`. Supply `code` and `verificationId` from the verification flow:
+
+```swift
+let operation = try await client.prepareEnrollment(store: secureEnrollmentStore)
+let signedIn = try await client.signIn(
+    phoneNumber: phoneNumber, code: code, verificationId: verificationId,
+    operation: operation
+)
+let active = try await client.activateEnrollment(candidate: signedIn.enrollment)
+```
+
 Alternatively, pass an application-owned `FfiCursorStore` to the throwing
 `TinkleClient(config:trustSource:store:)` constructor. Keep enrollment keys in
 protected platform storage separately from this application store. Implement async
@@ -121,8 +137,8 @@ Rust and InitConnect-wraps the first unary call on each new connection.
 Implement `FfiSecureEnrollmentStore` in confidential durable platform storage.
 Success from `commit` must mean the whole record is durably installed. The SDK
 does not acknowledge an enqueued or missing write. New enrollment is explicit:
-`prepareEnrollment` → `signIn` (returns `StoredEnrollment` only after persistence)
-→ `activateEnrollment`; recovery uses the retained operation with
+`prepareEnrollment` → `signIn` (returns the persisted receipt in
+`EnrollmentSignInResult.enrollment`) → `activateEnrollment`; recovery uses the retained operation with
 `resumeEnrollment`. Release opaque protected-record handles and erase byte
 copies after storage. See the core `docs/device-enrollment.md` contract.
 

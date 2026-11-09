@@ -12,13 +12,14 @@ use std::{
     fs::{File, OpenOptions},
     io::Write,
     path::PathBuf,
+    sync::{Arc, Mutex, OnceLock},
 };
 
 /// Each instance/process shares the same durable lock, incarnation and revision.
 pub struct DiskStore {
     pub path: PathBuf,
     events: Option<std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>>,
-    restore_permits: std::sync::Mutex<DiskRestoreLocks>,
+    restore_permits: Arc<Mutex<DiskRestoreLocks>>,
 }
 
 /// OS-owned install locks release on process death, never by unchecked expiry.
@@ -31,10 +32,21 @@ struct DiskRestoreLocks {
 impl DiskStore {
     /// Reopen an existing namespace in another process, without in-memory state.
     pub fn new(path: PathBuf) -> Self {
+        // Cancellation must survive adapter replacement until this process exits.
+        static PERMITS: OnceLock<
+            Mutex<std::collections::HashMap<PathBuf, Arc<Mutex<DiskRestoreLocks>>>>,
+        > = OnceLock::new();
+        let restore_permits = PERMITS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .entry(path.clone())
+            .or_default()
+            .clone();
         Self {
             path,
             events: None,
-            restore_permits: Default::default(),
+            restore_permits,
         }
     }
 
@@ -44,9 +56,8 @@ impl DiskStore {
         events: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
     ) -> Self {
         Self {
-            path,
             events: Some(events),
-            restore_permits: Default::default(),
+            ..Self::new(path)
         }
     }
     /// Compare and publish under an OS lock, fsyncing both file and rename directory.
@@ -274,5 +285,64 @@ impl SecureEnrollmentStore for DiskStore {
             }
             record(&state["active"])
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn restore_release_and_cancellation_are_shared_across_adapters() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("namespace.json");
+        let first = DiskStore::new(path.clone());
+        let initial = first.namespace_snapshot().await.unwrap().unwrap();
+        let active = SecretBlob::new(vec![1, 2, 3]);
+        let pending = first
+            .commit_current(
+                &initial.revision,
+                SecureWrite::Operation,
+                "operation",
+                &active,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let current = first
+            .commit_current(&pending, SecureWrite::Active, "operation", &active)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(first
+            .begin_restore(&initial.incarnation, &current, &active, "install")
+            .await
+            .unwrap());
+        let peer = DiskStore::with_events(path.clone(), Default::default());
+        assert!(peer.begin_clear(&current).await.is_err());
+        let unrelated = DiskStore::new(directory.path().join("other.json"));
+        unrelated.end_restore("install").await.unwrap();
+        assert!(peer.begin_clear(&current).await.is_err());
+        peer.end_restore("unrelated").await.unwrap();
+        assert!(peer.begin_clear(&current).await.is_err());
+        peer.end_restore("install").await.unwrap();
+        peer.end_restore("install").await.unwrap();
+        assert_eq!(
+            first.namespace_snapshot().await.unwrap().unwrap().revision,
+            current
+        );
+
+        peer.end_restore("late-install").await.unwrap();
+        drop(first);
+        drop(peer);
+        let reopened = DiskStore::new(path);
+        for id in ["install", "late-install"] {
+            assert!(!reopened
+                .begin_restore(&initial.incarnation, &current, &active, id)
+                .await
+                .unwrap());
+        }
+        assert!(reopened.begin_clear(&current).await.unwrap());
+        assert!(reopened.finish_clear(&current).await.unwrap());
     }
 }

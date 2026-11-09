@@ -2,6 +2,7 @@
 mod support;
 
 use libtinkle::{Client, ClientConfig, Enrollment, InMemoryCursorStore, TinkleError, TrustSource};
+use prost::Message;
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -94,8 +95,8 @@ fn default_ports_and_trust_inputs_are_explicit() {
 async fn dial_failure_uses_encrypted_fallback_with_same_trust() {
     let primary = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let primary_addr = primary.local_addr().unwrap();
-    drop(primary);
     let fallback = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    drop(primary);
     let mut config = support::config(primary_addr);
     config.fallback_port = Some(fallback.local_addr().unwrap().port());
     let server = tokio::spawn(async move {
@@ -118,6 +119,112 @@ async fn dial_failure_uses_encrypted_fallback_with_same_trust() {
     );
     client.close().await;
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn fixture_requires_initialization_per_connection_only_for_tinkle_rpcs() {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let dispatched = calls.clone();
+        let mut servers = tokio::task::JoinSet::new();
+        servers.spawn(async move {
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let dispatched = dispatched.clone();
+                keep(
+                    support::accept(stream, move |_, _| {
+                        dispatched.fetch_add(1, Ordering::SeqCst);
+                        async { echo() }
+                    })
+                    .await
+                    .unwrap(),
+                )
+                .await;
+            }
+        });
+        for _ in 0..2 {
+            let trust = support::trust();
+            let client = syntra_net::tcp::connect(
+                addr,
+                secure_channel::ClientConfig {
+                    context: Context {
+                        mode: Mode::Bootstrap,
+                        carrier: secure_channel::Carrier::Tcp,
+                        server_key_id: trust.server_key_id,
+                        scope: trust.scope.into_bytes(),
+                        handle: [0; 8],
+                        epoch: 0,
+                    },
+                    server_public_key: trust.server_public_key,
+                    authorization_key: None,
+                },
+                vec![],
+                ConnectionConfig::default(),
+                Default::default(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                client
+                    .conn
+                    .call("/test.Echo/Call", vec![], 1_000)
+                    .await
+                    .unwrap(),
+                b"ok"
+            );
+            let before = calls.load(Ordering::SeqCst);
+            let error = client
+                .conn
+                .call("/tinkle.v1.MessagesService/SendMessage", vec![], 1_000)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), syntra_core::ErrorCode::FailedPrecondition);
+            assert_eq!(calls.load(Ordering::SeqCst), before);
+            let init = tinkle_schema::proto::InitConnectRequest {
+                client: Some(tinkle_schema::proto::ClientInfo {
+                    device_model: "fixture-device".into(),
+                    platform: "test".into(),
+                    os_version: "1".into(),
+                    app_version: "1".into(),
+                    app_build: "0001".into(),
+                    ..Default::default()
+                }),
+                method: "/tinkle.v1.MessagesService/SendMessage".into(),
+                payload: Default::default(),
+            };
+            let response = client
+                .conn
+                .call(
+                    "/tinkle.v1.ConnectionService/InitConnect",
+                    init.encode_to_vec(),
+                    1_000,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                tinkle_schema::proto::InitConnectResponse::decode(response.as_slice())
+                    .unwrap()
+                    .payload
+                    .as_ref(),
+                b"ok"
+            );
+            assert_eq!(
+                client
+                    .conn
+                    .call("/tinkle.v1.MessagesService/SendMessage", vec![], 1_000)
+                    .await
+                    .unwrap(),
+                b"ok"
+            );
+            client.close().await;
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 6);
+        servers.join_next().await.unwrap().unwrap();
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -279,7 +386,7 @@ async fn returning_enrollment_proves_key_and_tuple_without_bearer() {
 }
 
 #[tokio::test]
-async fn explicit_enrollment_transition_retires_bootstrap_and_keeps_application_scope() {
+async fn raw_enrollment_replacement_retires_bootstrap_and_withdraws_application_scope() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let client = Client::new(
         support::config(listener.local_addr().unwrap()),
@@ -316,6 +423,8 @@ async fn explicit_enrollment_transition_retires_bootstrap_and_keeps_application_
         }
     });
     client.set_principal_user_id(42).await;
+    client.set_watch(vec![7]).await.unwrap();
+    assert_eq!(client.watch_list().await, vec![7]);
     client.connect().await.unwrap();
     let first = client.connection_id().await.unwrap();
     client
@@ -325,11 +434,19 @@ async fn explicit_enrollment_transition_retires_bootstrap_and_keeps_application_
         })
         .await
         .unwrap();
-    // No interests yet: replacement retires without initiating application work.
+    // Raw credentials do not attest an application user or inherit its watch set.
     assert!(!client.is_connected().await);
+    assert_eq!(client.principal().await, "unknown");
+    assert!(client.watch_list().await.is_empty());
+    assert!(client.tracked_targets().await.is_empty());
     client.connect().await.unwrap();
     assert_ne!(client.connection_id().await.unwrap(), first);
-    assert_eq!(client.principal().await, "user:42");
+    assert_eq!(client.principal().await, "unknown");
+    assert!(client.watch_list().await.is_empty());
+    assert!(matches!(
+        client.reconcile_target("target:room:7").await,
+        Err(TinkleError::Subscription(_))
+    ));
     assert_eq!(
         client
             .call_raw("/test.Echo/Call", vec![4], 1000)

@@ -186,18 +186,93 @@ impl TinkleClient {
     }
 
     /// Revoke every other device while retaining this device's enrollment.
+    /// An ambiguous result is Network with an unknown outcome, never Retryable;
+    /// do not automatically repeat this mutation after response loss or timeout.
     pub async fn revoke_other_sessions(&self) -> Result<bool, FfiError> {
         self.core_client()
             .account()
             .revoke_other_sessions()
             .await
-            .map_err(FfiError::from)
+            .map_err(revoke_other_sessions_error)
+    }
+}
+
+fn revoke_other_sessions_error(error: libtinkle::TinkleError) -> FfiError {
+    if error.is_unknown_outcome() {
+        FfiError::Network("revocation outcome unknown; do not retry automatically".into())
+    } else {
+        FfiError::from(error)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn revocation_unknown_outcomes_are_not_retryable() {
+        use syntra_core::{ErrorCode, SyntraError};
+        let mut errors = vec![
+            SyntraError::Unavailable("lost response".into()),
+            SyntraError::DeadlineExceeded("expired".into()),
+            SyntraError::Closed("closed".into()),
+        ];
+        for code in [
+            ErrorCode::Unavailable,
+            ErrorCode::DeadlineExceeded,
+            ErrorCode::Internal,
+            ErrorCode::Unknown,
+        ] {
+            errors.push(SyntraError::Rpc {
+                code,
+                raw_code: None,
+                message: "untrusted diagnostic".into(),
+            });
+        }
+        for error in errors {
+            let error = libtinkle::TinkleError::Syntra(error);
+            assert!(error.is_unknown_outcome());
+            assert!(matches!(
+                revoke_other_sessions_error(error),
+                FfiError::Network(message)
+                    if message == "revocation outcome unknown; do not retry automatically"
+            ));
+        }
+    }
+
+    #[test]
+    fn revocation_preserves_other_error_mappings() {
+        use syntra_core::{ErrorCode, SyntraError};
+        let mut errors = vec![
+            libtinkle::TinkleError::NotConnected("offline".into()),
+            libtinkle::TinkleError::SignedOut,
+            libtinkle::TinkleError::Codec("invalid input".into()),
+            libtinkle::TinkleError::NetworkUnavailable,
+            libtinkle::TinkleError::Syntra(SyntraError::Cancelled("cancelled".into())),
+        ];
+        for code in [
+            ErrorCode::Unauthenticated,
+            ErrorCode::PermissionDenied,
+            ErrorCode::ResourceExhausted,
+            ErrorCode::InvalidArgument,
+        ] {
+            errors.push(libtinkle::TinkleError::Syntra(SyntraError::Rpc {
+                code,
+                raw_code: None,
+                message: "rejected".into(),
+            }));
+        }
+        for error in errors {
+            assert!(!error.is_unknown_outcome());
+            let expected = FfiError::from(error.clone());
+            let actual = revoke_other_sessions_error(error);
+            assert_eq!(
+                std::mem::discriminant(&actual),
+                std::mem::discriminant(&expected)
+            );
+            assert_eq!(actual.to_string(), expected.to_string());
+        }
+    }
 
     /// Mapping preserves every public field, including large dates and build strings.
     #[test]

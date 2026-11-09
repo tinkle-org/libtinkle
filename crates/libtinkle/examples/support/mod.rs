@@ -1,5 +1,12 @@
 //! Example host adapter: restore an ACTIVE opaque record through a platform
 //! secure-store helper executable. No plaintext key file or command-line key.
+//!
+//! Both `send-message` and `subscribe` require `TINKLE_HOST` (bare host),
+//! `TINKLE_SERVER_PIN` (64 hex characters), `TINKLE_SERVER_KEY_ID`, `TINKLE_SCOPE`,
+//! `TINKLE_DEVICE_MODEL`, `TINKLE_PLATFORM`, `TINKLE_OS_VERSION`,
+//! `TINKLE_APP_VERSION`, `TINKLE_APP_BUILD`, and `TINKLE_SECURE_STORE_HELPER`.
+//! Optional `TINKLE_PORT` is a nonzero u16 TCP port and disables fallback dialing.
+//! Without it, the SDK defaults to TCP 443 with TCP 80 as dial-failure fallback.
 use libtinkle::{Client, ClientConfig, InMemoryCursorStore, ServerTrust, TrustSource};
 use zeroize::Zeroize;
 
@@ -69,7 +76,7 @@ pub async fn client() -> anyhow::Result<Client> {
         scope: std::env::var("TINKLE_SCOPE")?,
     };
     trust.validate()?;
-    let config = ClientConfig::new(
+    let mut config = ClientConfig::new(
         std::env::var("TINKLE_HOST")?,
         libtinkle::ClientInfo::new(
             std::env::var("TINKLE_DEVICE_MODEL")?,
@@ -80,6 +87,14 @@ pub async fn client() -> anyhow::Result<Client> {
             Default::default(),
         )?,
     );
+    match std::env::var("TINKLE_PORT") {
+        Ok(port) => {
+            config.primary_port = port.parse::<std::num::NonZeroU16>()?.get();
+            config.fallback_port = None;
+        }
+        Err(std::env::VarError::NotPresent) => {}
+        Err(error) => return Err(error.into()),
+    }
     let client = Client::new(
         config,
         TrustSource::Bootstrap(trust),

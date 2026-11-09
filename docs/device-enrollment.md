@@ -159,7 +159,7 @@ implicitly using this high-level policy; see
 
 `crates/libtinkle/src/logout.rs` attaches the retained budget to the first cleanup
 cause; `client.rs` consumes it without restarting the call budget after lifecycle
-waits. See the [scoped paired qualification](../../chorus/src/controllers/client-api/tests/native_acceptance/README.md#current-qualification)
+waits. See the [scoped paired qualification](https://github.com/tinkle-org/chorus/blob/d639d617a30bf3c2246e9491dd4af0a9c7674fc3/src/controllers/client-api/tests/native_acceptance/README.md#current-qualification)
 for tested behavior and limits.
 
 `Client::logout()` first irreversibly fences this Client's authorization
@@ -344,12 +344,15 @@ python3 scripts/with-native-fixture.py --port 0 cargo test --locked -p libtinkle
 
 For full production-handler application acceptance with PostgreSQL, Vault, Redis,
 and private workload mTLS, use the separate
-[Chorus runner](../../chorus/src/controllers/client-api/tests/native_acceptance/README.md#run).
+[Chorus runner](https://github.com/tinkle-org/chorus/blob/d639d617a30bf3c2246e9491dd4af0a9c7674fc3/src/controllers/client-api/tests/native_acceptance/README.md#run).
+The runner and qualification links require private Chorus repository access; no
+public published copy was found. See the
+[access limitation](../PROTO_PINNING.md#sdk-pins-and-qualification).
 Its file-host adapter does not qualify platform protected storage. The
-[scoped paired result](../../chorus/src/controllers/client-api/tests/native_acceptance/README.md#current-qualification)
+[scoped paired result](https://github.com/tinkle-org/chorus/blob/d639d617a30bf3c2246e9491dd4af0a9c7674fc3/src/controllers/client-api/tests/native_acceptance/README.md#current-qualification)
 covers the tested consumer implementation/published pins, not broader standalone
 checks or production rollout. Paired regression code and reproduction commands
-remain in the linked local evidence bundle, not this repository.
+remain in the run owner's external evidence bundle, not this repository.
 
 Parent integration must start the actual Go client-api and provide trusted pin
 configuration independently. This SDK never starts or builds Go fixtures.

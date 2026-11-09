@@ -12,7 +12,6 @@ use syntra_runtime::CancelToken;
 
 pub(crate) const KEEP_ALIVE_METHOD: &str = "/tinkle.v1.ConnectionService/KeepAlive";
 pub(crate) const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
-pub(crate) const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Public Client clones own this anchor; background callers do not retain it.
 /// Dropping the last host owner cancels background work instead of forming a
@@ -148,15 +147,13 @@ async fn run(client: Client, generation: Arc<LiveGeneration>) {
         };
         sequence = next;
         let request = tinkle_schema::proto::KeepAliveRequest { sequence };
-        // The actual public call path owns initialization, cancellation and RPC
-        // policy. The outer ceiling also bounds waiting for any local live lock.
-        let result = tokio::time::timeout(
-            KEEP_ALIVE_TIMEOUT,
-            client.call_raw(KEEP_ALIVE_METHOD, request.encode_to_vec(), 5_000),
-        )
-        .await;
+        // The shared call path bounds local waits too. No dispatched heartbeat
+        // means contention, not evidence that this connection failed.
+        let Some(result) = client.call_keep_alive(request.encode_to_vec()).await else {
+            continue;
+        };
         let result = match result {
-            Ok(Ok(bytes)) => tinkle_schema::proto::KeepAliveResponse::decode(bytes.as_slice())
+            Ok(bytes) => tinkle_schema::proto::KeepAliveResponse::decode(bytes.as_slice())
                 .map_err(|_| TinkleError::Codec("invalid KeepAlive response".into()))
                 .and_then(|response| {
                     if response.sequence == sequence {
@@ -165,13 +162,8 @@ async fn run(client: Client, generation: Arc<LiveGeneration>) {
                         Err(TinkleError::Codec("KeepAlive sequence mismatch".into()))
                     }
                 }),
-            Ok(Err(TinkleError::NotConnected(_))) => Err(TinkleError::NetworkUnavailable),
-            Ok(Err(error)) => Err(error),
-            Err(_) => Err(TinkleError::Syntra(
-                syntra_core::SyntraError::DeadlineExceeded(
-                    "KeepAlive budget elapsed; outcome unknown".into(),
-                ),
-            )),
+            Err(TinkleError::NotConnected(_)) => Err(TinkleError::NetworkUnavailable),
+            Err(error) => Err(error),
         };
         if let Err(error) = result {
             client.fail_liveness(&generation, &error).await;

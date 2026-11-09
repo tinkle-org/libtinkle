@@ -113,6 +113,11 @@ pub trait SecureEnrollmentStore: Send + Sync {
     }
     /// Atomically compare the full revision, reject tombstoned namespaces, write
     /// the record, and return a fresh revision. None means superseded, no write.
+    /// A caller timeout/cancellation does not cancel the retained transaction:
+    /// its exact receipt is required to fence later cleanup. Never return another
+    /// writer's revision as this operation's acknowledgement.
+    /// Until that receipt arrives, conditional cleanup fails closed with a
+    /// retryable storage error; a permanently stalled transaction needs host recovery.
     async fn commit_current(
         &self,
         _expected_revision: &str,
@@ -155,7 +160,7 @@ pub trait SecureEnrollmentStore: Send + Sync {
     async fn load_active(&self) -> Result<Option<SecretBlob>, SecureStoreError>;
 }
 
-/// Specific host install permission; cancellation retains a bounded release owner.
+/// Specific host install permission; cancellation retains a retrying release owner.
 pub(crate) struct RestorePermit {
     store: Arc<dyn SecureEnrollmentStore>,
     id: Option<String>,
@@ -217,7 +222,26 @@ impl RestorePermit {
     }
 
     /// Release only after a failed install has withdrawn its exact runtime binding.
-    async fn finish<T>(&mut self, result: Result<T, TinkleError>) -> Result<T, TinkleError> {
+    async fn finish<T: Send + 'static>(
+        &mut self,
+        result: Result<T, TinkleError>,
+    ) -> Result<T, TinkleError> {
+        // Finalization is a commit point: after transfer, cancelling the waiter
+        // cannot race a successful release with a second withdrawal owner.
+        let mut owner = Self {
+            store: self.store.clone(),
+            id: self.id.take(),
+            client: self.client.background_clone(),
+            runtime: self.runtime.clone(),
+            binding: self.binding.take(),
+            installed: self.installed.take(),
+        };
+        tokio::spawn(async move { owner.finish_owned(result).await })
+            .await
+            .map_err(|_| storage_error())?
+    }
+
+    async fn finish_owned<T>(&mut self, result: Result<T, TinkleError>) -> Result<T, TinkleError> {
         if result.is_err() {
             self.clear_binding().await;
         }
@@ -245,27 +269,35 @@ impl RestorePermit {
 
 impl Drop for RestorePermit {
     fn drop(&mut self) {
+        let Some(runtime) = self.runtime.take() else {
+            // Runtime shutdown can drop the cleanup owner before withdrawal or
+            // release completes. End here; host exclusion remains fail-closed.
+            if let Some((secret, _)) = &self.installed {
+                secret.retire();
+            }
+            return;
+        };
         let binding = self.binding.take();
         let id = self.id.take();
         if binding.is_none() && id.is_none() {
             return;
         }
-        let client = self.client.background_clone();
-        let installed = self.installed.take();
-        let store = self.store.clone();
-        if let Some(runtime) = &self.runtime {
-            runtime.spawn(async move {
-                if let Some(binding) = binding {
-                    client
-                        .clear_failed_restore(&binding, installed.as_ref())
-                        .await;
-                }
-                if let Some(id) = id {
-                    let _ =
-                        tokio::time::timeout(Duration::from_secs(10), store.end_restore(&id)).await;
-                }
-            });
-        }
+        let mut owner = Self {
+            store: self.store.clone(),
+            id,
+            client: self.client.background_clone(),
+            runtime: None,
+            binding,
+            installed: self.installed.take(),
+        };
+        runtime.spawn(async move {
+            owner.clear_binding().await;
+            // Each callback is bounded, but a failed release must retain its
+            // exact ID and exclusion until the idempotent retry succeeds.
+            while owner.release().await.is_err() {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        });
     }
 }
 
@@ -649,7 +681,7 @@ impl ParsedRecord {
 async fn commit(
     client: &Client,
     epoch: &EnrollmentEpoch,
-    store: &dyn SecureEnrollmentStore,
+    store: &Arc<dyn SecureEnrollmentStore>,
     kind: SecureWrite,
     record: &Record,
 ) -> Result<(), TinkleError> {
@@ -657,11 +689,23 @@ async fn commit(
     // A pending operation or ambiguous activation must fence predecessor evidence.
     client.invalidate_retirement_binding().await;
     let encoded = record.encode()?;
-    let revision = client.authorization.store_revision(store);
-    tokio::time::timeout(Duration::from_secs(10), async {
+    let revision = client.authorization.store_revision(store.as_ref());
+    // Only conditional writes need an exact revision receipt before cleanup.
+    // Legacy clear must dominate old writes even when their callbacks stall.
+    let writing = revision
+        .as_ref()
+        .map(|_| client.authorization.begin_store_write(store.as_ref()))
+        .transpose()?;
+    let store = store.clone();
+    let owner = client.background_clone();
+    let operation_id = record.operation_id.clone();
+    // Do not drop the host future on waiter timeout/cancellation: only its exact
+    // receipt can attribute the resulting revision. Snapshot freshness cannot.
+    let task = tokio::spawn(async move {
+        let _writing = writing;
         if let Some(previous) = revision.as_deref() {
             let next = store
-                .commit_current(previous, kind, &record.operation_id, &encoded)
+                .commit_current(previous, kind, &operation_id, &encoded)
                 .await
                 .map_err(|_| storage_error())?
                 .ok_or_else(storage_error)?;
@@ -670,19 +714,23 @@ async fn commit(
             }
             // A completed pre-fence transaction must update cleanup's expected
             // revision even when sign-out occurred while the host was writing.
-            client
-                .authorization
-                .update_store_revision(store, revision.as_deref(), Some(next))?;
+            owner.authorization.update_store_revision(
+                store.as_ref(),
+                revision.as_deref(),
+                Some(next),
+            )?;
         } else {
             store
-                .commit(kind, &record.operation_id, &encoded)
+                .commit(kind, &operation_id, &encoded)
                 .await
                 .map_err(|_| storage_error())?;
         }
         Ok::<_, TinkleError>(())
-    })
-    .await
-    .map_err(|_| storage_error())??;
+    });
+    tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .map_err(|_| storage_error())?
+        .map_err(|_| storage_error())??;
     epoch.check(client)
 }
 
@@ -752,14 +800,7 @@ impl Client {
         let _flow = self.enrollment_lock.lock().await;
         self.bind_namespace(&epoch, store.clone()).await?;
         let record = fresh_operation(self.enrollment_trust().await, &epoch)?;
-        commit(
-            self,
-            &epoch,
-            store.as_ref(),
-            SecureWrite::Operation,
-            &record,
-        )
-        .await?;
+        commit(self, &epoch, &store, SecureWrite::Operation, &record).await?;
         Ok(DurableOperation {
             record,
             store,
@@ -858,6 +899,13 @@ impl Client {
             }
             install_flow = Some(self.enrollment_lock.lock().await);
             epoch.check(self)?;
+            if conditional && validate_status(&status).is_err() {
+                let _source = self.connect_lock.lock().await;
+                if let Some(binding) = permit.binding.take() {
+                    self.retirement.retain_negative_only(&binding);
+                }
+                return Err(invalid());
+            }
             let record = Record::decode(&blob, &epoch)?;
             self.install_enrollment(&record, &epoch, store, &mut permit)
                 .await?;
@@ -986,7 +1034,7 @@ impl Client {
         commit(
             self,
             &operation.epoch,
-            operation.store.as_ref(),
+            &operation.store,
             SecureWrite::Candidate,
             &record,
         )
@@ -1035,7 +1083,7 @@ impl Client {
         commit(
             self,
             &operation.epoch,
-            operation.store.as_ref(),
+            &operation.store,
             SecureWrite::Candidate,
             &record,
         )
@@ -1103,7 +1151,7 @@ impl Client {
         commit(
             self,
             &persisted.epoch,
-            persisted.store.as_ref(),
+            &persisted.store,
             SecureWrite::Active,
             &active,
         )
@@ -1248,4 +1296,718 @@ pub(crate) fn rotate_request(
 }
 pub(crate) fn operation_trust(operation: &DurableOperation) -> &ServerTrust {
     &operation.record.trust
+}
+
+#[cfg(test)]
+pub(crate) mod review_tests {
+    use super::*;
+    use std::{
+        collections::HashMap,
+        sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            Mutex,
+        },
+    };
+
+    #[derive(Default)]
+    pub(crate) struct ReviewStore {
+        pub(crate) revision: Mutex<u64>,
+        pub(crate) tombstone: AtomicBool,
+        active: Mutex<Option<Vec<u8>>>,
+        operations: Mutex<HashMap<String, Vec<u8>>>,
+        pub(crate) clears: AtomicUsize,
+        pub(crate) snapshots: AtomicUsize,
+        hold_commit: AtomicBool,
+        commit_entered: tokio::sync::Notify,
+        commit_released: tokio::sync::Notify,
+        hold_end: AtomicBool,
+        end_entered: tokio::sync::Notify,
+        end_released: tokio::sync::Notify,
+        end_failures: AtomicUsize,
+        end_ids: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl SecureEnrollmentStore for ReviewStore {
+        async fn namespace_snapshot(
+            &self,
+        ) -> Result<Option<EnrollmentNamespaceSnapshot>, SecureStoreError> {
+            self.snapshots.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(EnrollmentNamespaceSnapshot {
+                incarnation: "review-namespace".into(),
+                revision: self.revision.lock().unwrap().to_string(),
+                cleanup_pending: self.tombstone.load(Ordering::SeqCst),
+                active: self
+                    .active
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map(|bytes| SecretBlob::new(bytes.clone())),
+                has_pending: false,
+            }))
+        }
+        async fn commit_current(
+            &self,
+            expected: &str,
+            _: SecureWrite,
+            id: &str,
+            record: &SecretBlob,
+        ) -> Result<Option<String>, SecureStoreError> {
+            let revision = {
+                let mut revision = self.revision.lock().unwrap();
+                if expected != revision.to_string() || self.tombstone.load(Ordering::SeqCst) {
+                    return Ok(None);
+                }
+                self.operations
+                    .lock()
+                    .unwrap()
+                    .insert(id.into(), record.expose_secret().to_vec());
+                *revision += 1;
+                revision.to_string()
+            };
+            self.commit_entered.notify_one();
+            if self.hold_commit.load(Ordering::SeqCst) {
+                self.commit_released.notified().await;
+            }
+            Ok(Some(revision))
+        }
+        async fn end_restore(&self, id: &str) -> Result<(), SecureStoreError> {
+            self.end_ids.lock().unwrap().push(id.into());
+            self.end_entered.notify_one();
+            if self.hold_end.load(Ordering::SeqCst) {
+                self.end_released.notified().await;
+            }
+            let mut failures = self.end_failures.load(Ordering::SeqCst);
+            while failures > 0 {
+                match self.end_failures.compare_exchange(
+                    failures,
+                    failures - 1,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                ) {
+                    Ok(_) => return Err(SecureStoreError),
+                    Err(current) => failures = current,
+                }
+            }
+            Ok(())
+        }
+        async fn begin_clear(&self, expected: &str) -> Result<bool, SecureStoreError> {
+            if expected != self.revision.lock().unwrap().to_string() {
+                return Ok(false);
+            }
+            self.tombstone.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        async fn finish_clear(&self, expected: &str) -> Result<bool, SecureStoreError> {
+            if expected != self.revision.lock().unwrap().to_string()
+                || !self.tombstone.load(Ordering::SeqCst)
+            {
+                return Ok(false);
+            }
+            self.clears.fetch_add(1, Ordering::SeqCst);
+            self.operations.lock().unwrap().clear();
+            self.active.lock().unwrap().take();
+            Ok(true)
+        }
+        async fn clear(&self) -> Result<(), SecureStoreError> {
+            panic!("conditional only")
+        }
+        async fn commit(
+            &self,
+            _: SecureWrite,
+            _: &str,
+            _: &SecretBlob,
+        ) -> Result<(), SecureStoreError> {
+            panic!("conditional only")
+        }
+        async fn load_operation(&self, id: &str) -> Result<Option<SecretBlob>, SecureStoreError> {
+            Ok(self
+                .operations
+                .lock()
+                .unwrap()
+                .get(id)
+                .map(|bytes| SecretBlob::new(bytes.clone())))
+        }
+        async fn load_active(&self) -> Result<Option<SecretBlob>, SecureStoreError> {
+            Ok(self
+                .active
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|bytes| SecretBlob::new(bytes.clone())))
+        }
+    }
+
+    pub(crate) fn client(returning: bool) -> Client {
+        let trust = ServerTrust {
+            server_public_key: [1; 32],
+            server_key_id: 7,
+            scope: "review".into(),
+        };
+        let source = if returning {
+            TrustSource::Returning {
+                trust,
+                enrollment: Enrollment::new([9; 32], [8; 8], 1).unwrap(),
+            }
+        } else {
+            TrustSource::Bootstrap(trust)
+        };
+        let mut config = crate::ClientConfig::new(
+            "127.0.0.1",
+            crate::ClientInfo::new(
+                "review".into(),
+                "test".into(),
+                "1".into(),
+                "1".into(),
+                "1".into(),
+                Default::default(),
+            )
+            .unwrap(),
+        );
+        config.primary_port = 0;
+        config.fallback_port = None;
+        Client::new(config, source, crate::InMemoryCursorStore::new())
+    }
+
+    fn active(client: &Client, epoch: &EnrollmentEpoch) -> Record {
+        let mut record = fresh_operation(
+            ServerTrust {
+                server_public_key: [1; 32],
+                server_key_id: 7,
+                scope: "review".into(),
+            },
+            epoch,
+        )
+        .unwrap();
+        record.status = Some(DeviceEnrollmentStatus {
+            operation_id: record.operation_id.clone(),
+            session_id: "12345678-1234-4234-8234-123456789abc".into(),
+            handle: vec![8; 8].into(),
+            enrollment_epoch: 1,
+            account_auth_epoch: 1,
+            user_id: 42,
+            scope: DeviceKeyScope::Account as i32,
+            state: DeviceEnrollmentState::Active as i32,
+            expires_at: Some(prost_types::Timestamp {
+                seconds: 1,
+                nanos: 0,
+            }),
+        });
+        record.key = Some(epoch.secret(Zeroizing::new([9; 32])).unwrap());
+        epoch.check(client).unwrap();
+        record
+    }
+
+    #[test]
+    fn review_swift_active_vector_matches_private_record_encoder_and_validates_returning() {
+        let client = client(false);
+        let epoch = client.authorization.generation().unwrap();
+        let status = DeviceEnrollmentStatus {
+            operation_id: "11111111-1111-4111-8111-111111111111".into(),
+            session_id: "22222222-2222-4222-8222-222222222222".into(),
+            handle: vec![8; 8].into(),
+            enrollment_epoch: 1,
+            scope: DeviceKeyScope::Account as i32,
+            expires_at: Some(prost_types::Timestamp {
+                seconds: 253_402_300_799,
+                nanos: 0,
+            }),
+            state: DeviceEnrollmentState::Active as i32,
+            user_id: 42,
+            account_auth_epoch: 1,
+        };
+        let record = Record {
+            operation_id: status.operation_id.clone(),
+            capability: epoch.secret(Zeroizing::new([0x11; 32])).unwrap(),
+            trust: ServerTrust {
+                server_public_key: [1; 32],
+                server_key_id: 7,
+                scope: "fixture".into(),
+            },
+            status: Some(status.clone()),
+            key: Some(epoch.secret(Zeroizing::new([0x22; 32])).unwrap()),
+        };
+        let blob = record.encode().unwrap();
+        let expected: String = blob
+            .expose_secret()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        // Shared as Swift source so consumers need no resource-bundle or API change.
+        let asset = include_str!(
+            "../../../packages/swift/Tests/TinkleSDKTests/EnrollmentReviewVector.swift"
+        );
+        let actual = asset
+            .split("static let activeRecordHex = \"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap();
+        assert_eq!(actual, expected);
+        let restored = Record::decode(&blob, &epoch).unwrap();
+        assert_eq!(restored.status.as_ref(), Some(&status));
+        assert!(matches!(
+            restored.returning().unwrap(),
+            TrustSource::Returning { .. }
+        ));
+    }
+
+    pub(crate) fn expired_store(client: &Client) -> Arc<ReviewStore> {
+        let store = Arc::new(ReviewStore::default());
+        let record = active(client, &client.authorization.generation().unwrap());
+        *store.active.lock().unwrap() = Some(record.encode().unwrap().expose_secret().to_vec());
+        store
+    }
+
+    async fn installed_permit(client: &Client, store: Arc<ReviewStore>) -> RestorePermit {
+        let record = active(client, &client.authorization.generation().unwrap());
+        let enrollment = Enrollment::new([9; 32], [8; 8], 1).unwrap();
+        let secret = enrollment.secret();
+        *client.trust_source.write().await = TrustSource::Returning {
+            trust: record.trust.clone(),
+            enrollment,
+        };
+        let binding = client.retirement.bind(
+            record.trust,
+            record.status.as_ref().unwrap(),
+            store.clone(),
+            false,
+            true,
+        );
+        let mut permit = RestorePermit::new(client, store, Some(binding));
+        permit.installed = Some((secret, record.status.unwrap()));
+        permit.id = Some("review-permit".into());
+        permit
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn review_late_commit_receipt_survives_timeout_and_cancellation() {
+        for cancel in [false, true] {
+            let client = client(false);
+            let store = Arc::new(ReviewStore::default());
+            store.hold_commit.store(true, Ordering::SeqCst);
+            let caller = client.clone();
+            let host = store.clone();
+            let task = tokio::spawn(async move { caller.prepare_enrollment(host).await });
+            store.commit_entered.notified().await;
+            if cancel {
+                task.abort();
+                assert!(task.await.unwrap_err().is_cancelled());
+            } else {
+                tokio::time::advance(Duration::from_secs(10)).await;
+                assert!(matches!(task.await.unwrap(), Err(TinkleError::SecureStore)));
+            }
+            assert_eq!(
+                client
+                    .authorization
+                    .store_revision(store.as_ref())
+                    .as_deref(),
+                Some("0")
+            );
+            assert!(client.logout().await.is_err());
+            assert_eq!(store.clears.load(Ordering::SeqCst), 0);
+            store.commit_released.notify_one();
+            while client.authorization.has_pending_store_write() {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(
+                client
+                    .authorization
+                    .store_revision(store.as_ref())
+                    .as_deref(),
+                Some("1")
+            );
+            client.logout().await.unwrap();
+            assert_eq!(store.clears.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[derive(Default)]
+    struct StalledLegacyStore {
+        // A successful legacy clear must dominate an earlier, still-pending write.
+        state: Mutex<(bool, Option<Vec<u8>>)>,
+        entered: tokio::sync::Notify,
+        resume: tokio::sync::Notify,
+        finished: tokio::sync::Notify,
+        clears: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl SecureEnrollmentStore for StalledLegacyStore {
+        async fn clear(&self) -> Result<(), SecureStoreError> {
+            *self.state.lock().unwrap() = (true, None);
+            self.clears.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        async fn commit(
+            &self,
+            _: SecureWrite,
+            _: &str,
+            record: &SecretBlob,
+        ) -> Result<(), SecureStoreError> {
+            self.entered.notify_one();
+            self.resume.notified().await;
+            let result = {
+                let mut state = self.state.lock().unwrap();
+                if state.0 {
+                    Err(SecureStoreError)
+                } else {
+                    state.1 = Some(record.expose_secret().to_vec());
+                    Ok(())
+                }
+            };
+            self.finished.notify_one();
+            result
+        }
+        async fn load_operation(&self, _: &str) -> Result<Option<SecretBlob>, SecureStoreError> {
+            Ok(self
+                .state
+                .lock()
+                .unwrap()
+                .1
+                .as_ref()
+                .map(|bytes| SecretBlob::new(bytes.clone())))
+        }
+        async fn load_active(&self) -> Result<Option<SecretBlob>, SecureStoreError> {
+            Ok(None)
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn review_stalled_legacy_commit_does_not_block_logout_or_revive_after_clear() {
+        for cancel in [false, true] {
+            let client = client(false);
+            let store = Arc::new(StalledLegacyStore::default());
+            let caller = client.clone();
+            let host = store.clone();
+            let prepare = tokio::spawn(async move { caller.prepare_enrollment(host).await });
+            store.entered.notified().await;
+            if cancel {
+                prepare.abort();
+                assert!(prepare.await.unwrap_err().is_cancelled());
+            } else {
+                tokio::time::advance(Duration::from_secs(10)).await;
+                assert!(matches!(
+                    prepare.await.unwrap(),
+                    Err(TinkleError::SecureStore)
+                ));
+            }
+            assert!(
+                !tokio::time::timeout(Duration::from_secs(1), client.logout())
+                    .await
+                    .unwrap()
+                    .unwrap()
+            );
+            assert_eq!(store.clears.load(Ordering::SeqCst), 1);
+            assert!(!client.authorization.has_pending_store_write());
+            let status = client.session_status().await;
+            assert_eq!(status.cleanup, crate::SessionCleanup::Complete);
+            assert!(!status.restart_safe_store);
+            store.resume.notify_one();
+            store.finished.notified().await;
+            let state = store.state.lock().unwrap();
+            assert!(state.0);
+            assert!(
+                state.1.is_none(),
+                "late legacy writes must respect durable clear"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn review_late_receipt_never_adopts_another_coordinators_revision() {
+        let client = client(false);
+        let store = Arc::new(ReviewStore::default());
+        store.hold_commit.store(true, Ordering::SeqCst);
+        let caller = client.clone();
+        let host = store.clone();
+        let task = tokio::spawn(async move { caller.prepare_enrollment(host).await });
+        store.commit_entered.notified().await;
+        task.abort();
+        let _ = task.await;
+        *store.revision.lock().unwrap() = 2;
+        store.commit_released.notify_one();
+        while client.authorization.has_pending_store_write() {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            client
+                .authorization
+                .store_revision(store.as_ref())
+                .as_deref(),
+            Some("1")
+        );
+        assert!(client.logout().await.is_err());
+        assert_eq!(store.clears.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn review_late_receipt_cannot_overwrite_a_changed_local_expected_revision() {
+        let client = client(false);
+        let store = Arc::new(ReviewStore::default());
+        store.hold_commit.store(true, Ordering::SeqCst);
+        let caller = client.clone();
+        let host = store.clone();
+        let task = tokio::spawn(async move { caller.prepare_enrollment(host).await });
+        store.commit_entered.notified().await;
+        client
+            .authorization
+            .update_store_revision(store.as_ref(), Some("0"), Some("local-successor".into()))
+            .unwrap();
+        store.commit_released.notify_one();
+        assert!(matches!(task.await.unwrap(), Err(TinkleError::SecureStore)));
+        assert_eq!(
+            client
+                .authorization
+                .store_revision(store.as_ref())
+                .as_deref(),
+            Some("local-successor")
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn review_cancelled_permit_withdraws_before_release_and_retries_same_id() {
+        let client = client(false);
+        let store = Arc::new(ReviewStore::default());
+        let permit = installed_permit(&client, store.clone()).await;
+        store.end_failures.store(2, Ordering::SeqCst);
+        let connection = client.connect_lock.lock().await;
+        drop(permit);
+        tokio::task::yield_now().await;
+        assert!(store.end_ids.lock().unwrap().is_empty());
+        drop(connection);
+        for _ in 0..3 {
+            store.end_entered.notified().await;
+            tokio::time::advance(Duration::from_secs(1)).await;
+        }
+        assert!(!client.retirement.is_restoring());
+        assert!(!client.has_returning_source().await);
+        assert_eq!(*store.end_ids.lock().unwrap(), vec!["review-permit"; 3]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn review_release_finalizer_has_one_owner_after_waiter_cancellation() {
+        let client = client(false);
+        let store = Arc::new(ReviewStore::default());
+        store.hold_end.store(true, Ordering::SeqCst);
+        let mut permit = installed_permit(&client, store.clone()).await;
+        let waiter = tokio::spawn(async move { permit.finish(Ok(())).await });
+        store.end_entered.notified().await;
+        waiter.abort();
+        let _ = waiter.await;
+        store.end_released.notify_one();
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(20)).await;
+        assert_eq!(*store.end_ids.lock().unwrap(), vec!["review-permit"]);
+        assert!(client.has_returning_source().await);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn review_release_timeout_withdraws_and_keeps_id_for_retry() {
+        let client = client(false);
+        let store = Arc::new(ReviewStore::default());
+        store.hold_end.store(true, Ordering::SeqCst);
+        let mut permit = installed_permit(&client, store.clone()).await;
+        let waiter = tokio::spawn(async move { permit.finish(Ok(())).await });
+        store.end_entered.notified().await;
+        tokio::time::advance(Duration::from_secs(10)).await;
+        assert!(matches!(
+            waiter.await.unwrap(),
+            Err(TinkleError::SecureStore)
+        ));
+        store.end_entered.notified().await;
+        assert!(!client.has_returning_source().await);
+        store.hold_end.store(false, Ordering::SeqCst);
+        store.end_released.notify_one();
+        tokio::task::yield_now().await;
+        assert_eq!(*store.end_ids.lock().unwrap(), vec!["review-permit"; 2]);
+    }
+
+    fn shutdown_unfinished_restore(block_withdrawal: bool, pending_callback: bool) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let client = client(false);
+        let store = Arc::new(ReviewStore::default());
+        store.hold_end.store(pending_callback, Ordering::SeqCst);
+        store.end_failures.store(usize::MAX, Ordering::SeqCst);
+        let permit = runtime.block_on(installed_permit(&client, store.clone()));
+        let secret = permit.installed.as_ref().unwrap().0.clone();
+        let connection = block_withdrawal.then(|| runtime.block_on(client.connect_lock.lock()));
+        runtime.block_on(async {
+            drop(permit);
+            if block_withdrawal {
+                tokio::task::yield_now().await;
+                assert!(store.end_ids.lock().unwrap().is_empty());
+            } else {
+                store.end_entered.notified().await;
+                assert_eq!(*store.end_ids.lock().unwrap(), vec!["review-permit"]);
+            }
+        });
+        runtime.shutdown_timeout(Duration::from_secs(1));
+        assert!(
+            secret.snapshot().is_err(),
+            "unfinished installation key must be retired"
+        );
+        // Shutdown must neither recurse nor manufacture a release acknowledgement.
+        assert_eq!(
+            store.end_ids.lock().unwrap().len(),
+            usize::from(!block_withdrawal)
+        );
+        drop(connection);
+        let retained_store = Arc::downgrade(&store);
+        drop(client);
+        drop(store);
+        assert!(
+            retained_store.upgrade().is_none(),
+            "cleanup owner leaked its store"
+        );
+    }
+
+    #[test]
+    fn review_runtime_shutdown_during_restore_release_callback_is_terminal() {
+        shutdown_unfinished_restore(false, true);
+    }
+
+    #[test]
+    fn review_runtime_shutdown_during_restore_release_retry_is_terminal() {
+        shutdown_unfinished_restore(false, false);
+    }
+
+    #[test]
+    fn review_runtime_shutdown_with_blocked_restore_withdrawal_is_terminal() {
+        shutdown_unfinished_restore(true, false);
+    }
+
+    #[tokio::test]
+    async fn review_expired_restore_keeps_negative_only_metadata_after_unavailable_status() {
+        let client = client(false);
+        let store = expired_store(&client);
+        assert!(client.restore_active_enrollment(store).await.is_err());
+        assert!(!client.has_returning_source().await);
+        assert!(!client.retirement.is_restoring());
+        // A retained negative-only binding is still eligible for the foreground
+        // observer; absence would leave the previous Unavailable result untouched.
+        assert_eq!(
+            client.session_status().await.enrollment_observation,
+            crate::EnrollmentObservation::Unavailable
+        );
+        client.stop().await;
+    }
+
+    #[tokio::test]
+    async fn review_expired_restore_unknown_and_temporary_rpc_error_never_grant_admission() {
+        use syntra_core::secure_channel::{self, Carrier, Mode, ServerConfig};
+        for temporary_error in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let (key, pin) = secure_channel::generate_server_key().unwrap();
+            let trust = ServerTrust {
+                server_public_key: pin,
+                server_key_id: 7,
+                scope: "review".into(),
+            };
+            let info = crate::ClientInfo::new(
+                "review".into(),
+                "test".into(),
+                "1".into(),
+                "1".into(),
+                "1".into(),
+                Default::default(),
+            )
+            .unwrap();
+            let mut config = crate::ClientConfig::new("127.0.0.1", info);
+            config.primary_port = listener.local_addr().unwrap().port();
+            config.fallback_port = None;
+            let client = Client::new(
+                config,
+                TrustSource::Bootstrap(trust.clone()),
+                crate::InMemoryCursorStore::new(),
+            );
+            let mut record = active(&client, &client.authorization.generation().unwrap());
+            record.trust = trust;
+            let store = Arc::new(ReviewStore::default());
+            *store.active.lock().unwrap() = Some(record.encode().unwrap().expose_secret().to_vec());
+            let server = tokio::spawn(async move {
+                let security = ServerConfig {
+                    mode: Mode::Bootstrap,
+                    carrier: Carrier::Tcp,
+                    server_key_id: 7,
+                    scope: b"review".to_vec(),
+                    private_key: key,
+                    store: None,
+                };
+                let factory: Arc<dyn syntra_net::AuthenticatorFactory> = Arc::new(
+                    |_: &secure_channel::VerifiedIdentity| -> Result<
+                        Arc<dyn syntra_runtime::Authenticator>,
+                        syntra_runtime::AuthError,
+                    > { Ok(Arc::new(syntra_runtime::AllowAnonymous)) },
+                );
+                let handler = Arc::new(syntra_runtime::FnHandler(
+                    move |method: String, bytes: Vec<u8>, _| async move {
+                        assert_eq!(method, "/tinkle.v1.ConnectionService/InitConnect");
+                        let init = proto::InitConnectRequest::decode(bytes.as_slice()).unwrap();
+                        assert_eq!(
+                            init.method,
+                            tinkle_schema::methods::authservice::GET_ENROLLMENT_DISPOSITION
+                        );
+                        if temporary_error {
+                            return syntra_runtime::HandlerOutcome::error(
+                                syntra_core::ErrorCode::Unavailable,
+                                "temporary",
+                            );
+                        }
+                        let request =
+                            proto::GetEnrollmentDispositionRequest::decode(init.payload.as_ref())
+                                .unwrap();
+                        syntra_runtime::HandlerOutcome::Payload(
+                            proto::InitConnectResponse {
+                                payload: proto::GetEnrollmentDispositionResponse {
+                                    reference: request.reference,
+                                    disposition: proto::DeviceEnrollmentDisposition::Unknown as i32,
+                                }
+                                .encode_to_vec()
+                                .into(),
+                            }
+                            .encode_to_vec(),
+                        )
+                    },
+                ));
+                let (stream, _) = listener.accept().await.unwrap();
+                let handle = syntra_net::tcp::accept_stream(
+                    stream,
+                    &security,
+                    factory,
+                    handler,
+                    Default::default(),
+                    Default::default(),
+                )
+                .await
+                .unwrap();
+                while !handle.is_closed() {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                handle.close().await;
+            });
+            assert!(client
+                .restore_active_enrollment(store.clone())
+                .await
+                .is_err());
+            assert!(!client.has_returning_source().await);
+            assert!(!client.retirement.is_restoring());
+            assert_eq!(
+                client.session_status().await.enrollment_observation,
+                if temporary_error {
+                    crate::EnrollmentObservation::Unavailable
+                } else {
+                    crate::EnrollmentObservation::Unknown
+                }
+            );
+            assert!(store.active.lock().unwrap().is_some());
+            assert_eq!(store.clears.load(Ordering::SeqCst), 0);
+            client.stop().await;
+            server.await.unwrap();
+        }
+    }
 }

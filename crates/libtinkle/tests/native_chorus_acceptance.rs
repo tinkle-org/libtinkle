@@ -408,18 +408,115 @@ async fn private(path: &str, body: serde_json::Value) -> (u16, serde_json::Value
     socket.write_all(request.as_bytes()).await.unwrap();
     let mut raw = Zeroizing::new(Vec::new());
     socket.read_to_end(&mut raw).await.unwrap();
-    let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
-    let code = std::str::from_utf8(&raw[..split])
-        .unwrap()
+    private_response(&raw).expect("valid private capture HTTP/JSON response")
+}
+
+/// The private Go HTTP server may chunk responses; framing is not JSON data.
+fn private_response(raw: &[u8]) -> anyhow::Result<(u16, serde_json::Value)> {
+    let split = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or_else(|| anyhow::anyhow!("missing HTTP headers"))?;
+    let headers = std::str::from_utf8(&raw[..split])?;
+    let code = headers
         .split_whitespace()
         .nth(1)
-        .unwrap()
-        .parse()
-        .unwrap();
-    (
-        code,
-        serde_json::from_slice(&raw[split + 4..]).unwrap_or(serde_json::Value::Null),
-    )
+        .ok_or_else(|| anyhow::anyhow!("missing HTTP status"))?
+        .parse()?;
+    let encodings: Vec<_> = headers
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_once(':'))
+        .filter(|(name, _)| name.eq_ignore_ascii_case("transfer-encoding"))
+        .map(|(_, value)| value.trim())
+        .collect();
+    let mut body = &raw[split + 4..];
+    let mut decoded = Zeroizing::new(Vec::new());
+    if !encodings.is_empty() {
+        anyhow::ensure!(
+            encodings.len() == 1 && encodings[0].eq_ignore_ascii_case("chunked"),
+            "unsupported private HTTP transfer encoding"
+        );
+        loop {
+            let end = body
+                .windows(2)
+                .position(|w| w == b"\r\n")
+                .ok_or_else(|| anyhow::anyhow!("truncated chunk size"))?;
+            let size = std::str::from_utf8(&body[..end])?
+                .split(';')
+                .next()
+                .unwrap_or("");
+            anyhow::ensure!(
+                !size.is_empty() && size.bytes().all(|b| b.is_ascii_hexdigit()),
+                "invalid chunk size"
+            );
+            let size = usize::from_str_radix(size, 16)?;
+            body = &body[end + 2..];
+            if size == 0 {
+                // Consume optional trailers through their terminating empty line.
+                while !body.starts_with(b"\r\n") {
+                    let end = body
+                        .windows(2)
+                        .position(|w| w == b"\r\n")
+                        .ok_or_else(|| anyhow::anyhow!("truncated chunk trailer"))?;
+                    anyhow::ensure!(body[..end].contains(&b':'), "invalid chunk trailer");
+                    body = &body[end + 2..];
+                }
+                anyhow::ensure!(body == b"\r\n", "extra bytes after chunked body");
+                break;
+            }
+            decoded.extend_from_slice(
+                body.get(..size)
+                    .ok_or_else(|| anyhow::anyhow!("truncated chunk data"))?,
+            );
+            body = body
+                .get(size..)
+                .and_then(|rest| rest.strip_prefix(b"\r\n"))
+                .ok_or_else(|| anyhow::anyhow!("missing chunk terminator"))?;
+        }
+        body = &decoded;
+    }
+    let value = if body.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(body)?
+    };
+    Ok((code, value))
+}
+
+#[test]
+fn private_http_json_framing() {
+    let json = br#"{"online":true,"completed":1}"#;
+    let plain = [
+        format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", json.len()).as_bytes(),
+        json,
+    ]
+    .concat();
+    let expected = private_response(&plain).unwrap();
+    let mut chunked = b"HTTP/1.1 200 OK\r\ntRaNsFeR-EnCoDiNg: Chunked\r\n\r\n".to_vec();
+    for chunk in json.chunks(7) {
+        chunked.extend_from_slice(format!("{:X};fixture=yes\r\n", chunk.len()).as_bytes());
+        chunked.extend_from_slice(chunk);
+        chunked.extend_from_slice(b"\r\n");
+    }
+    chunked.extend_from_slice(b"0\r\nX-Fixture: done\r\n\r\n");
+    assert_eq!(private_response(&chunked).unwrap(), expected);
+    assert_eq!(expected.1["online"], true);
+    assert_eq!(expected.1["completed"], 1);
+    for invalid in [
+        b"1\r\nx".as_slice(),
+        b"0\r\n",
+        b"z\r\n",
+        b"+1\r\nx\r\n0\r\n\r\n",
+        b"1\r\nx!\r\n0\r\n\r\n",
+    ] {
+        let raw = [
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".as_slice(),
+            invalid,
+        ]
+        .concat();
+        assert!(private_response(&raw).is_err());
+    }
 }
 
 async fn call<Req: Message, Resp: Message + Default>(

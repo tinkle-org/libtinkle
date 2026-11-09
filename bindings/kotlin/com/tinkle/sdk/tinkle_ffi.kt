@@ -1346,7 +1346,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_get_sessions() and 0xFFFF) != 52916) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_revoke_other_sessions() and 0xFFFF) != 6069) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_revoke_other_sessions() and 0xFFFF) != 54949) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_revoke_session() and 0xFFFF) != 47284) {
@@ -1418,7 +1418,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect() and 0xFFFF) != 32861) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_replace_trust_source() and 0xFFFF) != 50093) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_replace_trust_source() and 0xFFFF) != 28156) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_resume() and 0xFFFF) != 27994) {
@@ -1571,10 +1571,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_fficursorstore_clear_principal() and 0xFFFF) != 37263) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new() and 0xFFFF) != 19386) {
+    if ((lib.uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new() and 0xFFFF) != 45429) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite() and 0xFFFF) != 4956) {
+    if ((lib.uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite() and 0xFFFF) != 40274) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_constructor_trustsourceffi_bootstrap() and 0xFFFF) != 27011) {
@@ -5393,6 +5393,8 @@ public interface TinkleClientInterface {
 
     /**
      * Revoke every other device while retaining this device's enrollment.
+     * An ambiguous result is Network with an unknown outcome, never Retryable;
+     * do not automatically repeat this mutation after response loss or timeout.
      */
     suspend fun `revokeOtherSessions`(): kotlin.Boolean
 
@@ -5598,7 +5600,15 @@ public interface TinkleClientInterface {
     suspend fun `reconnect`()
 
     /**
-     * Install newly enrolled/rotated channel trust and retire the old channel.
+     * Consume a one-use Bootstrap source and retire the current channel.
+     * This explicitly selects Bootstrap; Returning credentials require enrollment
+     * activation or validated ACTIVE secure-store restoration. A rejected
+     * Returning proof never triggers automatic downgrade to Bootstrap.
+     *
+     * Successful raw Bootstrap replacement clears the application principal,
+     * tracked targets, watches, and pending catch-up. Callers must establish
+     * the appropriate identity and register interests again before subscriptions
+     * can sync.
      */
     suspend fun `replaceTrustSource`(`source`: TrustSourceFfi)
 
@@ -5821,10 +5831,12 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
         this.cleanable = null
     }
     /**
-     * Create a client with explicit bootstrap/returning channel trust;
+     * Create a client with explicit Bootstrap channel trust;
      * `store` is the foreign (or in-memory) durable cursor store.
      *
-     * Consumes the one-use trust source. Invalid configuration fails fast.
+     * Consumes a one-use Bootstrap trust source. Returning requires enrollment
+     * activation or validated ACTIVE secure-store restoration.
+     * Invalid configuration fails fast.
      */
     constructor(`config`: ClientConfigFfi, `trustSource`: TrustSourceFfi, `store`: FfiCursorStore) :
         this(UniffiWithHandle,
@@ -5941,6 +5953,8 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
     /**
      * Revoke every other device while retaining this device's enrollment.
+     * An ambiguous result is Network with an unknown outcome, never Retryable;
+     * do not automatically repeat this mutation after response loss or timeout.
      */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
@@ -6618,7 +6632,15 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
 
     /**
-     * Install newly enrolled/rotated channel trust and retire the old channel.
+     * Consume a one-use Bootstrap source and retire the current channel.
+     * This explicitly selects Bootstrap; Returning credentials require enrollment
+     * activation or validated ACTIVE secure-store restoration. A rejected
+     * Returning proof never triggers automatic downgrade to Bootstrap.
+     *
+     * Successful raw Bootstrap replacement clears the application principal,
+     * tracked targets, watches, and pending catch-up. Callers must establish
+     * the appropriate identity and register interests again before subscriptions
+     * can sync.
      */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
@@ -7350,7 +7372,8 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
      * journals and commits cache + accept positions atomically, then emits
      * `ConversationChanged`/`MessagesChanged`; UI reads the shared cache.
      *
-     * Consumes the one-use trust source like [`Self::new`].
+     * Consumes a one-use Bootstrap trust source like [`Self::new`]. Returning
+     * requires activation or validated ACTIVE secure-store restoration.
      */
     @Throws(FfiException::class) fun `newSqlite`(`config`: ClientConfigFfi, `trustSource`: TrustSourceFfi, `storage`: SqliteStorage): TinkleClient {
             return FfiConverterTypeTinkleClient.lift(

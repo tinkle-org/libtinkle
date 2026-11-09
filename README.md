@@ -61,9 +61,13 @@ resets port selection; callers can then establish afresh under that source.
   a fresh zeroizing key owner for each establishment. Neither the application
   cache nor cursor storage persists keys. Hosts load/store the returned tuple
   in their protected platform secret store, bound to the provisioned trust.
-- `replace_trust_source(next).await` retires the connection and installs an
-  explicitly supplied source after enrollment/rotation. Rejected Returning
-  proof never changes to Bootstrap automatically.
+- `replace_trust_source(next).await` retires the connection and installs a raw
+  source only with identical `ServerTrust` (pin, key ID, and scope). It clears
+  the application principal and retained targets, watches, and pending catch-up
+  state; raw credentials do not establish a verified user identity. A different
+  deployment requires a new client with a separate cache/cursor namespace.
+  Normal enrollment/rotation uses the typed coordinator described below.
+  Rejected Returning proof never changes to Bootstrap automatically.
 
 The typed `Auth` facade supports SendCode, SignIn, ResumeEnrollment,
 RotateEnrollment and ActivateEnrollment. Prepare a durable operation before
@@ -191,7 +195,10 @@ The native examples `send-message` and `subscribe` require `TINKLE_HOST`,
 `TINKLE_SERVER_PIN` (64 hex characters), `TINKLE_SERVER_KEY_ID`, `TINKLE_SCOPE`,
 all five `TINKLE_DEVICE_MODEL` / `TINKLE_PLATFORM` / `TINKLE_OS_VERSION` /
 `TINKLE_APP_VERSION` / `TINKLE_APP_BUILD`, and `TINKLE_SECURE_STORE_HELPER`.
-That trusted host executable receives `load-active` and returns the SDK's opaque
+Optional `TINKLE_PORT` accepts a nonzero TCP port (1–65535); an explicit port
+disables fallback. Without it, the examples use primary 443 and fallback 80,
+available only after an initial primary dial failure before socket selection.
+The `TINKLE_SECURE_STORE_HELPER` executable receives `load-active` and returns the SDK's opaque
 record from protected platform storage on stdout. It must also implement `clear`,
 returning exit status zero only after full durable namespace invalidation. These
 examples do not perform enrollment writes. Production hosts use the Rust or FFI

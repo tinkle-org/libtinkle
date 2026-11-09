@@ -1,9 +1,12 @@
 # Native transport and trust
 
-Application traffic uses encrypted Syntra TCP on 443, with 80 available only
-after a primary dial failure. Both ports use one provisioned server public key,
-server key ID, exact UTF-8 scope and explicit channel mode. Once a socket
-connects, channel/authentication/protocol failures park automatic reconnect.
+Application traffic uses encrypted Syntra TCP. In `libtinkle::ClientConfig`, `primary_port`
+defaults to 443, and optional `fallback_port` defaults to `Some(80)` (`None`
+disables fallback). Fallback is available only after an initial primary dial
+failure, before any socket has been selected. Custom ports use the same encryption
+and trust requirements: one provisioned server public key, server key ID, exact
+UTF-8 scope, and explicit channel mode. Once a socket connects,
+channel/authentication/protocol failures park automatic reconnect.
 EOF and timeout before authenticated readiness also park: remote first-flight
 rejection can look identical to network loss. There is
 no HTTP/TLS wrapper, alternate carrier, insecure mode or mode downgrade.
@@ -11,7 +14,8 @@ no HTTP/TLS wrapper, alternate carrier, insecure mode or mode downgrade.
 After socket selection the chosen port remains fixed for reconnects. The
 TCP-only SDK does not publicly expose its private pump failure classification,
 so a post-ready close cannot authorize alternate-port selection either.
-Explicit trust replacement resets this local route choice.
+Successful explicit trust replacement within the same deployment resets this
+local route choice; its scope restrictions are described below.
 
 `ServerTrust` validates a nonzero 32-byte pin and 1..=255-byte scope before I/O.
 `TrustSource::Bootstrap` has no AK; `TrustSource::Returning` requires ACTIVE status and a nonzero
@@ -52,7 +56,14 @@ journal/cursor stores, URLs, headers or logs.
 
 The host stores enrollment material separately in protected Keychain/Keystore
 storage, bound to scope and server trust, and supplies it on process restart.
-`replace_trust_source` retires the old connection before installing new material.
+
+`libtinkle::Client::replace_trust_source` accepts only an identical `ServerTrust`
+(server pin, key ID, and exact scope); a different deployment requires a new client
+with a separate cache/cursor namespace. Raw replacement retires the old connection,
+clears the application principal and retained targets, watches, and pending
+catch-up state, and installs the supplied source. It does not establish a verified
+user identity; normal activation/restoration uses the typed enrollment coordinator.
+
 The UniFFI source is consumed once. Rust-side secret inputs are zeroized, but
 foreign-language input copies are host-owned and must also be erased.
 

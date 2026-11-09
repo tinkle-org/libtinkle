@@ -36,6 +36,7 @@ class CandidateBindingsTests(unittest.TestCase):
             (self.root / name).mkdir(parents=True)
         self.script = self.root / "scripts/schema-candidate.py"
         shutil.copy2(ROOT / "scripts/schema-candidate.py", self.script)
+        shutil.copy2(ROOT / "scripts/generate-bindings.sh", self.root / "scripts/generate-bindings.sh")
         for name in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "uniffi-bindgen.toml"):
             shutil.copy2(ROOT / name, self.root / name)
         (self.root / ".cargo/config.toml").write_text("")
@@ -47,7 +48,8 @@ class CandidateBindingsTests(unittest.TestCase):
     def bindings(self):
         return {name: (self.root / "bindings" / name).read_bytes() for name in BINDINGS}
 
-    def generate(self, missing=None, directory=False, syntra_version="1.0.0-rc.4"):
+    def generate(self, missing=None, directory=False, syntra_version="1.0.0-rc.4",
+                 bindings_runner=None):
         def run(command, **kwargs):
             if command[:2] == ["buf", "build"]:
                 Path(command[-1]).write_bytes(b"descriptor")
@@ -56,6 +58,8 @@ class CandidateBindingsTests(unittest.TestCase):
                 path.parent.mkdir(parents=True)
                 path.write_text("generated proto")
             elif command[:2] == ["bash", "scripts/generate-bindings.sh"]:
+                if bindings_runner is not None:
+                    return bindings_runner(command, **kwargs)
                 for relative in BINDINGS:
                     path = self.output / "workspace/bindings" / relative
                     path.write_text("candidate " + relative)
@@ -97,6 +101,46 @@ class CandidateBindingsTests(unittest.TestCase):
         self.assertEqual(self.bindings(), {name: ("candidate " + name).encode() for name in BINDINGS})
         for name, content in originals.items():
             self.assertEqual((self.root / name).read_bytes(), content)
+
+    def test_real_generator_missing_staged_binding_rejects_existing_destination(self):
+        """An old destination is not evidence that bindgen produced a staged file."""
+        original = self.bindings()
+        generated = self.root.parent / "bindgen-output"
+        missing = "kotlin/com/tinkle/sdk/tinkle_ffi.kt"
+        for source, destination in (
+            ("swift/TinkleSDK.swift", "TinkleSDK.swift"),
+            ("swift/TinkleSDKFFI.h", "TinkleSDKFFI.h"),
+            ("swift/module.modulemap", "TinkleSDKFFI.modulemap"),
+        ):
+            target = generated / destination
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / "bindings" / source, target)
+        tools = self.root.parent / "bin"
+        tools.mkdir()
+        cargo = tools / "cargo"
+        cargo.write_text(f"""#!{sys.executable}
+import json
+from pathlib import Path
+import shutil
+import sys
+if sys.argv[1] == "metadata":
+    print(json.dumps({{"target_directory": {str(self.output / 'target')!r}}}))
+elif sys.argv[1] == "run":
+    stage = Path(sys.argv[sys.argv.index("--out-dir") + 1])
+    shutil.copytree({str(generated)!r}, stage, dirs_exist_ok=True)
+elif sys.argv[1] != "rustc":
+    raise SystemExit("unexpected Cargo command")
+""")
+        cargo.chmod(0o755)
+        real_run = subprocess.run
+        with patch.dict(os.environ, {"PATH": str(tools) + os.pathsep + os.environ["PATH"]}):
+            with self.assertRaises(subprocess.CalledProcessError) as error:
+                self.generate(bindings_runner=lambda command, **kwargs: real_run(
+                    command, **kwargs, capture_output=True, text=True))
+        self.assertEqual(error.exception.returncode, 1)
+        self.assertIn("generator did not produce com/tinkle/sdk/tinkle_ffi.kt", error.exception.stderr)
+        self.assertEqual(self.bindings(), original)
+        self.assertTrue((self.output / "workspace/bindings" / missing).is_file())
 
     def test_previous_syntra_release_is_rejected(self):
         """Candidate metadata must keep the exact published RC4 pin."""

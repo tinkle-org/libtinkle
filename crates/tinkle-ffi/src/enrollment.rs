@@ -459,6 +459,17 @@ mod tests {
         entered: tokio::sync::Notify,
         release: tokio::sync::Notify,
     }
+
+    fn assert_write(kind: SecureEnrollmentWrite, id: &str, record: &ProtectedEnrollmentRecord) {
+        let (expected_id, expected_record) = match kind {
+            SecureEnrollmentWrite::Operation => ("operation-only", vec![4, 5]),
+            SecureEnrollmentWrite::Candidate => ("candidate-operation", vec![6, 7, 8]),
+            SecureEnrollmentWrite::Active => ("operation", vec![1, 2, 3]),
+        };
+        assert_eq!(id, expected_id);
+        assert_eq!(record.copy_for_secure_storage(), expected_record);
+    }
+
     #[async_trait::async_trait]
     impl FfiSecureEnrollmentStore for PendingHost {
         async fn begin_restore(
@@ -497,10 +508,11 @@ mod tests {
             record: Arc<ProtectedEnrollmentRecord>,
         ) -> Result<Option<String>, FfiError> {
             assert_eq!(revision, "revision:7");
-            assert!(matches!(kind, SecureEnrollmentWrite::Active));
-            assert_eq!(id, "operation");
-            assert_eq!(record.copy_for_secure_storage(), vec![1, 2, 3]);
-            Ok(None)
+            assert_write(kind, &id, &record);
+            Ok(match kind {
+                SecureEnrollmentWrite::Active => None,
+                _ => Some("revision:8".into()),
+            })
         }
         async fn begin_clear(&self, revision: String) -> Result<bool, FfiError> {
             assert_eq!(revision, "revision:7");
@@ -515,10 +527,11 @@ mod tests {
         }
         async fn commit(
             &self,
-            _: SecureEnrollmentWrite,
-            _: String,
-            _: Arc<ProtectedEnrollmentRecord>,
+            kind: SecureEnrollmentWrite,
+            id: String,
+            record: Arc<ProtectedEnrollmentRecord>,
         ) -> Result<(), FfiError> {
+            assert_write(kind, &id, &record);
             self.entered.notify_one();
             self.release.notified().await;
             Err(FfiError::Storage(
@@ -576,6 +589,26 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+        for (kind, id, bytes) in [
+            (
+                libtinkle::SecureWrite::Operation,
+                "operation-only",
+                vec![4, 5],
+            ),
+            (
+                libtinkle::SecureWrite::Candidate,
+                "candidate-operation",
+                vec![6, 7, 8],
+            ),
+        ] {
+            assert_eq!(
+                adapter
+                    .commit_current("revision:7", kind, id, &libtinkle::SecretBlob::new(bytes))
+                    .await
+                    .unwrap(),
+                Some("revision:8".into())
+            );
+        }
         assert!(!adapter.begin_clear("revision:7").await.unwrap());
         assert_eq!(
             adapter
@@ -593,24 +626,35 @@ mod tests {
             entered: tokio::sync::Notify::new(),
             release: tokio::sync::Notify::new(),
         });
-        let adapter = Adapter(host.clone());
-        let write = tokio::spawn(async move {
-            adapter
-                .commit(
-                    libtinkle::SecureWrite::Candidate,
-                    "test-operation",
-                    &libtinkle::SecretBlob::new(vec![1; 32]),
-                )
+        for (kind, id, bytes) in [
+            (
+                libtinkle::SecureWrite::Operation,
+                "operation-only",
+                vec![4, 5],
+            ),
+            (
+                libtinkle::SecureWrite::Candidate,
+                "candidate-operation",
+                vec![6, 7, 8],
+            ),
+        ] {
+            let adapter = Adapter(host.clone());
+            let write = tokio::spawn(async move {
+                adapter
+                    .commit(kind, id, &libtinkle::SecretBlob::new(bytes))
+                    .await
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(2), host.entered.notified())
                 .await
-        });
-        host.entered.notified().await;
-        assert!(!write.is_finished());
-        host.release.notify_one();
-        let error = write.await.unwrap().unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "protected enrollment storage unavailable"
-        );
+                .expect("host did not receive the expected write");
+            assert!(!write.is_finished());
+            host.release.notify_one();
+            let error = write.await.unwrap().unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "protected enrollment storage unavailable"
+            );
+        }
         let error = Adapter(host).clear().await.unwrap_err();
         assert_eq!(
             error.to_string(),

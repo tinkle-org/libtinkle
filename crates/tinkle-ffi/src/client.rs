@@ -6,6 +6,10 @@
 //! future cancels the in-flight Rust future. Logout waiters detach from retained
 //! cleanup; dropping one never cancels the independently owned cleanup task.
 //!
+//! Constructors consume a one-use Bootstrap TrustSourceFfi. Returning is installed
+//! by explicit enrollment activation or validated ACTIVE secure-store restoration,
+//! never by constructing a Returning TrustSourceFfi or automatic fallback.
+//!
 //! Lifecycle (supervised, demand-driven):
 //! `new` → `connect` (or `start` for supervised) → `subscribe` →
 //! `next_event` → `suspend`/`resume`/`reconnect` → `shutdown`/`stop`.
@@ -231,10 +235,12 @@ async fn observe_watch(inner: &libtinkle::Client, watch: Vec<i64>) -> Result<(),
 
 #[uniffi::export(async_runtime = "tokio")]
 impl TinkleClient {
-    /// Create a client with explicit bootstrap/returning channel trust;
+    /// Create a client with explicit Bootstrap channel trust;
     /// `store` is the foreign (or in-memory) durable cursor store.
     ///
-    /// Consumes the one-use trust source. Invalid configuration fails fast.
+    /// Consumes a one-use Bootstrap trust source. Returning requires enrollment
+    /// activation or validated ACTIVE secure-store restoration.
+    /// Invalid configuration fails fast.
     #[uniffi::constructor]
     pub fn new(
         config: ClientConfigFfi,
@@ -254,7 +260,8 @@ impl TinkleClient {
     /// journals and commits cache + accept positions atomically, then emits
     /// `ConversationChanged`/`MessagesChanged`; UI reads the shared cache.
     ///
-    /// Consumes the one-use trust source like [`Self::new`].
+    /// Consumes a one-use Bootstrap trust source like [`Self::new`]. Returning
+    /// requires activation or validated ACTIVE secure-store restoration.
     #[uniffi::constructor]
     pub fn new_sqlite(
         config: ClientConfigFfi,
@@ -277,7 +284,15 @@ impl TinkleClient {
         self.inner.connect().await.map_err(FfiError::from)
     }
 
-    /// Install newly enrolled/rotated channel trust and retire the old channel.
+    /// Consume a one-use Bootstrap source and retire the current channel.
+    /// This explicitly selects Bootstrap; Returning credentials require enrollment
+    /// activation or validated ACTIVE secure-store restoration. A rejected
+    /// Returning proof never triggers automatic downgrade to Bootstrap.
+    ///
+    /// Successful raw Bootstrap replacement clears the application principal,
+    /// tracked targets, watches, and pending catch-up. Callers must establish
+    /// the appropriate identity and register interests again before subscriptions
+    /// can sync.
     pub async fn replace_trust_source(
         &self,
         source: Arc<crate::TrustSourceFfi>,

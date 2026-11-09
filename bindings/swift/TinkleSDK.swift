@@ -2835,6 +2835,8 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
 
     /**
      * Revoke every other device while retaining this device's enrollment.
+     * An ambiguous result is Network with an unknown outcome, never Retryable;
+     * do not automatically repeat this mutation after response loss or timeout.
      */
     func revokeOtherSessions() async throws  -> Bool
 
@@ -3040,7 +3042,15 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
     func reconnect() async throws
 
     /**
-     * Install newly enrolled/rotated channel trust and retire the old channel.
+     * Consume a one-use Bootstrap source and retire the current channel.
+     * This explicitly selects Bootstrap; Returning credentials require enrollment
+     * activation or validated ACTIVE secure-store restoration. A rejected
+     * Returning proof never triggers automatic downgrade to Bootstrap.
+     *
+     * Successful raw Bootstrap replacement clears the application principal,
+     * tracked targets, watches, and pending catch-up. Callers must establish
+     * the appropriate identity and register interests again before subscriptions
+     * can sync.
      */
     func replaceTrustSource(source: TrustSourceFfi) async throws
 
@@ -3276,10 +3286,12 @@ open class TinkleClient: TinkleClientProtocol, @unchecked Sendable {
         return try! rustCall { uniffi_tinkle_ffi_fn_clone_tinkleclient(self.handle, $0) }
     }
     /**
-     * Create a client with explicit bootstrap/returning channel trust;
+     * Create a client with explicit Bootstrap channel trust;
      * `store` is the foreign (or in-memory) durable cursor store.
      *
-     * Consumes the one-use trust source. Invalid configuration fails fast.
+     * Consumes a one-use Bootstrap trust source. Returning requires enrollment
+     * activation or validated ACTIVE secure-store restoration.
+     * Invalid configuration fails fast.
      */
 public convenience init(config: ClientConfigFfi, trustSource: TrustSourceFfi, store: FfiCursorStore)throws  {
     let handle =
@@ -3309,7 +3321,8 @@ public convenience init(config: ClientConfigFfi, trustSource: TrustSourceFfi, st
      * journals and commits cache + accept positions atomically, then emits
      * `ConversationChanged`/`MessagesChanged`; UI reads the shared cache.
      *
-     * Consumes the one-use trust source like [`Self::new`].
+     * Consumes a one-use Bootstrap trust source like [`Self::new`]. Returning
+     * requires activation or validated ACTIVE secure-store restoration.
      */
 public static func newSqlite(config: ClientConfigFfi, trustSource: TrustSourceFfi, storage: SqliteStorage)throws  -> TinkleClient  {
     return try  FfiConverterTypeTinkleClient_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
@@ -3345,6 +3358,8 @@ open func getSessions()async throws  -> [AccountSession]  {
 
     /**
      * Revoke every other device while retaining this device's enrollment.
+     * An ambiguous result is Network with an unknown outcome, never Retryable;
+     * do not automatically repeat this mutation after response loss or timeout.
      */
 open func revokeOtherSessions()async throws  -> Bool  {
     return
@@ -3884,7 +3899,15 @@ open func reconnect()async throws   {
 }
 
     /**
-     * Install newly enrolled/rotated channel trust and retire the old channel.
+     * Consume a one-use Bootstrap source and retire the current channel.
+     * This explicitly selects Bootstrap; Returning credentials require enrollment
+     * activation or validated ACTIVE secure-store restoration. A rejected
+     * Returning proof never triggers automatic downgrade to Bootstrap.
+     *
+     * Successful raw Bootstrap replacement clears the application principal,
+     * tracked targets, watches, and pending catch-up. Callers must establish
+     * the appropriate identity and register interests again before subscriptions
+     * can sync.
      */
 open func replaceTrustSource(source: TrustSourceFfi)async throws   {
     return
@@ -7623,7 +7646,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_get_sessions() != 52916) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_revoke_other_sessions() != 6069) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_revoke_other_sessions() != 54949) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_revoke_session() != 47284) {
@@ -7695,7 +7718,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_reconnect() != 32861) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_replace_trust_source() != 50093) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_replace_trust_source() != 28156) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_resume() != 27994) {
@@ -7848,10 +7871,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_fficursorstore_clear_principal() != 37263) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new() != 19386) {
+    if (uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new() != 45429) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite() != 4956) {
+    if (uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite() != 40274) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_constructor_trustsourceffi_bootstrap() != 27011) {

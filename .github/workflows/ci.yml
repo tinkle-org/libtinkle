@@ -65,6 +65,8 @@ jobs:
         with:
           cache-on-failure: true
       - run: cargo test --locked --workspace --all-features --verbose
+      - name: Native fixture shutdown and response delivery regressions
+        run: cargo test --locked -p libtinkle --example native-fixture
       - name: Published-SDK native mobile fixture regression
         run: python3 scripts/with-native-fixture.py --port 0 cargo test --locked -p libtinkle --test mobile_fixture -- --ignored
       - if: matrix.os == 'ubuntu-latest'

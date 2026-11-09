@@ -1,6 +1,5 @@
 """Exercise the fixture runner with real pipes and fake host build tools."""
 
-import json
 import os
 from pathlib import Path
 import shutil
@@ -21,16 +20,33 @@ class NativeFixtureRunnerTests(unittest.TestCase):
         (self.root / "scripts").mkdir()
         self.script = self.root / "scripts/with-native-fixture.py"
         shutil.copy2(ROOT / "scripts/with-native-fixture.py", self.script)
-        binary = self.root / "target/debug/examples/native-fixture"
+        binary = self.root / "host artifacts/native fixture"
         binary.parent.mkdir(parents=True)
         self.binary = binary
         tools = self.root / "bin"
         tools.mkdir()
-        cargo = tools / "cargo"
-        cargo.write_text(f"#!{sys.executable}\nimport json, sys\n"
-                         f"if sys.argv[1] == 'metadata': print({json.dumps({'target_directory': str(self.root / 'target')})!r})\n")
-        cargo.chmod(0o755)
         self.env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"])
+        config = self.root / ".cargo"
+        config.mkdir()
+        (config / "config.toml").write_text('[build]\ntarget = "wasm32-unknown-unknown"\n')
+        self.env["CARGO_BUILD_TARGET"] = "aarch64-linux-android"
+        self.artifact = {
+            "reason": "compiler-artifact",
+            "target": {"name": "native-fixture", "kind": ["example"]},
+            "executable": str(self.binary),
+        }
+        self.cargo_output([self.artifact])
+
+    def cargo_output(self, messages):
+        cargo = self.root / "bin/cargo"
+        cargo.write_text(
+            f"#!{sys.executable}\nimport json, sys\n"
+            "assert sys.argv[1:] == ['build', '--locked', '-p', 'libtinkle', '--example', "
+            "'native-fixture', '--target', 'host-tuple', '--message-format=json-render-diagnostics']\n"
+            "print('non-JSON build output')\n"
+            f"for message in {messages!r}: print(json.dumps(message))\n"
+        )
+        cargo.chmod(0o755)
 
     def fixture(self, body):
         self.binary.write_text(f"#!{sys.executable}\n" + body)
@@ -103,6 +119,27 @@ class NativeFixtureRunnerTests(unittest.TestCase):
                      "while True: time.sleep(0.01)\n")
         result = self.run_consumer("from pathlib import Path; assert Path('ready').exists()")
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_launches_reported_host_artifact_not_stale_default_path(self):
+        stale = self.root / "target/debug/examples/native-fixture"
+        stale.parent.mkdir(parents=True)
+        stale.write_text(f"#!{sys.executable}\nraise RuntimeError('stale artifact selected')\n")
+        stale.chmod(0o755)
+        self.fixture("import time\nprint('48080', flush=True)\nwhile True: time.sleep(0.01)\n")
+        unrelated = dict(self.artifact, target={"name": "other", "kind": ["example"]}, executable=str(stale))
+        not_example = dict(self.artifact, target={"name": "native-fixture", "kind": ["bin"]}, executable=str(stale))
+        self.cargo_output([unrelated, not_example, self.artifact, self.artifact])
+        result = self.run_consumer("pass")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_missing_or_ambiguous_artifacts_do_not_start_consumer(self):
+        for messages in ([], [self.artifact, dict(self.artifact, executable="another-fixture")]):
+            with self.subTest(messages=messages):
+                self.cargo_output(messages)
+                result = self.run_consumer("from pathlib import Path; Path('consumer').touch()")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("exactly one native-fixture executable", result.stderr)
+                self.assertFalse((self.root / "consumer").exists())
 
 
 if __name__ == "__main__":

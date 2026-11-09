@@ -2571,11 +2571,17 @@ async fn session_status_distinguishes_unknown_authorization_and_cleanup() {
     let active = client.session_status().await;
     assert_eq!(active.network, SessionNetwork::Available);
     assert_eq!(active.authorization, SessionAuthorization::Active);
+    let connection = client.connection_id().await;
     fixture.state.lock().unwrap().session_denial = Some(ErrorCode::PermissionDenied);
-    assert!(client.account().get_sessions().await.is_err());
+    let error = client.account().get_sessions().await.unwrap_err();
+    assert_eq!(error.code(), ErrorCode::PermissionDenied);
     let denied = client.session_status().await;
     assert_eq!(denied.network, SessionNetwork::Available);
-    assert_eq!(denied.authorization, SessionAuthorization::Active);
+    assert_eq!(client.connection_id().await, connection);
+    assert_eq!(denied.authorization, SessionAuthorization::Unknown);
+    assert_eq!(denied.cleanup, SessionCleanup::NotStarted);
+    assert!(!client.is_signed_out());
+    assert!(fixture.store.load_active().await.unwrap().is_some());
     fixture.state.lock().unwrap().session_denial = Some(ErrorCode::Unauthenticated);
     let error = client.account().get_sessions().await.unwrap_err();
     assert_eq!(error.code(), ErrorCode::Unauthenticated);
@@ -2607,6 +2613,65 @@ async fn session_status_distinguishes_unknown_authorization_and_cleanup() {
         fenced.session_status().await.cleanup,
         SessionCleanup::Complete
     );
+}
+
+/// Raw channel credentials withdraw scope; only validated ACTIVE storage restores it.
+#[tokio::test]
+async fn active_restore_reestablishes_principal_without_inheriting_raw_replacement_interests() {
+    let fixture = Fixture::new().await;
+    let (client, _, _) = enrolled(&fixture).await;
+    let target = Target {
+        kind: Some(target::Kind::ChatId(7)),
+    };
+    // Tracking is retained even though this enrollment fixture serves no journal RPCs.
+    client.subscribe(vec![target]).await.unwrap();
+    assert_eq!(client.tracked_targets().await, vec!["target:room:7"]);
+    let first = client.connection_id().await.unwrap();
+    let (expected, enrollment) = {
+        let state = fixture.state.lock().unwrap();
+        let active = state.active.as_ref().unwrap();
+        let expected = status(active);
+        let key = active.authorization_key.as_ref().try_into().unwrap();
+        let enrollment = libtinkle::Enrollment::from_active_status(key, &expected).unwrap();
+        (expected, enrollment)
+    };
+    client
+        .replace_trust_source(libtinkle::TrustSource::Returning {
+            trust: support::trust(),
+            enrollment,
+        })
+        .await
+        .unwrap();
+    assert!(!client.is_connected().await);
+    assert_eq!(client.principal().await, "unknown");
+    assert!(client.tracked_targets().await.is_empty());
+    client.connect().await.unwrap();
+    let raw_connection = client.connection_id().await.unwrap();
+    assert_ne!(raw_connection, first);
+    assert_eq!(client.principal().await, "unknown");
+    assert!(matches!(
+        client.subscribe(vec![target]).await,
+        Err(libtinkle::TinkleError::Subscription(_))
+    ));
+    assert!(client.tracked_targets().await.is_empty());
+
+    let restored = client
+        .restore_active_enrollment(fixture.store.clone())
+        .await
+        .unwrap();
+    assert_eq!(restored, expected);
+    assert_eq!(client.principal().await, "user:42");
+    assert!(client.is_connected().await);
+    assert_ne!(client.connection_id().await.unwrap(), raw_connection);
+    assert_eq!(
+        client.session_status().await.authorization,
+        libtinkle::SessionAuthorization::Active
+    );
+    assert!(client.tracked_targets().await.is_empty());
+    assert!(client.watch_list().await.is_empty());
+    client.subscribe(vec![target]).await.unwrap();
+    assert_eq!(client.tracked_targets().await, vec!["target:room:7"]);
+    client.stop().await;
 }
 
 #[tokio::test]

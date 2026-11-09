@@ -55,9 +55,9 @@ async fn pinned_client_api_bootstrap_initializes_and_accepts_send_code() {
         !response.verification_id.is_empty(),
         "verification identifier required"
     );
-    assert_ne!(
+    assert_eq!(
         client.principal().await,
-        "user:42",
+        "unknown",
         "Bootstrap must not become an account session"
     );
     client.close().await;

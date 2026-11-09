@@ -3,7 +3,10 @@ use prost::Message;
 use std::{
     future::Future,
     net::SocketAddr,
-    sync::{Arc, OnceLock, Weak},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, OnceLock, Weak,
+    },
 };
 use syntra_core::{
     proto::{frame::Body, rpc_result::Outcome, Frame, RpcRequest},
@@ -93,14 +96,25 @@ where
 {
     let (host_tx, host_rx) = tokio::sync::watch::channel::<Option<Weak<Host>>>(None);
     let f = Arc::new(f);
+    let connection_initialized = Arc::new(AtomicBool::new(false));
     let handler = Arc::new(FnHandler(move |method: String, payload: Vec<u8>, _| {
         let mut rx = host_rx.clone();
         let f = f.clone();
+        let connection_initialized = connection_initialized.clone();
         async move {
             loop {
                 let host = rx.borrow_and_update().as_ref().and_then(Weak::upgrade);
                 if let Some(host) = host {
                     let initialized = method == "/tinkle.v1.ConnectionService/InitConnect";
+                    if !initialized
+                        && method.starts_with("/tinkle.")
+                        && !connection_initialized.load(Ordering::SeqCst)
+                    {
+                        return HandlerOutcome::error(
+                            syntra_core::ErrorCode::FailedPrecondition,
+                            "InitConnect required",
+                        );
+                    }
                     let (method, payload) = if initialized {
                         let init =
                             tinkle_schema::proto::InitConnectRequest::decode(payload.as_slice())
@@ -113,6 +127,7 @@ where
                                 && !info.app_version.is_empty()
                                 && !info.app_build.is_empty()
                         );
+                        connection_initialized.store(true, Ordering::SeqCst);
                         (init.method, init.payload.to_vec())
                     } else {
                         (method, payload)

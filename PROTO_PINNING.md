@@ -29,7 +29,10 @@ These are crate-specific release tags, not a workspace-wide `v1.0.0-rc.4` tag.
 SDK mechanics remain upstream; the application budget integration contract is in
 [architecture](docs/architecture.md#request-budget-integration-contract).
 The rc.4 consumers paired with Go rc.3 passed
-[scoped application request-budget qualification](../chorus/src/controllers/client-api/tests/native_acceptance/README.md#current-qualification).
+[scoped application request-budget qualification](https://github.com/tinkle-org/chorus/blob/d639d617a30bf3c2246e9491dd4af0a9c7674fc3/src/controllers/client-api/tests/native_acceptance/README.md#current-qualification).
+The Chorus links are pinned to a commit in a private repository and require
+authenticated repository access. No public published location for the qualification
+or runner instructions was found; these links do not provide public access.
 The acceptance README identifies the externally retained evidence bundle with
 tested source fingerprints, published dependency checksums, commands, and results.
 This closes the request-wide budget gap for that consumer implementation and those
@@ -51,7 +54,7 @@ cargo check --locked -p libtinkle-web -p tinkle-schema --target wasm32-unknown-u
 python3 scripts/with-native-fixture.py --port 0 cargo test --locked -p libtinkle --test mobile_fixture -- --ignored
 ```
 
-Use the separate [Chorus actual-application lane](../chorus/src/controllers/client-api/tests/native_acceptance/README.md#run)
+Use the separate [Chorus actual-application lane](https://github.com/tinkle-org/chorus/blob/d639d617a30bf3c2246e9491dd4af0a9c7674fc3/src/controllers/client-api/tests/native_acceptance/README.md#run)
 for the baseline fixture; cache-only paired regressions and reproduction commands
 remain in that external evidence bundle. Changed pins or budgets require fresh
 scoped qualification. Retain revisions/dirty baseline, toolchains, resolved
@@ -138,7 +141,7 @@ reported healthy direct/wrapped responses in 189 ms / 64 ms. Evidence reference:
 `/var/folders/xv/g_j4t2793xdbd_wnr290xgyw0000gn/T/opencode/native-precommit-20261107/`.
 Neither run qualifies the new request-wide budget contract. Mobile OS storage,
 network/trust, capacity, deployment, and the mandatory
-[authn restore gate](../chorus/src/services/authn/README.md#authn-restore-safety-gate)
+[authn restore gate](https://github.com/tinkle-org/chorus/blob/d639d617a30bf3c2246e9491dd4af0a9c7674fc3/src/services/authn/README.md#authn-restore-safety-gate)
 remain separate.
 
 ## Optional future-schema development

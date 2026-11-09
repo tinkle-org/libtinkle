@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::AtomicU64;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
 use zeroize::Zeroizing;
@@ -49,10 +49,36 @@ struct Live {
     version: u32,
     sync_mgr: Arc<SyncManager>,
     pump: AbortTask,
-    initialized: Arc<tokio::sync::Mutex<bool>>,
+    initialized: Arc<Initialization>,
     watch_restore: Option<AbortTask>,
     generation: Arc<LiveGeneration>,
     liveness: Option<LivenessTask>,
+}
+
+/// One connection's snapshot gate and non-awaiting restoration wakeup.
+#[derive(Default)]
+struct Initialization {
+    ready: tokio::sync::Mutex<bool>,
+    watch: tokio::sync::Notify,
+}
+
+impl Initialization {
+    async fn lock(&self) -> tokio::sync::MutexGuard<'_, bool> {
+        self.ready.lock().await
+    }
+}
+
+/// Route selection travels with the establishment gate, including Bootstrap children.
+#[derive(Default)]
+pub(crate) struct ConnectionGate {
+    lock: tokio::sync::Mutex<()>,
+    selected_port: AtomicU16,
+}
+
+impl ConnectionGate {
+    pub(crate) async fn lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.lock.lock().await
+    }
 }
 
 #[derive(Default)]
@@ -60,16 +86,23 @@ struct SupState {
     handle: Option<tokio::task::JoinHandle<()>>,
     shutdown: Option<oneshot::Sender<()>>,
     epoch: u64,
+    /// Only a later suspend vetoes resume; supervisor stop is not suspension.
+    suspension_epoch: u64,
     #[cfg(not(target_arch = "wasm32"))]
     last_result: Option<()>,
     #[cfg(not(target_arch = "wasm32"))]
     next_reestablish: Option<std::time::Instant>,
     reconnect_failures: u32,
     reconnect_blocked: bool,
-    /// Retain socket selection across opaque active-channel loss. The public
-    /// TCP-only SDK cannot expose its private transport failure classification;
-    /// loss must not authorize an alternate port after a possible trust failure.
-    selected_port: Option<u16>,
+    /// Latest admitted attempt, including reconnects using unchanged credentials.
+    reconnect_attempt: Option<Arc<()>>,
+}
+
+/// Policy bookkeeping belongs to one attempt, not just one credential source.
+struct ReconnectFence {
+    source_revision: u64,
+    attempt: Arc<()>,
+    generation: Option<Arc<LiveGeneration>>,
 }
 
 /// Per-target reconcile demand tracked by the supervisor.
@@ -174,7 +207,7 @@ pub struct Client {
     /// for arbitrary application methods after local sign-out.
     logout_only: bool,
     owner: Arc<ClientOwner>,
-    /// Only background KeepAlive callers are pinned to a particular generation.
+    /// Heartbeats and reconnect restoration address only their captured generation.
     call_generation: Option<Arc<LiveGeneration>>,
     config: ClientConfig,
     pub(crate) trust_source: Arc<RwLock<TrustSource>>,
@@ -195,7 +228,7 @@ pub struct Client {
     /// interleave tracking + kicking.
     sub_lock: Arc<tokio::sync::Mutex<()>>,
     /// Serializes the check-dial-install sequence in `connect`.
-    pub(crate) connect_lock: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) connect_lock: Arc<ConnectionGate>,
     /// Recovery-signal sender installed by the supervisor.
     signal_tx: Arc<tokio::sync::Mutex<Option<mpsc::Sender<RecoverySignal>>>>,
     /// Transport liveness as observed by the notification pump.
@@ -205,10 +238,10 @@ pub struct Client {
     drain_mgrs: Arc<tokio::sync::Mutex<Vec<Arc<SyncManager>>>>,
     suspended: Arc<AtomicBool>,
     /// Client-level commit gate: every native ingest holds this lock
-    /// across its epoch check + write, and logout/principal switches wait
-    /// on it before bumping the epoch — so a wipe can never interleave a
-    /// commit, and pending catch-up/heal runs are invalidated even when no
-    /// live manager exists to fence.
+    /// across its epoch check + write. Blocking writers retain owned guards
+    /// even after their async waiter is cancelled. Logout/principal switches
+    /// drain the gate before wiping/changing scope, including when no live
+    /// manager remains to fence pending work.
     #[cfg(not(target_arch = "wasm32"))]
     checkpoint_save: Arc<tokio::sync::Mutex<()>>,
     /// Client-level reconcile epoch, shared by every `SyncManager`
@@ -323,6 +356,7 @@ impl Client {
                     Zeroizing::new(tinkle_schema::proto::LogoutRequest {}.encode_to_vec()),
                     budget,
                     &CancelToken::new(),
+                    None,
                 )
                 .await;
             result.is_ok_and(|bytes| {
@@ -421,7 +455,7 @@ impl Client {
             interests: Arc::new(tokio::sync::Mutex::new(Interests::default())),
             watch: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             sub_lock: Arc::new(tokio::sync::Mutex::new(())),
-            connect_lock: Arc::new(tokio::sync::Mutex::new(())),
+            connect_lock: Arc::new(ConnectionGate::default()),
             signal_tx: Arc::new(tokio::sync::Mutex::new(None)),
             transport_ok: Arc::new(AtomicBool::new(false)),
             sup_state: Arc::new(tokio::sync::Mutex::new(SupState::default())),
@@ -466,7 +500,7 @@ impl Client {
             interests: Arc::new(tokio::sync::Mutex::new(Interests::default())),
             watch: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             sub_lock: Arc::new(tokio::sync::Mutex::new(())),
-            connect_lock: Arc::new(tokio::sync::Mutex::new(())),
+            connect_lock: Arc::new(ConnectionGate::default()),
             signal_tx: Arc::new(tokio::sync::Mutex::new(None)),
             transport_ok: Arc::new(AtomicBool::new(false)),
             sup_state: Arc::new(tokio::sync::Mutex::new(SupState::default())),
@@ -576,6 +610,9 @@ impl Client {
         // both landed. Epoch bump and demand clear stay changed-only.
         #[cfg(not(target_arch = "wasm32"))]
         let _client_guard = self.checkpoint_save.lock().await;
+        if self.authorization.is_signed_out() {
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         let changed = *self.principal.read().await != p;
         #[cfg(not(target_arch = "wasm32"))]
@@ -622,7 +659,12 @@ impl Client {
             return Ok(());
         }
         let req = tinkle_schema::proto::ObserveConnectivityRequest { user_ids: merged };
-        self.updates().observe_connectivity(req).await?;
+        if let Err(error) = self.updates().observe_connectivity(req).await {
+            if matches!(error.recovery_decision(), RecoveryDecision::Retry) {
+                initialized.watch.notify_one();
+            }
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -687,20 +729,19 @@ impl Client {
             Some(m) => Some(m.checkpoint_save_lock().await),
             None => None,
         };
-        let _client_guard = self.checkpoint_save.lock().await;
+        let _client_guard = Arc::new(self.checkpoint_save.clone().lock_owned().await);
         self.reconcile_epoch.fetch_add(1, Ordering::SeqCst);
         self.reset_session_locked(mgr.as_deref()).await;
     }
 
-    /// In-memory logout reset; the caller must hold `checkpoint_save_lock`
+    /// In-memory scope reset; the caller must hold `checkpoint_save_lock`
     /// when a live scope exists (see `reset_session_for_logout` and
     /// `logout_wipe_and_reset`).
-    #[cfg(not(target_arch = "wasm32"))]
     async fn reset_session_locked(&self, mgr: Option<&SyncManager>) {
         *self.principal.write().await = UNKNOWN_PRINCIPAL.to_string();
-        self.interests.lock().await.targets.clear();
-        self.interests.lock().await.subscribed = false;
+        *self.interests.lock().await = Interests::default();
         self.watch.lock().await.clear();
+        #[cfg(not(target_arch = "wasm32"))]
         self.catchup_pending.lock().await.clear();
         if let Some(m) = mgr {
             m.set_principal(UNKNOWN_PRINCIPAL.to_string()).await;
@@ -726,7 +767,7 @@ impl Client {
             Some(m) => Some(m.checkpoint_save_lock().await),
             None => None,
         };
-        let _client_guard = self.checkpoint_save.lock().await;
+        let _client_guard = Arc::new(self.checkpoint_save.clone().lock_owned().await);
         self.reconcile_epoch.fetch_add(1, Ordering::SeqCst);
         // Capture the wipe result but never let it bypass the reset: the
         // in-memory scope (principal, generation fence, tracked state) must
@@ -736,10 +777,14 @@ impl Client {
         if principal != UNKNOWN_PRINCIPAL {
             if let Some(storage) = self.sqlite_storage() {
                 let p = principal.to_string();
-                wipe_result = tokio::task::spawn_blocking(move || storage.clear_principal(&p))
-                    .await
-                    .map_err(|e| TinkleError::CursorStore(format!("logout wipe task failed: {e}")))
-                    .and_then(|r| r.map_err(|e| TinkleError::CursorStore(e.to_string())));
+                let commit_guard = _client_guard.clone();
+                wipe_result = tokio::task::spawn_blocking(move || {
+                    let _guard = commit_guard;
+                    storage.clear_principal(&p)
+                })
+                .await
+                .map_err(|e| TinkleError::CursorStore(format!("logout wipe task failed: {e}")))
+                .and_then(|r| r.map_err(|e| TinkleError::CursorStore(e.to_string())));
             }
         }
         self.reset_session_locked(mgr.as_deref()).await;
@@ -891,14 +936,16 @@ impl Client {
             handle.close().await;
             return Ok(());
         }
+        let initialized = Arc::new(Initialization::default());
+        let watch_restore = self.spawn_watch_restore(conn, initialized.clone(), generation.clone());
         let live = Live {
             handle,
             connection_id,
             version,
             sync_mgr,
             pump: AbortTask::new(pump),
-            initialized: Arc::new(tokio::sync::Mutex::new(false)),
-            watch_restore: None,
+            initialized,
+            watch_restore: Some(watch_restore),
             generation: generation.clone(),
             liveness: None,
         };
@@ -937,7 +984,10 @@ impl Client {
             return Err(TinkleError::TrustRejected);
         }
         self.config.validate()?;
-        let selected = self.sup_state.lock().await.selected_port;
+        let selected = match self.connect_lock.selected_port.load(Ordering::SeqCst) {
+            0 => None,
+            port => Some(port),
+        };
         let dial = |port| {
             tokio::time::timeout(
                 self.config.connect_timeout,
@@ -964,7 +1014,9 @@ impl Client {
                 None => return Err(TinkleError::NetworkUnavailable),
             },
         };
-        self.sup_state.lock().await.selected_port = Some(port);
+        self.connect_lock
+            .selected_port
+            .store(port, Ordering::SeqCst);
         stream
             .set_nodelay(true)
             .map_err(|_| TinkleError::NetworkUnavailable)?;
@@ -982,7 +1034,7 @@ impl Client {
         error
     }
 
-    async fn live_conn(&self) -> Result<(Initiator, Arc<tokio::sync::Mutex<bool>>), TinkleError> {
+    async fn live_conn(&self) -> Result<(Initiator, Arc<Initialization>), TinkleError> {
         self.live
             .read()
             .await
@@ -1003,6 +1055,11 @@ impl Client {
             .read()
             .await
             .as_ref()
+            .filter(|live| {
+                self.call_generation
+                    .as_ref()
+                    .is_none_or(|generation| Arc::ptr_eq(generation, &live.generation))
+            })
             .map(|l| l.sync_mgr.clone())
             .ok_or_else(|| TinkleError::NotConnected("call connect() first".into()))
     }
@@ -1039,7 +1096,7 @@ impl Client {
         let payload = Zeroizing::new(payload);
         self.check_call_admission(method)?;
         let budget = self.call_budget(timeout_ms)?;
-        self.call_initialized_with_budget(method, payload, &budget, token)
+        self.call_initialized_with_budget(method, payload, &budget, token, None)
             .await
     }
 
@@ -1086,6 +1143,7 @@ impl Client {
         payload: Zeroizing<Vec<u8>>,
         budget: &syntra_runtime::elapsed::ElapsedDeadline,
         token: &CancelToken,
+        dispatched: Option<&AtomicBool>,
     ) -> Result<Vec<u8>, TinkleError> {
         self.check_call_admission(method)?;
         // Preserve the conservative outer pre-poll timeout; do not post-check an
@@ -1094,7 +1152,7 @@ impl Client {
             biased;
             _ = self.authorization.revoked.cancelled(), if !self.logout_only => Err(TinkleError::SignedOut),
             _ = budget.expired() => Err(Self::call_budget_elapsed()),
-            result = self.call_initialized_inner(method, payload, budget, token) => result,
+            result = self.call_initialized_inner(method, payload, budget, token, dispatched) => result,
             _ = token.cancelled() => Err(TinkleError::Syntra(syntra_core::SyntraError::Cancelled("call cancelled".into()))),
         };
         if result
@@ -1152,12 +1210,16 @@ impl Client {
         payload: Zeroizing<Vec<u8>>,
         budget: &syntra_runtime::elapsed::ElapsedDeadline,
         token: &CancelToken,
+        dispatched: Option<&AtomicBool>,
     ) -> Result<Vec<u8>, TinkleError> {
         let (conn, initialized) = self.live_conn().await?;
         self.check_call_admission(method)?;
         if !method.starts_with("/tinkle.v1.") {
             let encoded = payload.to_vec();
             let timeout_ms = Self::remaining_timeout_ms(budget)?;
+            if let Some(dispatched) = dispatched {
+                dispatched.store(true, Ordering::SeqCst);
+            }
             return conn
                 .call_cancellable(method, encoded, timeout_ms, token)
                 .await
@@ -1174,6 +1236,9 @@ impl Client {
             drop(ready);
             let encoded = payload.to_vec();
             let timeout_ms = Self::remaining_timeout_ms(budget)?;
+            if let Some(dispatched) = dispatched {
+                dispatched.store(true, Ordering::SeqCst);
+            }
             return conn
                 .call_cancellable(method, encoded, timeout_ms, token)
                 .await
@@ -1192,6 +1257,9 @@ impl Client {
         let encoded = request.encode_to_vec();
         crate::enrollment::wipe_bytes(std::mem::take(&mut request.payload));
         let timeout_ms = Self::remaining_timeout_ms(budget)?;
+        if let Some(dispatched) = dispatched {
+            dispatched.store(true, Ordering::SeqCst);
+        }
         let response = Zeroizing::new(
             conn.call_cancellable(
                 "/tinkle.v1.ConnectionService/InitConnect",
@@ -1211,39 +1279,91 @@ impl Client {
         crate::enrollment::wipe_bytes(std::mem::take(&mut decoded.payload));
         *ready = true;
         drop(ready);
-        // No wrapped request is replayed on an ambiguous result or cancellation.
-        if self.authorization.is_signed_out() {
-            return Ok(output.to_vec());
-        }
-        let watch = self.watch.lock().await.clone();
-        if !watch.is_empty() && !self.authorization.is_signed_out() {
-            let mut live = self.live.write().await;
-            if let Some(live) = live
-                .as_mut()
-                .filter(|live| Arc::ptr_eq(&live.initialized, &initialized))
-            {
-                // A single connection-owned restoration task, never a retry or
-                // reconnect loop. Do not delay a confirmed target result on it.
-                let authorization = self.authorization.clone();
-                live.watch_restore = Some(AbortTask::new(tokio::spawn(async move {
-                    let request =
-                        tinkle_schema::proto::ObserveConnectivityRequest { user_ids: watch };
-                    let result = tokio::select! {
-                        biased;
-                        _ = authorization.revoked.cancelled() => return,
-                        result = conn.call(
-                            tinkle_schema::sync::OBSERVE_METHOD,
-                            request.encode_to_vec(),
-                            30_000,
-                        ) => result,
-                    };
-                    if let Err(error) = result {
-                        tracing::debug!(code = ?error.code(), "retained connectivity observation rejected");
-                    }
-                })));
-            }
-        }
+        // This synchronous wake cannot turn a confirmed response into a local timeout.
+        initialized.watch.notify_one();
         Ok(output.to_vec())
+    }
+
+    /// None means the heartbeat never reached RPC dispatch; local contention is not peer failure.
+    pub(crate) async fn call_keep_alive(
+        &self,
+        payload: Vec<u8>,
+    ) -> Option<Result<Vec<u8>, TinkleError>> {
+        let dispatched = AtomicBool::new(false);
+        let budget = match self.call_budget(5_000) {
+            Ok(budget) => budget,
+            Err(error) => return Some(Err(error)),
+        };
+        let result = self
+            .call_initialized_with_budget(
+                crate::liveness::KEEP_ALIVE_METHOD,
+                Zeroizing::new(payload),
+                &budget,
+                &CancelToken::new(),
+                Some(&dispatched),
+            )
+            .await;
+        if !dispatched.load(Ordering::SeqCst)
+            && result
+                .as_ref()
+                .is_err_and(|error| error.code() == syntra_core::ErrorCode::DeadlineExceeded)
+        {
+            None
+        } else {
+            Some(result)
+        }
+    }
+
+    /// Exactly one connection-owned observation worker, independent of heartbeat success.
+    fn spawn_watch_restore(
+        &self,
+        conn: Initiator,
+        initialized: Arc<Initialization>,
+        generation: Arc<LiveGeneration>,
+    ) -> AbortTask {
+        let watch = self.watch.clone();
+        let revoked = self.authorization.revoked.clone();
+        let owner_gone = self.owner.gone.clone();
+        AbortTask::new(tokio::spawn(async move {
+            let restore = async {
+                loop {
+                    initialized.watch.notified().await;
+                    let mut delay = 2;
+                    loop {
+                        let user_ids = watch.lock().await.clone();
+                        if user_ids.is_empty() {
+                            break;
+                        }
+                        let request = tinkle_schema::proto::ObserveConnectivityRequest { user_ids };
+                        match conn
+                            .call(
+                                tinkle_schema::sync::OBSERVE_METHOD,
+                                request.encode_to_vec(),
+                                30_000,
+                            )
+                            .await
+                        {
+                            Ok(_) => break,
+                            Err(error) => {
+                                let error = TinkleError::from(error);
+                                tracing::debug!(code = ?error.code(), "retained connectivity observation rejected");
+                                if !matches!(error.recovery_decision(), RecoveryDecision::Retry) {
+                                    break;
+                                }
+                            }
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                        delay = (delay * 2).min(60);
+                    }
+                }
+            };
+            tokio::select! { biased;
+                _ = revoked.cancelled() => {},
+                _ = owner_gone.cancelled() => {},
+                _ = generation.closed.cancelled() => {},
+                _ = restore => {},
+            }
+        }))
     }
 
     pub fn messages(&self) -> Messages<'_> {
@@ -1643,7 +1763,7 @@ impl Client {
                     // Client-level commit gate (same epoch check as
                     // ingest_messages): a logout bump waits on this lock,
                     // so it invalidates the shard before it writes.
-                    let _commit_guard = self.checkpoint_save.lock().await;
+                    let _commit_guard = Arc::new(self.checkpoint_save.clone().lock_owned().await);
                     if self.reconcile_epoch() != run_epoch {
                         return Err(TinkleError::Sync(format!(
                             "reconcile epoch changed for {target_key}; dropping stale pages"
@@ -1666,7 +1786,9 @@ impl Client {
                         let p = fence_principal.to_string();
                         let t = target_key.to_string();
                         let ops_task = ops;
+                        let commit_guard = _commit_guard.clone();
                         tokio::task::spawn_blocking(move || {
+                            let _guard = commit_guard;
                             sqlite_task.apply_journal_page_fenced(
                                 &p,
                                 &t,
@@ -1896,7 +2018,7 @@ impl Client {
         // Client-level commit gate: serialize ingests process-wide and
         // reject stale epochs (logout/principal switch) so a commit can
         // never land during or after a wipe. Check + write share one hold.
-        let _commit_guard = self.checkpoint_save.lock().await;
+        let _commit_guard = Arc::new(self.checkpoint_save.clone().lock_owned().await);
         if self.reconcile_epoch() != run_epoch {
             return Err(TinkleError::Sync(
                 "reconcile epoch changed; dropping stale ingest".into(),
@@ -1933,7 +2055,9 @@ impl Client {
         }
         let tk = target_key.to_string();
         let pr = principal.to_string();
+        let commit_guard = _commit_guard.clone();
         let result = tokio::task::spawn_blocking(move || {
+            let _guard = commit_guard;
             storage.apply_journal_page_fenced(&pr, &tk, &ops, current, gen)
         })
         .await;
@@ -2605,7 +2729,7 @@ impl Client {
         // whole process, while manager generations are per-connection, so
         // a stale run can pass a dead manager's fence check yet must not
         // write demand after a logout/switch bumped the epoch.
-        let _client_guard = self.checkpoint_save.lock().await;
+        let _client_guard = Arc::new(self.checkpoint_save.clone().lock_owned().await);
         if self.reconcile_epoch() != ctx.epoch {
             return;
         }
@@ -2685,7 +2809,9 @@ impl Client {
             claimed_by: None,
             updated_at: now,
         };
+        let commit_guard = _client_guard.clone();
         let result = tokio::task::spawn_blocking(move || {
+            let _guard = commit_guard;
             storage.enqueue_background_sync_job(&principal, &job)
         })
         .await;
@@ -2721,7 +2847,7 @@ impl Client {
         }
         // See persist_catchup_demand: the epoch check covers scope changes
         // the per-connection manager fence cannot see.
-        let _client_guard = self.checkpoint_save.lock().await;
+        let _client_guard = Arc::new(self.checkpoint_save.clone().lock_owned().await);
         if self.reconcile_epoch() != ctx.epoch {
             return;
         }
@@ -2735,7 +2861,9 @@ impl Client {
         };
         let principal = ctx.fence_principal.to_string();
         let job_id = format!("catchup:{}", ctx.target_key);
+        let commit_guard = _client_guard.clone();
         let _ = tokio::task::spawn_blocking(move || {
+            let _guard = commit_guard;
             storage.delete_background_sync_job(&principal, &job_id)
         })
         .await;
@@ -2967,6 +3095,7 @@ impl Client {
         &self,
         targets: Vec<tinkle_schema::proto::Target>,
     ) -> Result<(), TinkleError> {
+        let epoch = self.reconcile_epoch();
         let _sub = self.sub_lock.lock().await;
         let mgr = self.live_mgr().await?;
         let principal = self.principal().await;
@@ -2981,6 +3110,9 @@ impl Client {
         mgr.track_targets(targets.clone()).await;
         {
             let mut g = self.interests.lock().await;
+            if self.reconcile_epoch() != epoch || self.is_signed_out() {
+                return Err(TinkleError::Sync("subscription scope changed".into()));
+            }
             // Merge: keep existing plus new (dedupe by key).
             let mut keys: HashSet<String> = g
                 .targets
@@ -3121,28 +3253,41 @@ impl Client {
     pub async fn stop(&self) {
         self.pause_retirement_schedule().await;
         self.stop_supervisor().await;
-        let _connect = self.connect_lock.lock().await;
-        self.teardown_connection().await;
+        {
+            let _connect = self.connect_lock.lock().await;
+            self.teardown_connection().await;
+        }
+        // Explicit stop may drain writes, but must not hold up logout's
+        // transport retirement/protected-store invalidation via connect_lock.
+        #[cfg(not(target_arch = "wasm32"))]
+        let _commits = self.checkpoint_save.lock().await;
     }
 
     async fn stop_supervisor(&self) {
-        let (handle, shutdown) = {
-            let mut sup = self.sup_state.lock().await;
-            sup.epoch += 1;
-            (sup.handle.take(), sup.shutdown.take())
-        };
-        if let Some(tx) = shutdown {
+        // Keep the aborted join owner in shared state if this waiter is dropped.
+        let mut sup = self.sup_state.lock().await;
+        sup.epoch = sup.epoch.wrapping_add(1);
+        if let Some(tx) = sup.shutdown.take() {
             let _ = tx.send(());
         }
-        if let Some(h) = handle {
+        if let Some(h) = sup.handle.as_mut() {
             h.abort();
             let _ = h.await;
         }
+        sup.handle = None;
+        drop(sup);
+        // Cache draining belongs to wipe/reset, after protected-store invalidation.
+        // Aborting this owner cannot abort its already-started blocking writes.
         *self.signal_tx.lock().await = None;
     }
 
     pub async fn suspend(&self) {
-        self.suspended.store(true, Ordering::SeqCst);
+        {
+            let mut sup = self.sup_state.lock().await;
+            sup.epoch = sup.epoch.wrapping_add(1);
+            sup.suspension_epoch = sup.suspension_epoch.wrapping_add(1);
+            self.suspended.store(true, Ordering::SeqCst);
+        }
         self.pause_retirement_schedule().await;
         let _connect = self.connect_lock.lock().await;
         self.teardown_connection().await;
@@ -3154,12 +3299,17 @@ impl Client {
         }
         // A foreground/wake call never carries timers or an unverified old
         // socket across the platform suspension boundary.
-        self.suspended.store(true, Ordering::SeqCst);
+        let suspension_epoch = {
+            let sup = self.sup_state.lock().await;
+            self.suspended.store(true, Ordering::SeqCst);
+            sup.suspension_epoch
+        };
         let _connect = self.connect_lock.lock().await;
         self.teardown_connection().await;
         drop(_connect);
         let _ = self.foreground_retirement().await;
-        if !self.is_signed_out() {
+        let sup = self.sup_state.lock().await;
+        if !self.is_signed_out() && sup.suspension_epoch == suspension_epoch {
             self.suspended.store(false, Ordering::SeqCst);
         }
     }
@@ -3169,10 +3319,14 @@ impl Client {
     }
 
     pub async fn reconnect(&self) -> Result<(), TinkleError> {
-        self.reconnect_once(false).await
+        self.reconnect_once(false, &mut None).await
     }
 
-    async fn reconnect_once(&self, automatic: bool) -> Result<(), TinkleError> {
+    async fn reconnect_once(
+        &self,
+        automatic: bool,
+        fence: &mut Option<ReconnectFence>,
+    ) -> Result<(), TinkleError> {
         self.authorization.generation()?;
         if self.suspended.load(Ordering::SeqCst) {
             return Err(TinkleError::NotConnected(
@@ -3187,12 +3341,29 @@ impl Client {
                 "automatic reconnect is parked".into(),
             ));
         }
+        let attempt = Arc::new(());
+        self.sup_state.lock().await.reconnect_attempt = Some(attempt.clone());
+        let source_revision = self.retirement.revision();
+        *fence = Some(ReconnectFence {
+            source_revision,
+            attempt: attempt.clone(),
+            generation: None,
+        });
         self.teardown_connection().await;
         // One attempt only. The supervisor schedules subsequent attempts.
         self.connect_locked().await?;
+        let generation = self
+            .live
+            .read()
+            .await
+            .as_ref()
+            .map(|live| live.generation.clone());
+        if let Some(fence) = fence.as_mut() {
+            fence.generation = generation.clone();
+        }
         drop(connection);
         if self.suspended.load(Ordering::SeqCst) {
-            self.teardown_connection().await;
+            self.teardown_generation(generation.as_ref()).await;
             return Err(TinkleError::NotConnected("suspended after connect".into()));
         }
         let (subscribed, targets) = {
@@ -3200,12 +3371,46 @@ impl Client {
             (g.subscribed, g.targets.clone())
         };
         if subscribed {
-            if let Err(e) = self.subscribe(targets).await {
-                self.teardown_connection().await;
+            let mut caller = self.clone();
+            caller.call_generation = generation.clone();
+            if let Err(e) = caller.subscribe(targets).await {
+                self.teardown_generation(generation.as_ref()).await;
                 return Err(e);
             }
         }
+        if !automatic {
+            let _connection = self.connect_lock.lock().await;
+            if self.retirement.revision() == source_revision
+                && self.live.read().await.as_ref().is_some_and(|live| {
+                    generation
+                        .as_ref()
+                        .is_some_and(|expected| Arc::ptr_eq(expected, &live.generation))
+                })
+            {
+                let mut sup = self.sup_state.lock().await;
+                if !sup.reconnect_blocked
+                    && sup
+                        .reconnect_attempt
+                        .as_ref()
+                        .is_some_and(|current| Arc::ptr_eq(current, &attempt))
+                {
+                    sup.reconnect_failures = 0;
+                    sup.next_reestablish = None;
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// Delayed restoration failure may retire only the connection this attempt created.
+    async fn teardown_generation(&self, expected: Option<&Arc<LiveGeneration>>) {
+        let _connection = self.connect_lock.lock().await;
+        let matches = self.live.read().await.as_ref().is_some_and(|live| {
+            expected.is_some_and(|generation| Arc::ptr_eq(generation, &live.generation))
+        });
+        if matches {
+            self.teardown_connection().await;
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -3457,8 +3662,40 @@ impl Client {
             return;
         }
         tracing::debug!("supervisor re-establishing connection");
-        let result = self.reconnect_once(true).await;
+        let mut fence = None;
+        let result = self.reconnect_once(true, &mut fence).await;
+        if let Some(fence) = fence {
+            self.apply_reconnect_result(&fence, result).await;
+        }
+    }
+
+    /// A completed predecessor attempt cannot park or charge a replacement source.
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn apply_reconnect_result(
+        &self,
+        fence: &ReconnectFence,
+        result: Result<(), TinkleError>,
+    ) {
+        let _connection = self.connect_lock.lock().await;
+        if self.retirement.revision() != fence.source_revision {
+            return;
+        }
+        if self.live.read().await.as_ref().is_some_and(|live| {
+            fence
+                .generation
+                .as_ref()
+                .is_none_or(|expected| !Arc::ptr_eq(expected, &live.generation))
+        }) {
+            return;
+        }
         let mut sup = self.sup_state.lock().await;
+        if !sup
+            .reconnect_attempt
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &fence.attempt))
+        {
+            return;
+        }
         match result {
             Ok(()) => {
                 sup.reconnect_failures = 0;
@@ -3724,10 +3961,13 @@ impl Client {
         &self,
         req: tinkle_schema::proto::GetDialogsRequest,
     ) -> Result<tinkle_schema::proto::GetDialogsResponse, TinkleError> {
+        let epoch = self.reconcile_epoch();
+        let principal = self.principal().await;
         let resp = self.messages().get_dialogs(req).await?;
-        self.ingest_snapshot_entities(&resp.users, &resp.chats)
+        self.ingest_snapshot_entities(&principal, epoch, &resp.users, &resp.chats)
             .await;
-        self.ingest_snapshot_dialogs(&resp.dialogs).await;
+        self.ingest_snapshot_dialogs(&principal, epoch, &resp.dialogs)
+            .await;
         Ok(resp)
     }
 
@@ -3745,11 +3985,13 @@ impl Client {
     #[cfg(not(target_arch = "wasm32"))]
     async fn ingest_snapshot_entities(
         &self,
+        principal: &str,
+        epoch: u64,
         users: &[tinkle_schema::proto::User],
         chats: &[tinkle_schema::proto::Chat],
     ) {
-        let (principal, storage) = match (self.principal().await, self.sqlite.clone()) {
-            (p, Some(s)) if p != UNKNOWN_PRINCIPAL => (p, s),
+        let (principal, storage) = match (principal, self.sqlite.clone()) {
+            (p, Some(s)) if p != UNKNOWN_PRINCIPAL => (p.to_string(), s),
             _ => return,
         };
         if users.is_empty() && chats.is_empty() {
@@ -3768,7 +4010,14 @@ impl Client {
         {
             return;
         }
+        let commit_guard = self.checkpoint_save.clone().lock_owned().await;
+        let current_epoch = self.reconcile_epoch.clone();
+        let authorization = self.authorization.clone();
         let result = tokio::task::spawn_blocking(move || {
+            let _guard = commit_guard;
+            if current_epoch.load(Ordering::SeqCst) != epoch || authorization.is_signed_out() {
+                return;
+            }
             for row in &ops.users {
                 if let Err(e) = storage.upsert_user(&principal, row) {
                     tracing::debug!(error = %e, "history user ingest failed");
@@ -3817,10 +4066,15 @@ impl Client {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    async fn ingest_snapshot_dialogs(&self, dialogs: &[tinkle_schema::proto::Dialog]) {
+    async fn ingest_snapshot_dialogs(
+        &self,
+        principal: &str,
+        epoch: u64,
+        dialogs: &[tinkle_schema::proto::Dialog],
+    ) {
         use prost::Message as _;
-        let (principal, storage) = match (self.principal().await, self.sqlite.clone()) {
-            (p, Some(s)) if p != UNKNOWN_PRINCIPAL => (p, s),
+        let (principal, storage) = match (principal, self.sqlite.clone()) {
+            (p, Some(s)) if p != UNKNOWN_PRINCIPAL => (p.to_string(), s),
             _ => return,
         };
         if dialogs.is_empty() {
@@ -3861,7 +4115,14 @@ impl Client {
         if rows.is_empty() {
             return;
         }
+        let commit_guard = self.checkpoint_save.clone().lock_owned().await;
+        let current_epoch = self.reconcile_epoch.clone();
+        let authorization = self.authorization.clone();
         let result = tokio::task::spawn_blocking(move || {
+            let _guard = commit_guard;
+            if current_epoch.load(Ordering::SeqCst) != epoch || authorization.is_signed_out() {
+                return;
+            }
             for row in &rows {
                 if let Err(e) = storage.upsert_dialog_authoritative(&principal, row, true) {
                     tracing::debug!(error = %e, "dialog snapshot ingest failed");
@@ -3875,16 +4136,38 @@ impl Client {
     }
 
     /// Replace host-supplied channel trust/enrollment, retiring the old channel.
-    /// This is the explicit transition after application enrollment completes.
+    /// Raw credentials withdraw the previous application principal and interests.
+    /// A different deployment requires a new client with a separate cache namespace;
+    /// verified enrollment installation supplies its own validated principal.
     pub async fn replace_trust_source(&self, next: TrustSource) -> Result<(), TinkleError> {
         let authorization = self.authorization.generation()?;
         next.security()?;
         let _connect = self.connect_lock.lock().await;
         authorization.check(self)?;
+        let next_trust = match &next {
+            TrustSource::Bootstrap(trust)
+            | TrustSource::SignedOut(trust)
+            | TrustSource::Returning { trust, .. } => trust,
+        };
+        // Cache keys contain a user id, not a deployment identity. A different
+        // trust domain needs a new Client with its own cache/cursor namespace.
+        if *next_trust != self.enrollment_trust().await {
+            return Err(TinkleError::Configuration(
+                "a different deployment requires a new client and cache namespace".into(),
+            ));
+        }
         self.retirement.invalidate();
         let was_supervised = self.sup_state.lock().await.handle.is_some();
-        let had_interests = self.interests.lock().await.subscribed;
         self.teardown_connection().await;
+        {
+            #[cfg(not(target_arch = "wasm32"))]
+            let _cache = self.checkpoint_save.lock().await;
+            authorization.check(self)?;
+            #[cfg(not(target_arch = "wasm32"))]
+            self.reconcile_epoch.fetch_add(1, Ordering::SeqCst);
+            // Raw credentials carry no verified user id; never inherit the old account.
+            self.reset_session_locked(None).await;
+        }
         if let TrustSource::Returning { enrollment, .. } = &next {
             self.authorization
                 .register_source(authorization.generation, enrollment.secret())?;
@@ -3899,10 +4182,10 @@ impl Client {
             sup.reconnect_blocked = false;
             sup.reconnect_failures = 0;
             sup.next_reestablish = None;
-            sup.selected_port = None;
+            self.connect_lock.selected_port.store(0, Ordering::SeqCst);
         }
         drop(_connect);
-        if was_supervised || had_interests {
+        if was_supervised {
             self.reconnect().await
         } else {
             Ok(())
@@ -3976,6 +4259,13 @@ impl Client {
             ));
         }
         self.teardown_connection().await;
+        #[cfg(not(target_arch = "wasm32"))]
+        if *self.principal.read().await != format!("user:{user_id}") {
+            let _cache = self.checkpoint_save.lock().await;
+            authorization.check(self)?;
+            self.reconcile_epoch.fetch_add(1, Ordering::SeqCst);
+            self.reset_session_locked(None).await;
+        }
         if let TrustSource::Returning { enrollment, .. } = &source {
             self.authorization
                 .register_source(authorization.generation, enrollment.secret())?;
@@ -4079,7 +4369,13 @@ mod tests {
 
     /// Observe actual SDK-admitted budgets, without the legacy wire fixture adapter.
     #[derive(Default)]
-    struct BudgetHandler(std::sync::Mutex<Vec<(String, std::time::Duration)>>);
+    struct BudgetHandler(
+        std::sync::Mutex<Vec<(String, std::time::Duration)>>,
+        std::sync::atomic::AtomicBool,
+        std::sync::Arc<tokio::sync::Notify>,
+        std::sync::Arc<tokio::sync::Notify>,
+        std::sync::atomic::AtomicBool,
+    );
 
     impl syntra_runtime::Handler for BudgetHandler {
         fn authorize(
@@ -4109,21 +4405,43 @@ mod tests {
         ) -> syntra_runtime::HandlerFut {
             use prost::Message;
             let wrapped = method == "/tinkle.v1.ConnectionService/InitConnect";
-            let method = if wrapped {
-                tinkle_schema::proto::InitConnectRequest::decode(payload.as_slice())
-                    .unwrap()
-                    .method
+            let (method, payload) = if wrapped {
+                let request =
+                    tinkle_schema::proto::InitConnectRequest::decode(payload.as_slice()).unwrap();
+                (request.method, request.payload.to_vec())
             } else {
-                method
+                (method, payload)
             };
             self.0
                 .lock()
                 .unwrap()
                 .push((method.clone(), context.budget().remaining().unwrap()));
+            let unavailable = method == tinkle_schema::sync::OBSERVE_METHOD
+                && self.1.swap(false, std::sync::atomic::Ordering::SeqCst);
+            let hold = self.4.load(std::sync::atomic::Ordering::SeqCst);
+            let entered = self.2.clone();
+            let released = self.3.clone();
             Box::pin(async move {
                 let _lease = lease;
+                entered.notify_one();
+                if hold {
+                    released.notified().await;
+                }
+                if unavailable {
+                    return syntra_runtime::HandlerOutcome::error(
+                        syntra_core::ErrorCode::Unavailable,
+                        "retry observation",
+                    );
+                }
                 let payload = if method.ends_with("/Logout") {
                     tinkle_schema::proto::LogoutResponse { logged_out: true }.encode_to_vec()
+                } else if method == crate::liveness::KEEP_ALIVE_METHOD {
+                    let request =
+                        tinkle_schema::proto::KeepAliveRequest::decode(payload.as_slice()).unwrap();
+                    tinkle_schema::proto::KeepAliveResponse {
+                        sequence: request.sequence,
+                    }
+                    .encode_to_vec()
                 } else {
                     Vec::new()
                 };
@@ -4156,6 +4474,19 @@ mod tests {
         returning: bool,
         default: std::time::Duration,
         max: std::time::Duration,
+    ) -> (
+        super::Client,
+        std::sync::Arc<BudgetHandler>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        budget_fixture_connections(returning, default, max, 1).await
+    }
+
+    async fn budget_fixture_connections(
+        returning: bool,
+        default: std::time::Duration,
+        max: std::time::Duration,
+        connections: usize,
     ) -> (
         super::Client,
         std::sync::Arc<BudgetHandler>,
@@ -4196,7 +4527,6 @@ mod tests {
         let handler = Arc::new(BudgetHandler::default());
         let recorded = handler.clone();
         let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
             let security = secure_channel::ServerConfig {
                 mode: if returning {
                     Mode::Returning
@@ -4216,23 +4546,591 @@ mod tests {
                         syntra_runtime::AuthError,
                     > { Ok(Arc::new(syntra_runtime::AllowAnonymous)) },
                 );
-            let handle = syntra_net::tcp::accept_stream(
-                stream,
-                &security,
-                factory,
-                recorded,
-                Default::default(),
-                Default::default(),
-            )
-            .await
-            .unwrap();
-            while !handle.is_closed() {
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            for _ in 0..connections {
+                let (stream, _) = listener.accept().await.unwrap();
+                let handle = syntra_net::tcp::accept_stream(
+                    stream,
+                    &security,
+                    factory.clone(),
+                    recorded.clone(),
+                    Default::default(),
+                    Default::default(),
+                )
+                .await
+                .unwrap();
+                while !handle.is_closed() {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+                handle.close().await;
             }
-            handle.close().await;
         });
         client.connect().await.unwrap();
         (client, handler, server)
+    }
+
+    /// A confirmed result cannot be lost waiting for optional restoration locks.
+    #[tokio::test]
+    async fn review_confirmed_unary_never_waits_for_watch_or_live_locks() {
+        use super::*;
+        use std::time::Duration;
+        for block_live in [false, true] {
+            let (client, handler, server) =
+                budget_fixture(false, Duration::from_secs(2), Duration::from_secs(2)).await;
+            handler.4.store(true, Ordering::SeqCst);
+            let watch = client.watch.lock().await;
+            let caller = client.clone();
+            let call = tokio::spawn(async move {
+                caller
+                    .call_raw("/tinkle.v1.AuthService/SendCode", Vec::new(), 1_000)
+                    .await
+            });
+            handler.2.notified().await;
+            let live = if block_live {
+                Some(client.live.write().await)
+            } else {
+                None
+            };
+            handler.3.notify_one();
+            tokio::time::timeout(Duration::from_millis(500), call)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            drop(live);
+            drop(watch);
+            client.close().await;
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn review_observation_retries_while_keep_alive_succeeds() {
+        use super::*;
+        use std::time::Duration;
+        let (client, handler, server) =
+            budget_fixture(true, Duration::from_secs(2), Duration::from_secs(10)).await;
+        handler.1.store(true, Ordering::SeqCst);
+        client.set_watch(vec![42]).await.unwrap();
+        client
+            .call_raw("/tinkle.v1.AuthService/SendCode", Vec::new(), 1_000)
+            .await
+            .unwrap();
+        let mut heartbeat = client.clone();
+        heartbeat.call_generation = Some(
+            client
+                .live
+                .read()
+                .await
+                .as_ref()
+                .unwrap()
+                .generation
+                .clone(),
+        );
+        heartbeat
+            .call_keep_alive(tinkle_schema::proto::KeepAliveRequest { sequence: 1 }.encode_to_vec())
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(4), async {
+            loop {
+                let count = handler
+                    .0
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(method, _)| method == tinkle_schema::sync::OBSERVE_METHOD)
+                    .count();
+                if count >= 2 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(client.watch_list().await, vec![42]);
+        assert!(client.is_connected().await);
+        client.close().await;
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn review_keep_alive_local_contention_is_not_connection_failure() {
+        use super::*;
+        use std::time::Duration;
+        let (client, handler, server) =
+            budget_fixture(true, Duration::from_secs(2), Duration::from_millis(40)).await;
+        let (_, initialized) = client.live_conn().await.unwrap();
+        let lock = initialized.lock().await;
+        let generation = client
+            .live
+            .read()
+            .await
+            .as_ref()
+            .unwrap()
+            .generation
+            .clone();
+        let mut heartbeat = client.clone();
+        heartbeat.call_generation = Some(generation.clone());
+        assert!(heartbeat
+            .call_keep_alive(tinkle_schema::proto::KeepAliveRequest { sequence: 1 }.encode_to_vec())
+            .await
+            .is_none());
+        assert!(handler.0.lock().unwrap().is_empty());
+        assert!(generation.open.load(Ordering::SeqCst));
+        assert!(client.is_connected().await);
+        drop(lock);
+        assert!(heartbeat
+            .call_keep_alive(tinkle_schema::proto::KeepAliveRequest { sequence: 2 }.encode_to_vec())
+            .await
+            .unwrap()
+            .is_ok());
+        client.close().await;
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn review_resume_cannot_undo_later_suspend() {
+        use std::time::Duration;
+        let (client, _, server) =
+            budget_fixture(false, Duration::from_secs(2), Duration::from_secs(2)).await;
+        let gate = client.connect_lock.lock().await;
+        let resume = client.resume();
+        let suspend = client.suspend();
+        tokio::pin!(resume, suspend);
+        assert!(futures_util::poll!(&mut resume).is_pending());
+        assert!(futures_util::poll!(&mut suspend).is_pending());
+        drop(gate);
+        tokio::join!(resume, suspend);
+        assert!(client.is_suspended().await);
+        client.close().await;
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn review_resume_concurrent_stop_does_not_require_another_resume() {
+        use std::time::Duration;
+        let (client, _, server) =
+            budget_fixture_connections(false, Duration::from_secs(2), Duration::from_secs(2), 2)
+                .await;
+        let gate = client.connect_lock.lock().await;
+        let resume = client.resume();
+        let stop = client.stop();
+        tokio::pin!(resume, stop);
+        assert!(futures_util::poll!(&mut resume).is_pending());
+        assert!(futures_util::poll!(&mut stop).is_pending());
+        drop(gate);
+        tokio::join!(resume, stop);
+        assert!(!client.is_signed_out());
+        assert!(!client.is_suspended().await);
+        client.connect().await.unwrap();
+        assert!(client.is_connected().await);
+        client.close().await;
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn review_resume_foreground_wait_ignores_supervisor_only_epoch_changes() {
+        let client = crate::enrollment::review_tests::client(false);
+        let resume = client.resume();
+        tokio::pin!(resume);
+        // No connection or locks: resume has reached its retained foreground entry.
+        assert!(futures_util::poll!(&mut resume).is_pending());
+        client.stop_supervisor().await;
+        resume.await;
+        assert!(!client.is_signed_out());
+        assert!(!client.is_suspended().await);
+        client.close().await;
+    }
+
+    #[tokio::test]
+    async fn review_resume_retirement_cleanup_keeps_signed_out_suspended() {
+        use super::*;
+        let client = crate::enrollment::review_tests::client(false);
+        let supervisor_epoch = client.sup_state.lock().await.epoch;
+        let resume = client.resume();
+        tokio::pin!(resume);
+        assert!(futures_util::poll!(&mut resume).is_pending());
+        // Exercise the retained cleanup completion that foreground retirement joins.
+        let cleanup = client
+            .logout_cleanup
+            .join_retirement(client.background_clone(), "user:42".into());
+        let (_, result) = tokio::join!(resume, cleanup);
+        assert!(!result.unwrap());
+        assert_ne!(client.sup_state.lock().await.epoch, supervisor_epoch);
+        assert!(client.is_signed_out());
+        assert!(client.is_suspended().await);
+        assert!(matches!(
+            client.connect().await,
+            Err(TinkleError::SignedOut)
+        ));
+        client.close().await;
+    }
+
+    #[tokio::test]
+    async fn review_manual_reconnect_resets_only_nonterminal_backoff() {
+        use std::time::Duration;
+        for blocked in [false, true] {
+            let (client, _, server) = budget_fixture_connections(
+                false,
+                Duration::from_secs(2),
+                Duration::from_secs(2),
+                2,
+            )
+            .await;
+            {
+                let mut sup = client.sup_state.lock().await;
+                sup.reconnect_failures = 10;
+                sup.next_reestablish = Some(std::time::Instant::now() + Duration::from_secs(60));
+                sup.reconnect_blocked = blocked;
+            }
+            let old = client
+                .live
+                .read()
+                .await
+                .as_ref()
+                .unwrap()
+                .generation
+                .clone();
+            client.reconnect().await.unwrap();
+            let sup = client.sup_state.lock().await;
+            assert_eq!(sup.reconnect_blocked, blocked);
+            assert_eq!(sup.reconnect_failures, if blocked { 10 } else { 0 });
+            assert_eq!(sup.next_reestablish.is_some(), blocked);
+            drop(sup);
+            client.teardown_generation(Some(&old)).await;
+            assert!(
+                client.is_connected().await,
+                "stale cleanup closed the replacement"
+            );
+            client.close().await;
+            server.await.unwrap();
+        }
+    }
+
+    /// Drive both attempts to the held subscription gate, then release A before B.
+    #[tokio::test]
+    async fn review_same_source_overlap_cannot_park_manual_replacement() {
+        use super::*;
+        use std::time::Duration;
+        let (client, _, server) =
+            budget_fixture_connections(false, Duration::from_secs(2), Duration::from_secs(2), 4)
+                .await;
+        client.set_principal_user_id(1).await;
+        client.close().await;
+        client.interests.lock().await.subscribed = true;
+        let source_revision = client.retirement.revision();
+        let subscription = client.sub_lock.lock().await;
+        let automatic = client.reestablish();
+        tokio::pin!(automatic);
+        let generation_a = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                assert!(futures_util::poll!(&mut automatic).is_pending());
+                if let Some(live) = client.live.read().await.as_ref() {
+                    break live.generation.clone();
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::task::yield_now().await;
+        assert!(futures_util::poll!(&mut automatic).is_pending());
+
+        let manual = client.reconnect();
+        tokio::pin!(manual);
+        let generation_b = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                assert!(futures_util::poll!(&mut manual).is_pending());
+                if let Some(live) = client.live.read().await.as_ref() {
+                    if !Arc::ptr_eq(&generation_a, &live.generation) {
+                        break live.generation.clone();
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::task::yield_now().await;
+        assert!(futures_util::poll!(&mut manual).is_pending());
+        drop(subscription);
+        let (_, result) = tokio::join!(automatic, manual);
+        result.unwrap();
+        assert_eq!(client.retirement.revision(), source_revision);
+        {
+            let sup = client.sup_state.lock().await;
+            assert!(
+                !sup.reconnect_blocked,
+                "superseded attempt parked generation B"
+            );
+            assert_eq!(sup.reconnect_failures, 0);
+            assert!(sup.next_reestablish.is_none());
+        }
+        assert!(client.is_connected().await);
+        {
+            let _connection = client.connect_lock.lock().await;
+            client.teardown_connection().await;
+        }
+        client.reestablish().await;
+        assert!(
+            client.is_connected().await,
+            "generation B loss must remain retryable"
+        );
+        assert!(!Arc::ptr_eq(
+            &generation_b,
+            &client.live.read().await.as_ref().unwrap().generation,
+        ));
+        client.close().await;
+        server.await.unwrap();
+    }
+
+    /// First logout must clear credentials before waiting for a cancelled SQLite writer.
+    #[tokio::test]
+    async fn review_first_logout_invalidates_store_before_draining_cancelled_sqlite() {
+        use super::*;
+        use std::time::Duration;
+        let (mut client, _, server) =
+            budget_fixture(true, Duration::from_secs(2), Duration::from_secs(2)).await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("review-first-logout.db");
+        let storage = Arc::new(tinkle_storage::Storage::open(path.to_str().unwrap()).unwrap());
+        client.sqlite = Some(storage.clone());
+        client.set_principal_user_id(1).await;
+        let store = Arc::new(BudgetStore::default());
+        client
+            .authorization
+            .generation()
+            .unwrap()
+            .store(&client, store.clone(), None, None)
+            .unwrap();
+        let blocker = rusqlite::Connection::open(&path).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let chats = [tinkle_schema::proto::Chat {
+            chat_id: 42,
+            ..Default::default()
+        }];
+        {
+            let write =
+                client.ingest_snapshot_entities("user:1", client.reconcile_epoch(), &[], &chats);
+            tokio::pin!(write);
+            assert!(futures_util::poll!(&mut write).is_pending());
+        }
+        assert!(client.checkpoint_save.try_lock().is_err());
+        let caller = client.clone();
+        let first = tokio::spawn(async move { caller.logout().await });
+        // No preseeded cleanup principal: exercise the initial transport-retirement path.
+        tokio::time::timeout(Duration::from_secs(2), store.entered.notified())
+            .await
+            .expect("first logout waited for SQLite before protected-store invalidation");
+        assert_eq!(store.calls.load(Ordering::SeqCst), 1);
+        assert!(client.is_signed_out());
+        assert!(!first.is_finished());
+        store.released.notify_one();
+        first.abort();
+        let _ = first.await;
+        blocker.execute_batch("COMMIT").unwrap();
+        // Setting the cache principal retired the unbound Returning fixture;
+        // offline logout still owes the same ordered local invalidation.
+        assert!(!client.logout().await.unwrap());
+        assert_eq!(store.calls.load(Ordering::SeqCst), 1);
+        assert!(storage.get_chat("user:1", 42).unwrap().is_none());
+        assert_eq!(client.principal().await, UNKNOWN_PRINCIPAL);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn review_provisioning_inherits_selected_primary_without_fallback() {
+        use super::*;
+        use std::time::Duration;
+        let (mut parent, _, server) =
+            budget_fixture(false, Duration::from_secs(2), Duration::from_secs(2)).await;
+        let fallback = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        parent.config.fallback_port = Some(fallback.local_addr().unwrap().port());
+        let trust = parent.enrollment_trust().await;
+        parent.close().await;
+        server.await.unwrap();
+        let epoch = parent.authorization.generation().unwrap();
+        assert!(matches!(
+            parent.provisioning_client(&trust, &epoch).await,
+            Err(TinkleError::NetworkUnavailable)
+        ));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), fallback.accept())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn review_raw_replacement_withdraws_unknown_account_and_rejects_cross_deployment_cache() {
+        use super::*;
+        use std::time::Duration;
+        let (client, _, server) =
+            budget_fixture(false, Duration::from_secs(2), Duration::from_secs(2)).await;
+        client.set_principal_user_id(1).await;
+        client.watch.lock().await.push(42);
+        *client.interests.lock().await = Interests {
+            targets: vec![tinkle_schema::proto::Target {
+                kind: Some(tinkle_schema::proto::target::Kind::UserId(42)),
+            }],
+            subscribed: true,
+        };
+        let trust = client.enrollment_trust().await;
+        client
+            .replace_trust_source(TrustSource::Returning {
+                trust: trust.clone(),
+                enrollment: crate::Enrollment::new([9; 32], [8; 8], 2).unwrap(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(client.principal().await, UNKNOWN_PRINCIPAL);
+        assert!(client.watch_list().await.is_empty());
+        assert!(client.tracked_targets().await.is_empty());
+        assert!(!client.interests.lock().await.subscribed);
+        let mut other = trust;
+        other.scope = "different-deployment".into();
+        assert!(matches!(
+            client
+                .replace_trust_source(TrustSource::Bootstrap(other))
+                .await,
+            Err(TinkleError::Configuration(_))
+        ));
+        client.close().await;
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn review_old_reconnect_result_cannot_charge_or_park_replacement() {
+        use super::*;
+        use std::time::Duration;
+        let (client, _, server) =
+            budget_fixture(false, Duration::from_secs(2), Duration::from_secs(2)).await;
+        let old = ReconnectFence {
+            source_revision: client.retirement.revision(),
+            attempt: Arc::new(()),
+            generation: None,
+        };
+        client.sup_state.lock().await.reconnect_attempt = Some(old.attempt.clone());
+        let trust = client.enrollment_trust().await;
+        client
+            .replace_trust_source(TrustSource::Bootstrap(trust))
+            .await
+            .unwrap();
+        client
+            .apply_reconnect_result(&old, Err(TinkleError::TrustRejected))
+            .await;
+        {
+            let mut sup = client.sup_state.lock().await;
+            assert!(!sup.reconnect_blocked);
+            assert_eq!(sup.reconnect_failures, 0);
+            assert!(sup.next_reestablish.is_none());
+            sup.reconnect_failures = 7;
+            sup.next_reestablish = Some(std::time::Instant::now() + Duration::from_secs(60));
+        }
+        client.apply_reconnect_result(&old, Ok(())).await;
+        assert_eq!(client.sup_state.lock().await.reconnect_failures, 7);
+        // A failed manual attempt keeps the prior failure count/deadline unchanged.
+        server.await.unwrap();
+        assert!(client.reconnect().await.is_err());
+        let sup = client.sup_state.lock().await;
+        assert_eq!(sup.reconnect_failures, 7);
+        assert!(sup.next_reestablish.is_some());
+        assert!(!sup.reconnect_blocked);
+        drop(sup);
+        client.close().await;
+    }
+
+    /// Cancel a real SQLite writer while it waits behind another transaction.
+    /// The blocking closure, not its dropped async waiter, must own the commit gate.
+    #[tokio::test]
+    async fn review_cancelled_snapshot_writers_drain_before_wipe_and_reject_stale_pages() {
+        use super::*;
+        for entities in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("review-cache.db");
+            let storage = Arc::new(tinkle_storage::Storage::open(path.to_str().unwrap()).unwrap());
+            let info = crate::ClientInfo::new(
+                "device".into(),
+                "test".into(),
+                "1".into(),
+                "1".into(),
+                "1".into(),
+                Default::default(),
+            )
+            .unwrap();
+            let trust = crate::ServerTrust {
+                server_public_key: [1; 32],
+                server_key_id: 7,
+                scope: "review".into(),
+            };
+            let client = Client::new_sqlite(
+                ClientConfig::new("127.0.0.1", info),
+                TrustSource::Bootstrap(trust),
+                storage.clone(),
+            );
+            client.set_principal_user_id(1).await;
+            let epoch = client.reconcile_epoch();
+            let chats = vec![tinkle_schema::proto::Chat {
+                chat_id: 42,
+                ..Default::default()
+            }];
+            let dialogs = vec![tinkle_schema::proto::Dialog {
+                target: Some(tinkle_schema::proto::Target {
+                    kind: Some(tinkle_schema::proto::target::Kind::UserId(42)),
+                }),
+                ..Default::default()
+            }];
+            let blocker = rusqlite::Connection::open(&path).unwrap();
+            blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+            {
+                let write = async {
+                    if entities {
+                        client
+                            .ingest_snapshot_entities("user:1", epoch, &[], &chats)
+                            .await;
+                    } else {
+                        client
+                            .ingest_snapshot_dialogs("user:1", epoch, &dialogs)
+                            .await;
+                    }
+                };
+                tokio::pin!(write);
+                assert!(futures_util::poll!(&mut write).is_pending());
+            }
+            assert!(
+                client.checkpoint_save.try_lock().is_err(),
+                "cancelled SQLite task lost its gate"
+            );
+            client.stop_supervisor().await;
+            let wipe = client.logout_wipe_and_reset("user:1");
+            tokio::pin!(wipe);
+            assert!(futures_util::poll!(&mut wipe).is_pending());
+            blocker.execute_batch("COMMIT").unwrap();
+            wipe.await.unwrap();
+            // Old fetched data cannot recreate rows, even after the logout waiter completed.
+            client
+                .ingest_snapshot_entities("user:1", epoch, &[], &chats)
+                .await;
+            client
+                .ingest_snapshot_dialogs("user:1", epoch, &dialogs)
+                .await;
+            assert!(storage.get_chat("user:1", 42).unwrap().is_none());
+            assert!(storage.list_dialogs("user:1", 10).unwrap().is_empty());
+
+            blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+            {
+                let wipe = client.logout_wipe_and_reset("user:1");
+                tokio::pin!(wipe);
+                assert!(futures_util::poll!(&mut wipe).is_pending());
+            }
+            assert!(
+                client.checkpoint_save.try_lock().is_err(),
+                "cancelled wipe released exclusion before SQLite finished"
+            );
+            blocker.execute_batch("COMMIT").unwrap();
+            let _drained = client.checkpoint_save.lock().await;
+        }
     }
 
     /// Every dispatch branch hands off only the remainder after a contended lock.

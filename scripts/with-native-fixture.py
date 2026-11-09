@@ -25,9 +25,25 @@ if not args.command:
     parser.error("expected consumer command")
 
 root = Path(__file__).resolve().parents[1]
-subprocess.run(["cargo", "build", "--locked", "-p", "libtinkle", "--example", "native-fixture"], cwd=root, check=True)
-metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"], cwd=root))
-binary = Path(metadata["target_directory"]) / "debug/examples/native-fixture"
+# Explicit host selection overrides both CARGO_BUILD_TARGET and build.target.
+build = subprocess.run([
+    "cargo", "build", "--locked", "-p", "libtinkle", "--example", "native-fixture",
+    "--target", "host-tuple", "--message-format=json-render-diagnostics",
+], cwd=root, check=True, stdout=subprocess.PIPE, text=True)
+binaries = set()
+for line in build.stdout.splitlines():
+    try:
+        message = json.loads(line)
+    except json.JSONDecodeError:
+        continue  # Build tools may also emit non-JSON stdout.
+    if (isinstance(message, dict) and message.get("reason") == "compiler-artifact"
+            and message.get("target", {}).get("name") == "native-fixture"
+            and message["target"].get("kind") == ["example"]
+            and message.get("executable")):
+        binaries.add(message["executable"])
+if len(binaries) != 1:
+    raise RuntimeError("host build did not report exactly one native-fixture executable")
+binary = Path(binaries.pop())
 fixture = subprocess.Popen([str(binary), str(args.port)], cwd=root, stdout=subprocess.PIPE, text=True)
 output = fixture.stdout
 assert output is not None

@@ -6,6 +6,7 @@
     "README.md",
     "Package.swift",
     "Sources/TinkleSDK/Bootstrap.swift",
+    "Tests/TinkleSDKTests/EnrollmentReviewVector.swift",
     "Tests/TinkleSDKTests/LoopbackGateway.swift",
     "Tests/TinkleSDKTests/SqliteStorageTests.swift",
     "Tests/TinkleSDKTests/TinkleSDKTests.swift"

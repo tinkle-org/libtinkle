@@ -58,13 +58,25 @@ body:
       description: Minimal repro. Self-contained Rust snippet, Swift/Kotlin call, or JS/WASM steps preferred.
       placeholder: |
         ```rust
-        let client = libtinkle::Client::new(
-          libtinkle::ClientConfig::new("gateway.test.example.com"),
-          provisioned_trust_source,
-          libtinkle::InMemoryCursorStore::new(),
-        );
-        client.connect().await?;
-        // ...
+        async fn reproduce(
+          provisioned_trust_source: libtinkle::TrustSource,
+        ) -> Result<(), libtinkle::TinkleError> {
+          let client_info = libtinkle::ClientInfo::new(
+            "Mac".into(),     // device_model
+            "macos".into(),   // platform
+            "15.0".into(),    // os_version
+            "1.0.0".into(),   // app_version
+            "1".into(),       // app_build
+            libtinkle::ClientOptions::default(),
+          )?;
+          let client = libtinkle::Client::new(
+            libtinkle::ClientConfig::new("gateway.test.example.com", client_info),
+            provisioned_trust_source,
+            libtinkle::InMemoryCursorStore::new(),
+          );
+          client.connect().await?;
+          Ok(())
+        }
         ```
         1. ...
         2. ...

@@ -150,6 +150,15 @@ impl<'a> Account<'a> {
         Self { client }
     }
 
+    fn observe_denial(&self, error: &TinkleError) {
+        if matches!(
+            error.code(),
+            syntra_core::ErrorCode::Unauthenticated | syntra_core::ErrorCode::PermissionDenied
+        ) {
+            self.client.authorization.set_authentication_known(false);
+        }
+    }
+
     /// List active devices with neutral session IDs and descriptive metadata.
     pub async fn get_sessions(&self) -> Result<Vec<tinkle_schema::proto::Session>, TinkleError> {
         let response: tinkle_schema::proto::GetSessionsResponse = call_typed(
@@ -158,7 +167,8 @@ impl<'a> Account<'a> {
             &tinkle_schema::proto::GetSessionsRequest {},
             3_000,
         )
-        .await?;
+        .await
+        .inspect_err(|error| self.observe_denial(error))?;
         Ok(response.sessions)
     }
 
@@ -175,7 +185,8 @@ impl<'a> Account<'a> {
             },
             3_000,
         )
-        .await?;
+        .await
+        .inspect_err(|error| self.observe_denial(error))?;
         Ok(response.revoked)
     }
 
@@ -187,7 +198,8 @@ impl<'a> Account<'a> {
             &tinkle_schema::proto::RevokeSessionsRequest {},
             3_000,
         )
-        .await?;
+        .await
+        .inspect_err(|error| self.observe_denial(error))?;
         Ok(response.revoked)
     }
 }
@@ -251,22 +263,26 @@ impl<'a> Auth<'a> {
         let mut response = result?;
         let delivery = response
             .enrollment
-            .take()
+            .as_ref()
             .ok_or_else(|| TinkleError::Codec("missing enrollment".into()))?;
-        let enrollment = self
-            .client
-            .persist_delivery(operation, delivery, false)
-            .await?;
         if let Some(user) = &response.user {
             let id = match &user.user_type {
                 Some(tinkle_schema::proto::user::UserType::Data(data)) => data.id,
                 Some(tinkle_schema::proto::user::UserType::Empty(empty)) => empty.id,
                 None => 0,
             };
-            if id != enrollment.status().user_id {
+            if id != delivery.user_id {
                 return Err(TinkleError::Codec("enrollment user mismatch".into()));
             }
         }
+        let delivery = response
+            .enrollment
+            .take()
+            .ok_or_else(|| TinkleError::Codec("missing enrollment".into()))?;
+        let enrollment = self
+            .client
+            .persist_delivery(operation, delivery, false)
+            .await?;
         Ok(crate::SignInOutcome {
             user: response.user.take(),
             is_new_user: response.is_new_user,

@@ -129,6 +129,23 @@ fn enrollment_fields_and_capability_activation_are_exact() {
             .map(|f| (f.name.as_deref().unwrap(), f.number.unwrap()))
             .collect();
         assert_eq!(actual, fields, "{message}");
+        if matches!(message, "KeepAliveRequest" | "KeepAliveResponse") {
+            use prost_types::field_descriptor_proto::{Label, Type};
+            assert_eq!(
+                found.field[0].r#type,
+                Some(Type::Uint64 as i32),
+                "{message}"
+            );
+            assert_eq!(
+                found.field[0].label,
+                Some(Label::Optional as i32),
+                "{message}"
+            );
+            assert!(
+                !found.field[0].proto3_optional.unwrap_or(false),
+                "{message}"
+            );
+        }
     }
 }
 

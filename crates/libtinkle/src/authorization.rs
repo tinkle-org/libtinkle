@@ -1,6 +1,9 @@
 //! Irreversible local sign-out fence and revocable SDK-owned secret cells.
 use crate::{Client, SecureEnrollmentStore, TinkleError, TrustSource};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex, Weak,
+};
 use zeroize::Zeroizing;
 
 /// Shared only by sealed owners; logout erases the cell even while a host
@@ -26,8 +29,28 @@ impl SecretCell {
 /// One callback object bound to a durable namespace incarnation and revision.
 struct StoreBinding {
     store: Arc<dyn SecureEnrollmentStore>,
+    aliases: Vec<Arc<dyn SecureEnrollmentStore>>,
     incarnation: Option<String>,
     revision: Option<String>,
+    writing: Arc<AtomicBool>,
+}
+
+/// Keeps an ambiguous host transaction single-owned until its exact receipt arrives.
+pub(crate) struct StoreWrite(Arc<AtomicBool>);
+impl Drop for StoreWrite {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+impl StoreBinding {
+    fn owns(&self, store: &dyn SecureEnrollmentStore) -> bool {
+        std::ptr::eq(self.store.as_ref(), store)
+            || self
+                .aliases
+                .iter()
+                .any(|alias| std::ptr::eq(alias.as_ref(), store))
+    }
 }
 
 struct State {
@@ -167,13 +190,38 @@ impl Authorization {
         )
     }
 
+    pub(crate) fn begin_store_write(
+        &self,
+        store: &dyn SecureEnrollmentStore,
+    ) -> Result<StoreWrite, TinkleError> {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let binding = state
+            .stores
+            .iter()
+            .find(|binding| binding.owns(store))
+            .ok_or(TinkleError::SecureStore)?;
+        if binding.writing.swap(true, Ordering::AcqRel) {
+            return Err(TinkleError::SecureStore);
+        }
+        Ok(StoreWrite(binding.writing.clone()))
+    }
+
+    pub(crate) fn has_pending_store_write(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .stores
+            .iter()
+            .any(|binding| binding.writing.load(Ordering::Acquire))
+    }
+
     /// Snapshot the revision captured by this coordinator, never a fresh host value.
     pub(crate) fn store_revision(&self, store: &dyn SecureEnrollmentStore) -> Option<String> {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state
             .stores
             .iter()
-            .find(|existing| std::ptr::eq(existing.store.as_ref(), store))
+            .find(|existing| existing.owns(store))
             .and_then(|binding| binding.revision.clone())
     }
 
@@ -186,7 +234,7 @@ impl Authorization {
     ) -> bool {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.stores.iter().any(|binding| {
-            std::ptr::eq(binding.store.as_ref(), store)
+            binding.owns(store)
                 && binding.incarnation.as_deref() == Some(incarnation)
                 && binding.revision.as_deref() == Some(revision)
         })
@@ -213,17 +261,33 @@ impl Authorization {
         let index = state
             .stores
             .iter()
-            .position(|existing| std::ptr::eq(existing.store.as_ref(), store))
+            .position(|existing| existing.owns(store))
             .ok_or(TinkleError::SecureStore)?;
         if state.stores[index].revision.as_deref() != expected {
             return Err(TinkleError::SecureStore);
         }
-        let incarnation = state.stores[index].incarnation.clone();
-        for (current, binding) in state.stores.iter_mut().enumerate() {
-            if current == index || (incarnation.is_some() && binding.incarnation == incarnation) {
-                binding.revision = next.clone();
-            }
+        state.stores[index].revision = next;
+        Ok(())
+    }
+
+    /// Register cleanup authority after fencing, never an enrollment generation.
+    pub(crate) fn bind_clear_only(
+        &self,
+        store: Arc<dyn SecureEnrollmentStore>,
+        incarnation: Option<String>,
+        revision: Option<String>,
+    ) -> Result<(), TinkleError> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if !state.signed_out || !state.needs_store || !state.stores.is_empty() {
+            return Err(TinkleError::SignedOut);
         }
+        state.stores.push(StoreBinding {
+            store,
+            aliases: Vec::new(),
+            incarnation,
+            revision,
+            writing: Default::default(),
+        });
         Ok(())
     }
 }
@@ -275,8 +339,11 @@ impl EnrollmentEpoch {
         }
         // A rejected bind must not register a legacy/unconditional clear path.
         for binding in &state.stores {
-            let same_object = Arc::ptr_eq(&binding.store, &store);
+            let same_object = binding.owns(store.as_ref());
             let same_namespace = incarnation.is_some() && binding.incarnation == incarnation;
+            if (same_object || same_namespace) && binding.writing.load(Ordering::Acquire) {
+                return Err(TinkleError::SecureStore);
+            }
             if (same_object && binding.incarnation.is_some() && binding.incarnation != incarnation)
                 || ((same_object || same_namespace)
                     && binding.revision.is_some()
@@ -285,18 +352,41 @@ impl EnrollmentEpoch {
                 return Err(TinkleError::SecureStore);
             }
         }
-        if let Some(binding) = state
-            .stores
-            .iter_mut()
-            .find(|binding| Arc::ptr_eq(&binding.store, &store))
-        {
+        // A legacy callback may later opt into a namespace already known through
+        // another wrapper. Merge its retained identity rather than clear twice.
+        if let (Some(namespace), Some(object)) = (
+            state
+                .stores
+                .iter()
+                .position(|binding| incarnation.is_some() && binding.incarnation == incarnation),
+            state
+                .stores
+                .iter()
+                .position(|binding| binding.owns(store.as_ref())),
+        ) {
+            if namespace != object {
+                let previous = state.stores.remove(object);
+                let namespace = namespace - usize::from(object < namespace);
+                state.stores[namespace].aliases.push(previous.store);
+                state.stores[namespace].aliases.extend(previous.aliases);
+            }
+        }
+        if let Some(binding) = state.stores.iter_mut().find(|binding| {
+            binding.owns(store.as_ref())
+                || (incarnation.is_some() && binding.incarnation == incarnation)
+        }) {
+            if !binding.owns(store.as_ref()) {
+                binding.aliases.push(store);
+            }
             binding.incarnation = incarnation;
             binding.revision = revision;
         } else {
             state.stores.push(StoreBinding {
                 store,
+                aliases: Vec::new(),
                 incarnation,
                 revision,
+                writing: Default::default(),
             });
         }
         Ok(())
@@ -308,11 +398,20 @@ mod tests {
     use super::*;
 
     /// Callback aliases are distinct objects; their shared namespace is host-provided.
-    struct Callback;
+    #[derive(Default)]
+    struct Callback(Arc<std::sync::atomic::AtomicUsize>);
     #[async_trait::async_trait]
     impl SecureEnrollmentStore for Callback {
         async fn clear(&self) -> Result<(), crate::SecureStoreError> {
-            unreachable!()
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        async fn begin_clear(&self, _: &str) -> Result<bool, crate::SecureStoreError> {
+            Ok(true)
+        }
+        async fn finish_clear(&self, _: &str) -> Result<bool, crate::SecureStoreError> {
+            self.clear().await?;
+            Ok(true)
         }
         async fn commit(
             &self,
@@ -355,8 +454,8 @@ mod tests {
             crate::InMemoryCursorStore::new(),
         );
         let epoch = client.authorization.generation().unwrap();
-        let first: Arc<dyn SecureEnrollmentStore> = Arc::new(Callback);
-        let alias: Arc<dyn SecureEnrollmentStore> = Arc::new(Callback);
+        let first: Arc<dyn SecureEnrollmentStore> = Arc::new(Callback::default());
+        let alias: Arc<dyn SecureEnrollmentStore> = Arc::new(Callback::default());
         for callback in [&first, &alias] {
             epoch
                 .store(
@@ -385,14 +484,75 @@ mod tests {
         assert!(epoch
             .store(
                 &client,
-                Arc::new(Callback),
+                Arc::new(Callback::default()),
                 Some("namespace".into()),
                 Some("revision:2".into())
             )
             .is_err());
-        assert_eq!(client.authorization.stores().1.len(), 2);
+        assert_eq!(client.authorization.stores().1.len(), 1);
         assert!(epoch.store(&client, alias, None, None).is_err());
         assert!(client.authorization.restart_safe_store());
+        for _ in 0..2 {
+            epoch
+                .store(&client, Arc::new(Callback::default()), None, None)
+                .unwrap();
+        }
+        assert_eq!(client.authorization.stores().1.len(), 3);
+        assert!(!client.authorization.restart_safe_store());
+        assert!(!client.authorization.only_namespace("namespace"));
+    }
+
+    #[tokio::test]
+    async fn review_logout_clears_namespace_aliases_once_and_distinct_legacy_stores_each() {
+        let client = crate::enrollment::review_tests::client(false);
+        let epoch = client.authorization.generation().unwrap();
+        let conditional = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        for _ in 0..2 {
+            epoch
+                .store(
+                    &client,
+                    Arc::new(Callback(conditional.clone())),
+                    Some("namespace".into()),
+                    Some("0".into()),
+                )
+                .unwrap();
+        }
+        let legacy = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        for _ in 0..2 {
+            epoch
+                .store(&client, Arc::new(Callback(legacy.clone())), None, None)
+                .unwrap();
+        }
+        client.logout().await.unwrap();
+        client.logout().await.unwrap();
+        assert_eq!(conditional.load(Ordering::SeqCst), 1);
+        assert_eq!(legacy.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn review_legacy_callback_opt_in_merges_an_existing_namespace_without_downgrade() {
+        let client = crate::enrollment::review_tests::client(false);
+        let epoch = client.authorization.generation().unwrap();
+        let clears = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let legacy: Arc<dyn SecureEnrollmentStore> = Arc::new(Callback(clears.clone()));
+        let conditional: Arc<dyn SecureEnrollmentStore> = Arc::new(Callback(clears.clone()));
+        epoch.store(&client, legacy.clone(), None, None).unwrap();
+        for store in [conditional, legacy.clone()] {
+            epoch
+                .store(&client, store, Some("namespace".into()), Some("0".into()))
+                .unwrap();
+        }
+        assert_eq!(client.authorization.stores().1.len(), 1);
+        assert_eq!(
+            client
+                .authorization
+                .store_revision(legacy.as_ref())
+                .as_deref(),
+            Some("0")
+        );
+        assert!(epoch.store(&client, legacy, None, None).is_err());
+        client.logout().await.unwrap();
+        assert_eq!(clears.load(Ordering::SeqCst), 1);
     }
 
     #[test]
