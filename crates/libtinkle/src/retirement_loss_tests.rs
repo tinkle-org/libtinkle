@@ -113,6 +113,10 @@ async fn retirement_loss_failed_teardown_preserves_newer_demand() {
         })
         .await
         .unwrap();
+        // Queue ahead of the next attempt: completion notification does not park the worker.
+        let observation = client.retirement.hold_observation();
+        tokio::pin!(observation);
+        assert!(futures_util::poll!(&mut observation).is_pending());
         let newer = LiveGeneration::new(true, client.retirement.revision());
         client.session_state.network(newer.clone(), true);
         client.request_loss_observation(newer);
@@ -121,12 +125,16 @@ async fn retirement_loss_failed_teardown_preserves_newer_demand() {
             drop(establishing.take());
         }
         loss_attempt_finished(client).await;
+        let observation = tokio::time::timeout(Duration::from_secs(2), observation)
+            .await
+            .expect("predecessor must release observation ownership");
         assert!(
             client.retirement.has_pending_loss(),
-            "predecessor restore replaced current demand"
+            "timeout={timeout}: predecessor restore replaced current demand"
         );
         gate.release();
         drop(establishing);
+        drop(observation);
         assert_loss_retried(&fixture).await;
         client.stop().await;
         fixture.server.shutdown().await;

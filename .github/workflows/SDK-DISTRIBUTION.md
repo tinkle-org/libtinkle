@@ -1,5 +1,64 @@
 # Native SDK automation contract
 
+## Main CI failure and required-check follow-up
+
+### Incident and branch fix
+
+[Main CI run 42856869987](https://github.com/tinkle-org/libtinkle/actions/runs/42856869987)
+at `515eb1814524fa4da88978e965ba2e419e8f0d80` failed the macOS workspace test
+`retirement_loss_failed_teardown_preserves_newer_demand` in
+`crates/libtinkle/src/retirement_loss_tests.rs`, with assertion message
+`predecessor restore replaced current demand`.
+[PR #20's final CI](https://github.com/tinkle-org/libtinkle/actions/runs/42852677890)
+passed every required job. Its test merge `b3a49a8` and the merged main commit
+had identical trees; both OS test/clippy checks were required with `strict=true`,
+so stale code or missing Rust checks did not explain the failure.
+
+The test assumed an attempt-completion notification parked the worker. A newer
+request also queues a wake, so a follow-up attempt could move the newer demand
+in-flight before the pending-demand assertion. The original test failed once
+in 12 local stressed repetitions.
+
+* The test now polls the existing observation-mutex waiter into its queue **before**
+  registering the newer request, then holds the acquired guard through the
+  assertion, relying on [Tokio's FIFO mutex ordering](https://docs.rs/tokio/1.54.0/tokio/sync/struct.Mutex.html).
+  Production scheduling and state logic are unchanged. This follows the
+  [explicit synchronization approach to asynchronous test nondeterminism](https://martinfowler.com/articles/nonDeterminism.html#AsynchronousBehavior),
+  rather than adding sleeps or retrying until green.
+* [`.github/workflows/ci.yml`](ci.yml) repeats the `retirement_loss` group five
+  times in each existing required OS test job, stopping on the first nonzero
+  exit. All five passes are required; failures are not retried away.
+
+### Separate native-check policy follow-up
+
+Native CI passed during this incident; its missing required gate is a separate
+exposure. [`.github/workflows/native-sdk.yml`](native-sdk.yml) now has
+`native-sdk-check`, an aggregate with `if: always()` and explicit `needs` on
+`source`, `ios`, `android`, `manifest`, `swift-consumer`, and `kotlin-consumer`.
+It rejects failure, cancellation, or skipping in any dependency, following
+[GitHub's required-check guidance](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks).
+
+The active ruleset `25502905`, `Protect main - require PR + CI`, currently has
+no native required checks, allows administrators to always bypass, and has no
+merge queue. Operator follow-up:
+
+* After `native-sdk-check` is reported by the PR workflow, add it to the ruleset's
+  required status checks with GitHub Actions as the expected source, retaining
+  every existing check and strict mode.
+* Explicitly review whether to retain administrator bypass; it is not the
+  established cause of this incident.
+* Merge queues remain optional and deferred. If introduced, every required
+  workflow, including the PR validator, needs a `merge_group` trigger.
+
+Workflow changes on `fix/main-ci-root-causes` do not update the ruleset. Remote
+settings are unchanged, and a green hosted rerun of this branch is not claimed.
+
+The older failed main runs from October 20 are already resolved: `563e359`
+(PR #1) corrected the release action repository, formatting, Clippy findings,
+and MSRV; `1d4e4cd` (PR #3) disabled crates.io publication for git-only releases
+after `syntra-core` could not be resolved there. Those failures do not require
+another fix in this branch.
+
 ## Release chain
 
 Required Rust checks and native packaging use the same published BSR prost pin

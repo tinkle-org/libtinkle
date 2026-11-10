@@ -1,7 +1,11 @@
-"""Static contracts for the simplified SDK pipeline, not live CI evidence."""
+"""Workflow contracts and shell regressions, not live CI evidence."""
 
+import json
+import os
 from pathlib import Path
 import re
+import subprocess
+import textwrap
 import unittest
 
 
@@ -71,6 +75,37 @@ class SdkWorkflowTests(unittest.TestCase):
         self.assertIn("python3 -m unittest discover -s tests -p 'test_*.py' -v", self.ci["test"])
         self.assertIn("bash scripts/generate-bindings.sh --check", self.ci["test"])
         self.assertNotIn("continue-on-error:", self.workflows["ci"])
+
+    def test_retirement_loss_stress_requires_five_passes_and_stops_on_any_failure(self):
+        command = "test --locked -p libtinkle --all-features --lib retirement_loss -- --nocapture"
+        stress = [step for step in steps(self.ci["test"]) if "cargo " + command in step]
+        self.assertEqual(len(stress), 1)
+        step = stress[0]
+        self.assertEqual(values(step, "shell", 8), ["bash"])
+        self.assertNotRegex(step, r"(?m)^\s*if:")
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        self.assertIn("set -euo pipefail", script)
+        fake_cargo = """\
+calls=0
+cargo() {
+  calls=$((calls + 1))
+  printf 'cargo: %s\\n' "$*"
+  test "$calls" -ne "$FAIL_AT"
+}
+"""
+        for fail_at in range(6):
+            with self.subTest(fail_at=fail_at):
+                result = subprocess.run(
+                    ["bash", "-c", fake_cargo + script],
+                    env=dict(os.environ, FAIL_AT=str(fail_at)),
+                    capture_output=True, text=True, timeout=10)
+                count = fail_at or 5
+                self.assertEqual(result.returncode, 1 if fail_at else 0,
+                                 result.stdout + result.stderr)
+                self.assertEqual([line for line in result.stdout.splitlines()
+                                  if line.startswith("cargo: ")], ["cargo: " + command] * count)
+                for attempt in range(1, count + 1):
+                    self.assertIn(f"retirement_loss attempt {attempt}/5", result.stdout)
 
     def test_main_pushes_keep_per_sha_evidence_and_only_prs_cancel(self):
         prefixes = []
@@ -154,10 +189,43 @@ class SdkWorkflowTests(unittest.TestCase):
         self.assertIn("sdk-release.py publish --manifest artifacts/sdk-release.json "
                       "--artifacts artifacts --debug-assets", publish)
 
+    def test_native_aggregate_requires_every_validation_dependency_to_succeed(self):
+        required = ("source", "ios", "android", "manifest", "swift-consumer", "kotlin-consumer")
+        job = self.native["native-sdk-check"]
+        self.assertEqual(values(job, "name", 4), ["native-sdk-check"])
+        self.assertEqual(values(job, "needs", 4), ["[" + ", ".join(required) + "]"])
+        self.assertEqual(values(job, "if", 4), ["always()"])
+        self.assertEqual(values(job, "runs-on", 4), ["ubuntu-latest"])
+        self.assertIn("\npermissions:\n  contents: read\n", self.workflows["native-sdk"])
+        for forbidden in ("permissions:", "uses:", "secrets.", "github.token", "GH_TOKEN"):
+            self.assertNotIn(forbidden, job)
+        self.assertEqual(len(steps(job)), 1)
+        step = steps(job)[0]
+        self.assertNotRegex(step, r"(?m)^\s*if:")
+        self.assertEqual(values(step, "NEEDS_JSON", 10), ["${{ toJSON(needs) }}"])
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        cases = [(None, "success")] + [(name, status) for name in required
+                                        for status in ("failure", "cancelled", "skipped")]
+        for failed, status in cases:
+            with self.subTest(dependency=failed, status=status):
+                needs = {name: {"result": status if name == failed else "success"}
+                         for name in required}
+                result = subprocess.run(
+                    ["bash", "-c", script], env=dict(os.environ, NEEDS_JSON=json.dumps(needs)),
+                    capture_output=True, text=True, timeout=10)
+                if failed is None:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"'{failed}': '{status}'", result.stderr)
+
     def test_native_builds_consumers_and_publish_checkout_resolved_sha(self):
         for name, job in self.native.items():
             checkouts = [step for step in steps(job) if "uses: actions/checkout@" in step]
             if name == "rust-checks":
+                continue
+            if name == "native-sdk-check":
+                self.assertEqual(checkouts, [])
                 continue
             with self.subTest(job=name):
                 self.assertTrue(checkouts)

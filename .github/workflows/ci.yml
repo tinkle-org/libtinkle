@@ -65,6 +65,14 @@ jobs:
         with:
           cache-on-failure: true
       - run: cargo test --locked --workspace --all-features --verbose
+      - name: Retirement loss stress (five required passes)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            echo "retirement_loss attempt $attempt/5"
+            cargo test --locked -p libtinkle --all-features --lib retirement_loss -- --nocapture
+          done
       - name: Native fixture shutdown and response delivery regressions
         run: cargo test --locked -p libtinkle --example native-fixture
       - name: Published-SDK native mobile fixture regression
