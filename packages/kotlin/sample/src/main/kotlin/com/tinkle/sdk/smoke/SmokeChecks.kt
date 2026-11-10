@@ -12,7 +12,10 @@ import com.tinkle.sdk.TargetSub
 import com.tinkle.sdk.TinkleClient
 import com.tinkle.sdk.TinkleSdk
 import com.tinkle.sdk.uniffiEnsureInitialized
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import java.io.File
@@ -20,6 +23,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 
 /** Lives in the target APK so R8 optimizes the actual SDK call sites. No UI. */
 public object SmokeChecks {
+    /** Run SDK initialization and smoke phases within a 30-second timeout. */
     @JvmStatic
     public fun run(): Unit = runBlocking {
         withTimeout(30_000) {
@@ -28,6 +32,7 @@ public object SmokeChecks {
             uniffiEnsureInitialized()
             InMemoryFfiStore().destroy()
             phase("foreign journal callbacks") { foreignJournalCallbacks() }
+            phase("retained account state subscription") { accountStateSubscription() }
             phase("SQLite persistence and journal resume") { sqlitePersistence() }
         }
     }
@@ -40,6 +45,50 @@ public object SmokeChecks {
             throw AssertionError("Smoke phase failed: $name: ${error.message}", error)
         } catch (error: AssertionError) {
             throw AssertionError("Smoke phase failed: $name: ${error.message}", error)
+        }
+    }
+
+    /** Exercise real generated async next/stop and retained terminal state over the JNI library. */
+    private suspend fun accountStateSubscription() = coroutineScope {
+        // This disconnected lifecycle smoke has no journal state to persist.
+        val foreignStore = object : FfiCursorStore {
+            /** Return no journal checkpoint for this stateless fixture. */
+            override suspend fun loadJournal(principal: String, targetKey: String): Long? = null
+            /** Ignore checkpoint writes in this stateless fixture. */
+            override suspend fun saveJournal(principal: String, targetKey: String, acceptSeq: Long) = Unit
+            /** Ignore target removal because this fixture stores no journal state. */
+            override suspend fun removeTarget(principal: String, targetKey: String) = Unit
+            /** Ignore principal cleanup because this fixture stores no journal state. */
+            override suspend fun clearPrincipal(principal: String) = Unit
+        }
+        LoopbackGateway().use { gateway ->
+            val client = TinkleClient(config(gateway), gateway.trustSource(), foreignStore)
+            try {
+                client.subscribeSessionState().use { stream ->
+                    val initial = checkNotNull(stream.next())
+                    check(initial.sessions == null)
+                    check(initial.status == client.sessionStatus())
+                    try {
+                        client.subscribeSessionState().use { error("Second consumer must fail") }
+                    } catch (_: FfiException.Sync) { }
+                    // Enter next() before cancel/shutdown; this does not prove a pending Rust waiter.
+                    val cancelled = async(start = CoroutineStart.UNDISPATCHED) { stream.next() }
+                    cancelled.cancel()
+                    cancelled.join()
+                    client.logout()
+                    val terminal = checkNotNull(stream.next())
+                    check(terminal.reason == com.tinkle.sdk.AccountSignOutReason.SELF_LOGOUT)
+                    check(terminal.status.cleanup == com.tinkle.sdk.AccountCleanup.COMPLETE)
+                    stream.stop()
+                    check(stream.next() == null)
+                    client.subscribeSessionState().use { late ->
+                        check(late.next() == terminal)
+                        val waiting = async(start = CoroutineStart.UNDISPATCHED) { late.next() }
+                        client.shutdown()
+                        check(waiting.await() == null)
+                    }
+                }
+            } finally { shutdown(client) }
         }
     }
 

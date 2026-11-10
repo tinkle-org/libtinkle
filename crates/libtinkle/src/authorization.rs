@@ -59,7 +59,6 @@ impl StoreBinding {
 }
 
 struct State {
-    authentication_known: bool,
     generation: u64,
     signed_out: bool,
     needs_store: bool,
@@ -69,14 +68,26 @@ struct State {
 
 pub(crate) struct Authorization {
     state: Mutex<State>,
+    session: Arc<crate::session::SessionCoordinator>,
     pub(crate) revoked: syntra_runtime::CancelToken,
 }
 impl Authorization {
     /// Initialize the sign-out fence and register any supplied Returning key for revocation.
+    #[cfg(test)]
     pub(crate) fn new(source: &TrustSource) -> Arc<Self> {
+        Self::with_session(
+            source,
+            crate::session::SessionCoordinator::new(matches!(source, TrustSource::SignedOut(_))),
+        )
+    }
+    /// Share the account reducer without giving it access to secrets or protected callbacks.
+    pub(crate) fn with_session(
+        source: &TrustSource,
+        session: Arc<crate::session::SessionCoordinator>,
+    ) -> Arc<Self> {
         let value = Arc::new(Self {
+            session,
             state: Mutex::new(State {
-                authentication_known: false,
                 generation: 0,
                 signed_out: matches!(source, TrustSource::SignedOut(_)),
                 needs_store: false,
@@ -102,17 +113,10 @@ impl Authorization {
     }
     /// Only a fresh authenticated Returning connection establishes this knowledge.
     pub(crate) fn set_authentication_known(&self, known: bool) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.authentication_known = known && !state.signed_out;
-    }
-    /// Unknown authorization is never evidence that credentials should be erased.
-    pub(crate) fn authentication_known(&self) -> bool {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .authentication_known
+        self.session.authentication(known);
     }
     /// Legacy callback contracts cannot attest conditional restart-safe cleanup.
+    #[cfg(test)]
     pub(crate) fn restart_safe_store(&self) -> bool {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         !state.stores.is_empty()
@@ -120,6 +124,11 @@ impl Authorization {
                 .stores
                 .iter()
                 .all(|binding| binding.revision.is_some())
+    }
+    /// Test inspection of the proof knowledge feeding the account reducer.
+    #[cfg(test)]
+    pub(crate) fn authentication_known(&self) -> bool {
+        self.session.authenticated()
     }
     /// Capture client-specific enrollment authority unless local sign-out has fenced it.
     pub(crate) fn generation(self: &Arc<Self>) -> Result<EnrollmentEpoch, TinkleError> {
@@ -175,8 +184,9 @@ impl Authorization {
         Ok(())
     }
     /// Fence enrollment, erase every reachable registered secret, and cancel revoked work.
-    pub(crate) fn sign_out(&self) {
+    pub(crate) fn sign_out(&self, reason: crate::SessionSignOutReason) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        self.session.signed_out(reason);
         if !state.signed_out {
             state.signed_out = true;
             state.generation = state.generation.wrapping_add(1);
@@ -282,6 +292,8 @@ impl Authorization {
             return Err(TinkleError::SecureStore);
         }
         state.stores[index].revision = next;
+        self.session
+            .store(!state.stores.is_empty() && state.stores.iter().all(|s| s.revision.is_some()));
         Ok(())
     }
 
@@ -303,6 +315,8 @@ impl Authorization {
             revision,
             writing: Default::default(),
         });
+        self.session
+            .store(state.stores.iter().all(|s| s.revision.is_some()));
         Ok(())
     }
 }
@@ -409,6 +423,9 @@ impl EnrollmentEpoch {
                 writing: Default::default(),
             });
         }
+        self.owner
+            .session
+            .store(!state.stores.is_empty() && state.stores.iter().all(|s| s.revision.is_some()));
         Ok(())
     }
 }
@@ -598,7 +615,7 @@ mod tests {
         let retained = epoch.secret(Zeroizing::new([7; 32])).unwrap();
         assert!(source.security().is_ok());
         assert!(retained.snapshot().is_ok());
-        owner.sign_out();
+        owner.sign_out(crate::SessionSignOutReason::SelfLogout);
         assert!(retained.snapshot().is_err());
         assert!(matches!(source.security(), Err(TinkleError::SignedOut)));
         assert!(epoch.valid().is_err());

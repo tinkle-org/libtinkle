@@ -119,6 +119,9 @@ impl SecureEnrollmentStore for Store {
 
 #[derive(Default)]
 struct State {
+    /// Opt-in single-Client lane; other tests intentionally run independent Clients together.
+    single_client: bool,
+    live_hosts: Vec<std::sync::Weak<syntra_runtime::Host>>,
     probe_reply: ProbeReply,
     probe_control: Arc<ProbeControl>,
     bootstrap_control: Arc<ProbeControl>,
@@ -341,6 +344,7 @@ fn application(state: &mut State, mode: Mode, method: &str, bytes: &[u8]) -> Han
                         country: "".into(),
                         region: "".into(),
                         current: true,
+                        unconfirmed: false,
                     }],
                 }),
                 "RevokeSession" => {
@@ -652,6 +656,21 @@ impl Fixture {
                     )
                     .await;
                     if let Ok(handle) = result {
+                        {
+                            let mut state = admission_state.lock().unwrap();
+                            if state.single_client {
+                                assert!(
+                                    state
+                                        .live_hosts
+                                        .iter()
+                                        .filter_map(std::sync::Weak::upgrade)
+                                        .all(|host| host.is_closed()),
+                                    "a new encrypted connection overlapped its predecessor"
+                                );
+                            }
+                            state.live_hosts.retain(|host| host.strong_count() != 0);
+                            state.live_hosts.push(Arc::downgrade(&handle.host));
+                        }
                         *host_slot.lock().unwrap() = Some(Arc::downgrade(&handle.host));
                         if mode == Mode::Returning {
                             let mut state = admission_state.lock().unwrap();
@@ -906,7 +925,19 @@ async fn enrolled_fenced(fixture: &Fixture) -> (Client, Arc<FencedStore>) {
         .activate_enrollment(&signed_in.enrollment)
         .await
         .unwrap();
+    review_ready(&client).await;
     (client, store)
+}
+
+/// Wait for SDK-owned startup review before injecting a denial intended for another RPC.
+async fn review_ready(client: &Client) {
+    let stream = client.subscribe_session_state().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while stream.next().await.unwrap().sessions.is_none() {}
+    })
+    .await
+    .unwrap();
+    stream.stop();
 }
 
 /// Delivery, protected-record decoding and status-first restore preserve both unsigned epochs.
@@ -1216,29 +1247,23 @@ async fn observer_timeout_is_bounded_and_keeps_credentials() {
     observer_until(|| fixture.state.lock().unwrap().open_bootstrap == 0).await;
 }
 
-/// Denial/lookup failure cannot trigger Bootstrap, reset the timer or select another port.
+/// Current credential rejection triggers one immediate status-only check without changing trust/route.
 #[tokio::test]
-async fn observer_periodic_schedule_is_independent_of_returning_failure() {
+async fn observer_current_denial_checks_retirement_immediately_without_fallback() {
     let mut fixture = Fixture::new().await;
+    fixture.state.lock().unwrap().single_client = true;
     let fallback = TcpListener::bind("127.0.0.1:0").await.unwrap();
     fixture.config.fallback_port = Some(fallback.local_addr().unwrap().port());
     let (client, store) = enrolled_fenced(&fixture).await;
     assert!(fixture.state.lock().unwrap().queries.is_empty());
     let bootstrap = fixture.state.lock().unwrap().bootstrap_admissions;
     retire_current(&fixture);
-    fixture.state.lock().unwrap().session_denial = Some(ErrorCode::PermissionDenied);
+    fixture.state.lock().unwrap().session_denial = Some(ErrorCode::Unauthenticated);
     assert_eq!(
         client.account().get_sessions().await.unwrap_err().code(),
-        ErrorCode::PermissionDenied
+        ErrorCode::Unauthenticated
     );
-    assert!(client.reconnect().await.is_err());
-    assert_eq!(
-        fixture.state.lock().unwrap().bootstrap_admissions,
-        bootstrap
-    );
-    observer_elapse(59).await;
-    assert!(fixture.state.lock().unwrap().queries.is_empty());
-    observer_elapse(1).await;
+    // No sixty-second tick or failed mutation replay is needed to observe retirement.
     observer_until(|| client.is_signed_out()).await;
     client.logout().await.unwrap();
     assert!(
@@ -1269,8 +1294,7 @@ async fn observer_delayed_predecessor_cannot_clear_rotation_or_pending_activatio
         let fixture = Fixture::new().await;
         let (client, store) = enrolled_fenced(&fixture).await;
         let predecessor = reference(fixture.state.lock().unwrap().active.as_ref().unwrap());
-        // Commit retirement history without disrupting the already established
-        // test channel, so rotation can be exercised while its query is held.
+        // A current credential rejection authorizes a negative-only check, never parallel sockets.
         fixture
             .state
             .lock()
@@ -1279,20 +1303,25 @@ async fn observer_delayed_predecessor_cannot_clear_rotation_or_pending_activatio
             .push(predecessor.clone());
         let control = fixture.state.lock().unwrap().probe_control.clone();
         control.hold.store(true, Ordering::SeqCst);
-        observer_elapse(60).await;
+        fixture.state.lock().unwrap().session_denial = Some(ErrorCode::Unauthenticated);
+        assert!(client.account().get_sessions().await.is_err());
+        fixture.state.lock().unwrap().session_denial = None;
         control.entered.notified().await;
-        // The server's idle Core timer may retire the old foreground socket
-        // while its scheduler is advanced; restore only the same Returning route.
+        // A pending namespace transition queues behind status I/O, while retaining
+        // enrollment ownership. Status releases the socket before rechecking it.
+        let preparing = client.prepare_enrollment(store.clone());
+        tokio::pin!(preparing);
+        assert!(futures_util::poll!(&mut preparing).is_pending());
+        control.hold.store(false, Ordering::SeqCst);
+        control.released.notify_one();
+        let operation = preparing.await.unwrap();
+        observer_until(|| control.completed.load(Ordering::SeqCst) == 1).await;
+        observer_wait_result(&client, libtinkle::EnrollmentObservation::Superseded).await;
         client.reconnect().await.unwrap();
-        let operation = client.prepare_enrollment(store.clone()).await.unwrap();
         let candidate = client.auth().rotate_enrollment(&operation).await.unwrap();
         if activate {
             client.auth().activate_enrollment(&candidate).await.unwrap();
         }
-        control.hold.store(false, Ordering::SeqCst);
-        control.released.notify_one();
-        observer_until(|| control.completed.load(Ordering::SeqCst) == 1).await;
-        observer_wait_result(&client, libtinkle::EnrollmentObservation::Superseded).await;
         // A foreground call joins the same client lifecycle after the held reply.
         client.connect().await.unwrap();
         assert!(!client.is_signed_out());
@@ -1562,6 +1591,14 @@ async fn observer_storage_failure_keeps_fence_marker_and_local_cleanup_cause() {
         client.session_status().await.cleanup,
         libtinkle::SessionCleanup::Failed
     );
+    // No consumer was attached while retirement and the failed cleanup occurred.
+    let stream = client.subscribe_session_state().await.unwrap();
+    let failed = stream.next().await.unwrap();
+    assert_eq!(
+        failed.reason,
+        Some(libtinkle::SessionSignOutReason::SessionRetired)
+    );
+    assert_eq!(failed.status.cleanup, libtinkle::SessionCleanup::Failed);
     assert!(
         store
             .namespace_snapshot()
@@ -1577,6 +1614,11 @@ async fn observer_storage_failure_keeps_fence_marker_and_local_cleanup_cause() {
         .is_err());
     store.fail_finish.store(false, Ordering::SeqCst);
     assert!(!client.logout().await.unwrap());
+    let complete = stream.next().await.unwrap();
+    assert_eq!(complete.reason, failed.reason);
+    assert_eq!(complete.status.cleanup, libtinkle::SessionCleanup::Complete);
+    assert_eq!(complete.status, client.session_status().await);
+    assert!(complete.revision > failed.revision);
     assert_eq!(fixture.state.lock().unwrap().logouts, 0);
     assert!(fixture.store.load_active().await.unwrap().is_none());
 }
@@ -1655,6 +1697,7 @@ async fn observer_selected_fallback_is_shared_with_returning_and_later_observati
 #[tokio::test]
 async fn observer_suspend_resume_is_status_first_without_a_background_connection() {
     let fixture = Fixture::new().await;
+    fixture.state.lock().unwrap().single_client = true;
     let (client, store) = enrolled_fenced(&fixture).await;
     client.suspend().await;
     let attempts = fixture.state.lock().unwrap().returning_attempts;
@@ -1702,33 +1745,38 @@ async fn observer_foreground_probe_precedes_queued_and_supervised_returning() {
     assert!(client.is_signed_out());
 }
 
-/// Already-foreground lifecycle calls do not create probes or postpone the original tick.
+/// A healthy authenticated Returning socket is never disconnected for a periodic check.
 #[tokio::test]
-async fn observer_repeated_foreground_calls_neither_accelerate_nor_reset_the_timer() {
+async fn observer_healthy_returning_skips_periodic_checks() {
     let fixture = Fixture::new().await;
+    fixture.state.lock().unwrap().single_client = true;
     let (client, _) = enrolled_fenced(&fixture).await;
     let bootstrap = fixture.state.lock().unwrap().bootstrap_admissions;
-    for seconds in [10, 10, 39] {
-        observer_elapse(seconds).await;
-        client.resume().await;
+    for _ in 0..13 {
+        let keepalives = fixture.state.lock().unwrap().keepalives;
+        observer_elapse(5).await;
+        observer_until(|| fixture.state.lock().unwrap().keepalives > keepalives).await;
+        // Receiving the request is not the client selecting its reply. Settle
+        // that RPC before advancing another five seconds beyond its own budget.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while client.pending_len().await != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         assert!(fixture.state.lock().unwrap().queries.is_empty());
         assert_eq!(
             fixture.state.lock().unwrap().bootstrap_admissions,
             bootstrap
         );
     }
-    observer_elapse(1).await;
-    observer_wait_result(&client, libtinkle::EnrollmentObservation::Unknown).await;
-    assert_eq!(fixture.state.lock().unwrap().queries.len(), 1);
-    assert_eq!(
-        fixture.state.lock().unwrap().bootstrap_admissions,
-        bootstrap + 1
-    );
+    assert!(client.is_connected().await);
     assert!(!client.is_signed_out());
     observer_until(|| fixture.state.lock().unwrap().open_bootstrap == 0).await;
     client.stop().await;
     observer_elapse(60).await;
-    assert_eq!(fixture.state.lock().unwrap().queries.len(), 1);
+    assert!(fixture.state.lock().unwrap().queries.is_empty());
 }
 
 /// Stop cancels and drains a host-owned probe; its late restore cannot install Returning.
@@ -3556,6 +3604,7 @@ async fn logout_cache_retry_keeps_original_principal_and_skips_cleared_stores() 
 async fn account_sessions_list_and_revoke_use_the_published_contract() {
     let fixture = Fixture::new().await;
     let (client, _, _) = enrolled(&fixture).await;
+    review_ready(&client).await;
     let sessions = client.account().get_sessions().await.unwrap();
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].id, SESSION);
@@ -3567,7 +3616,7 @@ async fn account_sessions_list_and_revoke_use_the_published_contract() {
         .await
         .unwrap());
     assert!(client.account().revoke_other_sessions().await.unwrap());
-    assert_eq!(fixture.state.lock().unwrap().session_calls.len(), 3);
+    assert_eq!(fixture.state.lock().unwrap().session_calls.len(), 4);
     for id in [
         "",
         "42",
@@ -3576,7 +3625,7 @@ async fn account_sessions_list_and_revoke_use_the_published_contract() {
     ] {
         assert!(client.account().revoke_session(id).await.is_err());
     }
-    assert_eq!(fixture.state.lock().unwrap().session_calls.len(), 3);
+    assert_eq!(fixture.state.lock().unwrap().session_calls.len(), 4);
     fixture.state.lock().unwrap().session_denial = Some(ErrorCode::PermissionDenied);
     let error = client.account().get_sessions().await.unwrap_err();
     assert_eq!(error.code(), ErrorCode::PermissionDenied);

@@ -4,6 +4,95 @@ import XCTest
 
 /// Tests the generated Swift API against the real Rust binary and a local gateway.
 final class TinkleSDKTests: XCTestCase {
+    /// Explicit stop releases the consumer; Swift Task cancellation is not forwarded to Rust.
+    func testAccountStateSubscriptionRetainsSignOutAndUnblocksWaiter() async throws {
+        let client = try TinkleClient(config: ClientConfigFfi(clientInfo: fixtureClientInfo(),
+            host: "127.0.0.1", primaryPort: 9, fallbackPort: nil),
+            trustSource: try TrustSourceFfi.bootstrap(trust: ServerTrustFfi(
+                serverPublicKey: Data(repeating: 1, count: 32), serverKeyId: 7, scope: "fixture")),
+            store: MemoryCursorStore())
+        let stream = try await client.subscribeSessionState()
+        let first = await stream.next()
+        let initial = try XCTUnwrap(first)
+        XCTAssertNil(initial.sessions)
+        XCTAssertEqual(initial.status.authorization, .unknown)
+        do {
+            _ = try await client.subscribeSessionState()
+            XCTFail("A second app consumer must be rejected")
+        } catch FfiError.Sync { }
+        let cancelled = Task { await stream.next() }
+        cancelled.cancel()
+        // Pinned UniFFI Swift does not propagate Task cancellation to Rust.
+        // There is no public Rust waiter-registration barrier: next may start
+        // before or after stop. This checks termination, not a parked-waiter race.
+        stream.stop()
+        let cancelledResult = await cancelled.value
+        XCTAssertNil(cancelledResult)
+        let terminalStream = try await client.subscribeSessionState()
+        _ = try await client.logout()
+        let result = await terminalStream.next()
+        let terminal = try XCTUnwrap(result)
+        XCTAssertEqual(terminal.reason, .selfLogout)
+        XCTAssertEqual(terminal.status.authorization, .signedOut)
+        XCTAssertEqual(terminal.status.cleanup, .complete)
+        terminalStream.stop()
+        let stopped = await terminalStream.next()
+        XCTAssertNil(stopped)
+        let late = try await client.subscribeSessionState()
+        let retained = await late.next()
+        XCTAssertEqual(retained, terminal)
+        let waiting = Task { await late.next() }
+        await client.shutdown()
+        let ended = await waiting.value
+        XCTAssertNil(ended)
+    }
+
+    /// Synthetic encrypted Returning replies exercise native result projection, not production account authority.
+    func testConfirmSessionProjectsSyntheticReturningResponse() async throws {
+        let gateway = try LoopbackGateway(sessionReview: true)
+        defer { try? gateway.finish() }
+        let client = try await makeSessionReviewClient(gateway)
+        do {
+            let id = "78e5c289-656b-4428-a091-2dddf6828465"
+            let session = try await client.confirmSession(sessionId: id)
+            XCTAssertEqual(session, AccountSession(
+                id: id, deviceModel: "projection-device", platform: "android-fixture",
+                systemVersion: "36-fixture", appVersion: "9.8.7-fixture", appBuild: "00042",
+                createdDate: Int64.max - 1, activeDate: Int64.max, ip: "192.0.2.42",
+                country: "ZZ", region: "projection-region", current: false, unconfirmed: false))
+            XCTAssertEqual(try gateway.confirmSessionRequests, [id])
+            XCTAssertEqual(try gateway.admittedModes, ["returning"])
+        } catch {
+            await client.shutdown()
+            throw error
+        }
+        await client.shutdown()
+        try gateway.finish()
+    }
+
+    /// A synthetic PermissionDenied response crosses Rust/UniFFI as Auth, not Retryable or a fabricated result.
+    func testConfirmSessionProjectsSyntheticPermissionDenied() async throws {
+        let gateway = try LoopbackGateway(sessionReview: true)
+        defer { try? gateway.finish() }
+        let client = try await makeSessionReviewClient(gateway)
+        do {
+            let id = "96007910-fd5b-4ef2-bf0c-2e4ae1d44b1b"
+            do {
+                _ = try await client.confirmSession(sessionId: id)
+                XCTFail("A fixture denial must not produce a confirmed session")
+            } catch FfiError.Auth(let message) {
+                XCTAssertTrue(message.contains("synthetic fixture confirmation denied"))
+            }
+            XCTAssertEqual(try gateway.confirmSessionRequests, [id], "The mutation must not be replayed")
+            XCTAssertEqual(try gateway.admittedModes, ["returning"])
+        } catch {
+            await client.shutdown()
+            throw error
+        }
+        await client.shutdown()
+        try gateway.finish()
+    }
+
     /// Interrupted reads preserve a split JSON integer without truncating its Int64 value.
     func testControlReadRetriesInterruptionsAcrossJSONChunks() throws {
         let chunks = [Data("{\"after_accept_seq\":1099".utf8), Data("511627776}\n".utf8)]
@@ -188,12 +277,7 @@ final class TinkleSDKTests: XCTestCase {
         defer { try? gateway.finish() }
         // Exact opaque bytes checked by review_swift_active_vector_matches_private_record_encoder_and_validates_returning
         // in crates/libtinkle/src/enrollment.rs; Swift must not recreate the private record format.
-        let hex = Array(EnrollmentReviewVector.activeRecordHex)
-        var bytes = Data(try stride(from: 0, to: hex.count, by: 2).map {
-            try XCTUnwrap(UInt8(String(hex[$0..<$0 + 2]), radix: 16))
-        })
-        defer { bytes.resetBytes(in: 0..<bytes.count) }
-        let secure = DenyingRestoreSecureStore(active: ProtectedEnrollmentRecord.fromSecureStorage(bytes: bytes))
+        let secure = DenyingRestoreSecureStore(active: try fixtureActiveEnrollmentRecord())
         let cursors = MemoryCursorStore()
         let client = try makeLoopbackClient(gateway, store: cursors)
         do {
@@ -418,6 +502,56 @@ final class TinkleSDKTests: XCTestCase {
             store: store
         )
     }
+
+    /// Restores only the synthetic fixture vector through real callbacks before opening its Returning socket.
+    private func makeSessionReviewClient(_ gateway: LoopbackGateway) async throws -> TinkleClient {
+        let client = try makeLoopbackClient(gateway, store: MemoryCursorStore())
+        do {
+            let secure = ProjectionSecureStore(active: try fixtureActiveEnrollmentRecord())
+            _ = try await client.restoreActiveEnrollment(store: secure)
+            try await client.connect()
+            return client
+        } catch {
+            await client.shutdown()
+            throw error
+        }
+    }
+}
+
+/// Single-owner, immutable synthetic legacy store for projection tests only.
+/// It grants no restore permits or persistence acknowledgements and models no production secure storage.
+private actor ProjectionSecureStore: FfiSecureEnrollmentStore {
+    private let active: ProtectedEnrollmentRecord
+
+    /// Retains the existing Rust-validated synthetic vector, not a client or callback owner.
+    init(active: ProtectedEnrollmentRecord) { self.active = active }
+    /// Selects the legacy read-only path; this isolated fixture has no concurrent namespace writers.
+    func namespaceSnapshot() async throws -> ProtectedEnrollmentNamespace? { nil }
+    /// Suspends before supplying the immutable synthetic ACTIVE record to Rust.
+    func loadActive() async throws -> ProtectedEnrollmentRecord? {
+        await Task.yield()
+        return active
+    }
+    /// This legacy fixture cannot grant cross-writer restore exclusion.
+    func beginRestore(incarnation: String, revision: String, active: ProtectedEnrollmentRecord, permitId: String) async throws -> Bool {
+        throw FfiError.Storage("projection fixture does not grant restore permits")
+    }
+    /// No conditional permit may be acquired or released on the legacy path.
+    func endRestore(permitId: String) async throws { throw FfiError.Storage("unexpected projection permit release") }
+    /// Rejects operation lookup rather than pretending to own an enrollment workflow.
+    func loadOperation(operationId: String) async throws -> ProtectedEnrollmentRecord? { throw unsupported() }
+    /// Never acknowledges a legacy write.
+    func commit(kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord) async throws { throw unsupported() }
+    /// Never acknowledges a conditional write.
+    func commitCurrent(expectedRevision: String, kind: SecureEnrollmentWrite, operationId: String, record: ProtectedEnrollmentRecord) async throws -> String? { throw unsupported() }
+    /// Never acknowledges a cleanup marker.
+    func beginClear(expectedRevision: String) async throws -> Bool { throw unsupported() }
+    /// Never acknowledges conditional erasure.
+    func finishClear(expectedRevision: String) async throws -> Bool { throw unsupported() }
+    /// Never acknowledges namespace deletion.
+    func clear() async throws { throw unsupported() }
+    /// Fail closed if a projection-only test unexpectedly attempts persistence or cleanup.
+    private func unsupported() -> FfiError { FfiError.Storage("projection fixture is read-only") }
 }
 
 /// Restore-denial fixture only: it never grants exclusion or acknowledges a mutation.

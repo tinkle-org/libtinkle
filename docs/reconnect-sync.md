@@ -25,6 +25,37 @@ authorize an alternate port. Trust replacement resets that route choice.
 the transport and blocks supervisor reconnects until `resume()` (or a
 fresh `start`); retained events still drain via `next_event`.
 
+`crates/libtinkle/src/client.rs` joins the prior transport before any ordinary,
+provisioning, or status connection replaces it. Current foreground Returning
+loss/denial can coalesce a negative-only status check; a failure does not itself
+prove retirement. The offline status timer skips a healthy socket. See
+[retirement observation](device-enrollment.md#permanent-retirement-observation).
+
+An incomplete carrier/policy shutdown retains the transport owner and blocks
+another dial until a later join completes. Ordinary admission, reconnect, and
+observation defer to an active provisioning caller; abandoned children are joined
+before replacement. See [connection ownership](architecture.md#establishment).
+
+## Account state and session review
+
+`Client::subscribe_session_state()` is independent of conversation sync and
+contact presence. `crates/libtinkle/src/session.rs` retains one latest account
+projection for one app consumer, with local revision, lifecycle, first sign-out
+reason, and `sessions: Option<Vec<Session>>`. A missing list is not a fetched
+empty list. Stop the subscription to unblock `next()` and release its slot.
+
+The SDK automatically refetches `GetSessions` on fresh Returning startup,
+foreground reconnection, reconnect, and recognized `SessionChanged` hints.
+Failed reads remain dirty and retry; demand during a read requires another
+fetch. Confirmation results never patch the complete list. Hosts render the
+retained projection and use targeted confirmation/revocation under
+[the session-review contract](device-enrollment.md#session-review-and-state).
+
+`crates/tinkle-schema/src/sync.rs` dispatches runtime notifications by exact typed
+`Any` URL: `SessionChanged` demands review refresh, and `ConnectivityChanged`
+updates ephemeral contact presence. Neither is a durable journal event or
+authorization proof; malformed recognized payloads are discarded.
+
 ## Synchronization (reconciliation contract)
 
 Conversations are addressed by `Target` (`target::Kind::UserId` for

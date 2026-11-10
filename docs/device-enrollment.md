@@ -103,12 +103,12 @@ must dominate late acquisition; a lost owner releases through process-owned
 resources or leaves mutations blocked for host recovery. Two separate reads or
 an unchecked expiring lease do not satisfy this contract.
 
-Rust's default snapshot returns None for legacy hosts. Foreign implementations
-must explicitly return nil/null for that mode and reject the conditional
-callbacks. Such hosts keep the legacy acknowledged-clear behavior but report
-`session_status().restart_safe_store == false`: they cannot claim restart-safe
-cleanup or enable the retirement observer. There is no default durable
-host implementation.
+Rust's default `namespace_snapshot` returns None. Foreign implementations without
+conditional persistence must explicitly return nil/null and reject conditional
+callbacks. These stores acknowledge `clear` but report
+`session_status().restart_safe_store == false`; they cannot attest restart-safe
+cleanup or enable the retirement observer. The SDK supplies no default durable
+host store.
 
 `load_operation` and `load_active` return the complete opaque record. Records
 include the capability, key, tuple, status and provisioned pin/key ID/context
@@ -129,8 +129,19 @@ journal/cursor stores are separate and must never receive these bytes.
 The API is deliberately staged. `StoredEnrollment`/`PersistedEnrollment` has no
 public constructor and cannot produce a Returning key. `activate_enrollment`
 requires that receipt. Activation uses a separate, single-attempt pinned
-Bootstrap client with the original operation capability. It never attempts
-Returning with STAGED material and never promotes Bootstrap's principal.
+Bootstrap client with the original operation capability. The parent transport is
+retired and joined before that connection opens; fresh Returning waits for the
+Bootstrap transport to join. It never attempts Returning with STAGED material or
+promotes Bootstrap's principal. `crates/libtinkle/src/client.rs` retains these
+transport owners even if a host waiter is cancelled.
+
+An active provisioning caller owns its registered child slot. Ordinary
+connect/reconnect and retirement observation defer rather than cancel that
+capability-bearing request. Once the caller is abandoned or the child explicitly
+closes, its retained transport must join before another dial. Incomplete
+carrier/policy shutdown retains the owner and blocks replacement, including
+after a bounded wait returns; a later join attempt does not renew the SDK's
+shutdown budget.
 
 After a verified activation, the previous transport/key is retired even if the
 local ACTIVE write fails. Automatic reconnect is parked. Only after ACTIVE
@@ -159,8 +170,8 @@ implicitly using this high-level policy; see
 
 `crates/libtinkle/src/logout.rs` attaches the retained budget to the first cleanup
 cause; `client.rs` consumes it without restarting the call budget after lifecycle
-waits. See the [scoped paired qualification](https://github.com/tinkle-org/chorus/blob/d639d617a30bf3c2246e9491dd4af0a9c7674fc3/src/controllers/client-api/tests/native_acceptance/README.md#current-qualification)
-for tested behavior and limits.
+waits. See [qualification requirements](../PROTO_PINNING.md#sdk-pins-and-qualification)
+for the separate verification lanes and evidence requirements.
 
 `Client::logout()` first irreversibly fences this Client's authorization
 generation, cancels provisioning requests, and erases registered SDK-owned AK
@@ -181,7 +192,7 @@ hosts supplying ACTIVE material directly must bind their namespace first with
 `bind_enrollment_store` (`bindSecureEnrollmentStore` over FFI). Without a bound
 store, raw Returning material cannot claim acknowledged durable logout.
 
-The new `SecureEnrollmentStore::clear` / `FfiSecureEnrollmentStore.clear`
+The `SecureEnrollmentStore::clear` / `FfiSecureEnrollmentStore.clear`
 callback must atomically invalidate ACTIVE and **all** pending operation,
 candidate and resume-capability records in the namespace. Success requires
 durability and must dominate earlier writes, using serialized transactions or
@@ -191,25 +202,28 @@ late results cannot recreate credentials or install Returning after clearing.
 
 Logout outcomes are deliberately separate:
 
-- `Ok(true)`: local durable clearing acknowledged and remote revocation confirmed.
-- `Ok(false)`: local durable clearing acknowledged; remote revocation is
-  unconfirmed (offline, rejected, lost reply or unknown outcome).
-- `Err`: in-memory sign-out remains in force, but durable cleanup is not claimed.
-  Clear errors are sanitized and can be retried with `logout()` on this Client.
+- `Ok(true)`: required local clearing and transport joins completed, and remote
+  revocation was confirmed.
+- `Ok(false)`: required local clearing and transport joins completed; remote
+  revocation is unconfirmed (offline, rejected, lost reply, or unknown outcome).
+- `Err`: in-memory sign-out remains in force and cleanup is `Failed`; not every
+  required local step completed. Errors are sanitized, and `logout()` on this
+  Client retries unfinished cleanup without another remote mutation.
+
+`crates/libtinkle/src/logout.rs:finish_logout` does not let incomplete
+carrier/policy shutdown suppress protected-store invalidation. A store may have
+acknowledged durable clearing while cleanup still reports `Failed` because a
+retained transport has not joined. Retrying rechecks that owner and skips
+acknowledged storage/cache work; it preserves the first sign-out reason and
+remote outcome without renewing either the remote or SDK shutdown budget.
 
 `session_status()` (also on `TinkleClient`) is a network-free lifecycle query:
 network Available/Unavailable, authorization Unknown/Active/SignedOut, and cleanup
 NotStarted/Pending/Complete/Failed. A generic PermissionDenied or Unauthenticated
 RPC makes authorization unknown; it does not erase credentials. Contact
-connectivity events remain a separate API. A legacy clear acknowledgement is
+connectivity events remain a separate API. An unconditional clear acknowledgement is
 not a conditional restart-safety attestation; require `restart_safe_store` and
 cleanup Complete for that claim.
-
-`client.account()` provides `get_sessions`, `revoke_session`, and
-`revoke_other_sessions`. Native hosts call those methods directly on
-`TinkleClient` and receive secret-free `AccountSession` records, including the
-neutral session UUID and build identifier. Invalid UUIDs fail before I/O;
-revocations are single-attempt operations with unknown-outcome semantics.
 
 `is_signed_out` / `isSignedOut` remains true after a cleanup failure. This Client
 cannot connect, resume authentication, replace trust, restore ACTIVE, or reuse
@@ -217,6 +231,86 @@ old enrollment receipts. Deliberate sign-in requires a new Client. If a host
 clear callback fails without persisting a tombstone, no SDK can truthfully claim
 durable deletion across restart: the application must resolve invalidation and
 block automatic restoration before constructing a new authenticated coordinator.
+
+## Session review and state
+
+`crates/libtinkle/src/session.rs` provides
+`Client::subscribe_session_state() -> Result<SessionStateSubscription, TinkleError>`.
+It registers one application consumer atomically with the latest retained state.
+A second active consumer returns a subscription error. `next().await` returns
+the initial/latest snapshot, coalescing intermediate revisions for a slow reader.
+Cancelling a pending `next()` consumes no snapshot and does not unregister the
+consumer; use `stop()` when the consumer is finished.
+
+All lifecycle and review producers use one bounded MPSC ingress and serialized
+reducer. `session_status()` reads that same authoritative lifecycle projection.
+The subscription does not keep the Client alive or wait for host UI callbacks.
+`stop()` synchronously releases the slot and unblocks pending `next()` calls with
+`None`; dropping it has the same effect. Client stop/shutdown or release also
+ends waiting. A later subscription receives the retained current state.
+
+```rust,no_run
+use libtinkle::{Client, SessionState, TinkleError};
+
+async fn observe_account(
+    client: &Client,
+    mut render: impl FnMut(SessionState),
+) -> Result<(), TinkleError> {
+    let subscription = client.subscribe_session_state().await?;
+    while let Some(state) = subscription.next().await {
+        render(state); // Render the snapshot; do not reconstruct state from events.
+    }
+    Ok(())
+}
+```
+
+| `SessionState` field | Meaning |
+| --- | --- |
+| `revision` | Monotonic local projection revision, not a server journal checkpoint |
+| `status` | Network, authorization, cleanup, protected-store capability, and last enrollment observation |
+| `reason` | First irreversible sign-out cause: `SelfLogout` or `SessionRetired`; cleanup retries never replace it |
+| `sessions: Option<Vec<Session>>` | Complete authoritative `GetSessions` snapshot; `None` means no current fetched list, while `Some(vec![])` is a fetched empty list |
+
+The SDK fetches `GetSessions` on each authenticated Returning establishment,
+including startup, foreground reconnection, and reconnect. Recognized
+`SessionChanged` hints mark the list dirty, and confirmation marks it dirty before
+and after dispatch. Reads run sequentially on the same ordinary Returning socket.
+Failed reads remain dirty and retry with bounded backoff. A hint during a read
+requires another fetch; stale-generation responses and confirmation replies
+cannot replace the full retained list. No host polling loop is required.
+
+`crates/libtinkle/src/services.rs` owns the account facade; native hosts use the
+corresponding `TinkleClient` methods in `crates/tinkle-ffi/src/account.rs`:
+
+| Host action | Rust facade | Result / rule |
+| --- | --- | --- |
+| Display devices | `client.account().get_sessions()` | Secret-free session records, including `current`, `unconfirmed`, and descriptive device fields |
+| “Yes, this was me” | `confirm_session(session_id)` | Confirm one other ACTIVE session; returns its commit-point projection, not a replacement list |
+| “No, this was not me” | `revoke_session(session_id)` | Revoke only the selected session, including its staged replacements |
+| Explicitly remove all other devices | `revoke_other_sessions()` | Separate action; preserves the caller's session |
+
+Offer a review prompt only for `unconfirmed && !current`. A caller is eligible
+to confirm only when its own current session is confirmed (`!unconfirmed`);
+the server must enforce this against ACTIVE authority at the effect boundary. An
+unconfirmed session still has ordinary access but cannot confirm itself or
+another device. The enrollment that created the account starts confirmed;
+other new sessions start unconfirmed. Review state belongs to the session and
+does not reset or create another row on rotation.
+
+`ConfirmSession` returns `FailedPrecondition` for an unconfirmed caller or current
+target, `NotFound` for unknown, foreign, revoked, or expired targets, and
+`InvalidArgument` for malformed input. Caller/workload denial and dependency
+errors retain their typed categories. Repeating confirmation of an already
+confirmed eligible target is idempotent, but the SDK never automatically replays
+confirmation or revocation after an unknown outcome. Refresh authoritatively;
+neither a denial nor a lost response proves retirement or rollback.
+
+Account state is separate from contact connectivity and message synchronization.
+`crates/tinkle-schema/src/sync.rs` recognizes exact typed `Any` notifications:
+`type.googleapis.com/tinkle.v1.SessionChanged` only demands a session read, and
+`type.googleapis.com/tinkle.v1.ConnectivityChanged` only updates ephemeral
+presence. A hint cannot grant access, populate a session row,
+erase credentials, or advance a durable message checkpoint.
 
 ## Enrollment recovery
 
@@ -256,42 +350,61 @@ enrollment can progress; there is no implicit persistence acknowledgement.
 
 ## Permanent retirement observation
 
-The observer uses the published `AuthService/GetEnrollmentDisposition` API from
-schema #57, available in BSR prost artifact
-`0.5.0-20261107080548-dc41c2199c76.2`. The request contains one reference:
+`crates/libtinkle/src/retirement.rs` uses the published
+`AuthService/GetEnrollmentDisposition` API from the
+[current schema pin](../PROTO_PINNING.md#current-published-schema-pin).
+The request contains one reference:
 session UUID, handle, enrollment epoch, scope and original account-auth epoch.
 The response must echo all fields and contain RETIRED. Correlation belongs to
 the channel/RPC; there is no application query identifier. An authenticated
 authority supplies negative evidence only from a committed exact terminal
 binding or a strictly advanced authoritative source epoch. UNKNOWN is no grant.
 
-Scheduling is independent of Returning outcomes:
+Observation is foreground-only and seeks evidence separately from Returning:
 
 - Conditional ACTIVE restore performs status-first observation before attempting
   Returning. Expired records are parsed structurally for observation without
   registering an AK or constructing Returning. UNKNOWN never makes them usable.
 - Explicit foreground transitions (`resume`/fresh `start`) observe first. The
-  schedule is armed before Returning, with its first periodic tick after 60
-  seconds. It remains fixed across successes, failures, reconnects and rotation.
+  offline fallback is armed before Returning, with its first tick after 60
+  seconds. Periodic ticks skip a healthy authenticated Returning socket rather
+  than disconnect it to query status.
   Concurrent foreground callers wait on the same entry barrier before unblocking
   Returning; the foreground flag alone never signals completion of that barrier.
   The bounded entry task survives cancellation of its waiter, including while
   reading the namespace before any RPC. Later callers join its retained result;
   only explicit lifecycle retirement cancels and drains the entry owner.
-- Returning authentication/lookup/RPC failure never starts a Bootstrap probe,
-  advances a tick, resets backoff, or authorizes another route. Repeated calls
-  while already foreground do not reset the observer. Suspend/stop cancel and
-  join it; no observation runs in the background.
+- Current foreground Returning loss, `Unauthenticated`, `PermissionDenied`, or
+  terminal KeepAlive failure coalesces one immediate bounded observation per
+  generation. An ordinary per-RPC denial leaves authorization Unknown and review
+  pending while the existing observation path retires the connection. Neither
+  denial nor UNKNOWN disposition grants authorization; fresh authenticated
+  Returning restores it and resumes automatic review under supervision. Manual
+  clients still own reconnect after observation. Stale generations, local
+  suspension, sign-out, unsupported storage, and parked endpoint proof cannot
+  schedule it. The failure itself never authorizes erasure or another route.
+  Repeated calls while already foreground do not reset the entry barrier or
+  fallback timer. Suspend/stop cancel and join observation; none runs in the
+  background.
 
-Each observation owns a short-lived encrypted Bootstrap connection and a
-five-second absolute budget covering storage snapshot, route lock/dial, proof,
-InitConnect-wrapped status RPC and evidence recheck. Its only application method
-is GetEnrollmentDisposition. It shares the main selected TCP route and exact
-trust, including a fallback selected by an initial dial failure. It never changes
-the main mode or uses the general provisioning client. There is no permanent
-second connection or extra public port. Genuine endpoint rejection parks every
-use until explicit `replace_trust_source`. An unverified Bootstrap first-flight
-EOF/timeout also parks conservatively because it can conceal pin rejection.
+Each observation retains one five-second absolute evidence budget through lock
+waiting, old-transport teardown, storage snapshot, dial/proof,
+InitConnect-wrapped status RPC, and evidence recheck. The old ordinary/provisioning
+transport must join before status Bootstrap opens. That connection's only
+application method is GetEnrollmentDisposition, on the selected TCP route and
+exact trust, including a fallback selected by an initial dial failure.
+
+The observer never changes the main mode or uses the general provisioning
+client. There is no permanent second connection or extra public port. The shared
+dial gate is retained through status shutdown/join; a successor Returning dial
+cannot overlap it, even after the evidence budget expires. Incomplete shutdown
+retains the status handle and its admission barrier for a later join attempt;
+neither timeout nor method return releases that barrier. Observation also defers
+while a provisioning caller actively owns its child slot.
+
+Genuine endpoint rejection parks every use until explicit `replace_trust_source`.
+An unverified Bootstrap first-flight EOF/timeout also parks conservatively because
+it can conceal pin rejection.
 
 Before local cleanup, the SDK compares the full reference, source installation
 revision, protected namespace incarnation/revision, active record and pending
@@ -305,13 +418,14 @@ UNKNOWN, unspecified/future enums, missing/mismatched references, unsupported
 methods, errors, malformed replies, EOF and timeouts never erase credentials.
 `session_status().enrollment_observation` exposes NotObserved, Unknown, Retired,
 Superseded, Unavailable, Parked or Unsupported independently of authorization,
-network availability and cleanup acknowledgement. Legacy hosts cannot enable
+network availability and cleanup acknowledgement. Unconditional stores cannot enable
 automatic observation or attest restart-safe cleanup.
 
 Integration coverage uses encrypted SDK accept/connect fixtures, including held
 responses during rotation and a separate-process restart reading a fsynced
-test-only private-file namespace. That fixture proves CAS/tombstone persistence,
-not platform Keychain/Keystore security or production authority acceptance.
+test-only private-file namespace. That fixture asserts CAS/tombstone persistence;
+its presence does not establish execution, platform Keychain/Keystore security,
+or production authority acceptance.
 
 ## Published schema checks
 
@@ -340,33 +454,10 @@ python3 scripts/with-native-fixture.py --port 0 cargo test --locked -p libtinkle
   --test mobile_fixture -- --ignored
 ```
 
-## External client-api acceptance entry point
+## Verification boundaries
 
-For full production-handler application acceptance with PostgreSQL, Vault, Redis,
-and private workload mTLS, use the separate
-[Chorus runner](https://github.com/tinkle-org/chorus/blob/d639d617a30bf3c2246e9491dd4af0a9c7674fc3/src/controllers/client-api/tests/native_acceptance/README.md#run).
-The runner and qualification links require private Chorus repository access; no
-public published copy was found. See the
-[access limitation](../PROTO_PINNING.md#sdk-pins-and-qualification).
-Its file-host adapter does not qualify platform protected storage. The
-[scoped paired result](https://github.com/tinkle-org/chorus/blob/d639d617a30bf3c2246e9491dd4af0a9c7674fc3/src/controllers/client-api/tests/native_acceptance/README.md#current-qualification)
-covers the tested consumer implementation/published pins, not broader standalone
-checks or production rollout. Paired regression code and reproduction commands
-remain in the run owner's external evidence bundle, not this repository.
-
-Parent integration must start the actual Go client-api and provide trusted pin
-configuration independently. This SDK never starts or builds Go fixtures.
-Set `TINKLE_E2E_HOST`, `TINKLE_E2E_PORT`, `TINKLE_E2E_SERVER_PIN` (64 hex),
-`TINKLE_E2E_SERVER_KEY_ID`, `TINKLE_E2E_SCOPE`, all five
-`TINKLE_E2E_DEVICE_MODEL`, `TINKLE_E2E_PLATFORM`, `TINKLE_E2E_OS_VERSION`,
-`TINKLE_E2E_APP_VERSION`, `TINKLE_E2E_APP_BUILD`, and the fixture phone/language
-`TINKLE_E2E_PHONE` / `TINKLE_E2E_LANG_CODE`. Then run:
-
-```sh
-cargo test --locked -p libtinkle --test client_api_external -- --ignored
-```
-
-This opt-in lane checks pinned Bootstrap, InitConnect-wrapped SendCode, and a
-nonempty verification identifier. It does not claim full real-service enrollment
-acceptance. Use the Chorus runner above for that separate authn/protected-store
-fixture boundary, without treating its existence as a recorded execution.
+SDK unit tests, encrypted TCP interoperability fixtures, and Swift/Kotlin consumer
+checks do not establish production-server acceptance or platform protected-storage
+security. Externally orchestrated acceptance requires separate qualification
+against the exact source and published pins. Test presence is not execution
+evidence; see [qualification requirements](../PROTO_PINNING.md#sdk-pins-and-qualification).

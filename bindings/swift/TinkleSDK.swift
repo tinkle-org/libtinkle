@@ -640,6 +640,159 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
 
 
 /**
+ * Opaque one-consumer subscription. It does not retain TinkleClient or a foreign callback.
+ */
+public protocol AccountStateSubscriptionProtocol: AnyObject, Sendable {
+
+    /**
+     * Await the initial/latest snapshot. Stop or Client release returns None.
+     */
+    func next() async  -> AccountState?
+
+    /**
+     * Unblock pending next calls and release the consumer slot synchronously.
+     */
+    func stop()
+
+}
+/**
+ * Opaque one-consumer subscription. It does not retain TinkleClient or a foreign callback.
+ */
+open class AccountStateSubscription: AccountStateSubscriptionProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tinkle_ffi_fn_clone_accountstatesubscription(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tinkle_ffi_fn_free_accountstatesubscription(handle, $0) }
+    }
+
+
+
+
+    /**
+     * Await the initial/latest snapshot. Stop or Client release returns None.
+     */
+open func next()async  -> AccountState?  {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_accountstatesubscription_next(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionTypeAccountState.lift,
+            errorHandler: nil
+
+        )
+}
+
+    /**
+     * Unblock pending next calls and release the consumer slot synchronously.
+     */
+open func stop()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_accountstatesubscription_stop(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountStateSubscription: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = AccountStateSubscription
+
+    public static func lift(_ handle: UInt64) throws -> AccountStateSubscription {
+        return AccountStateSubscription(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: AccountStateSubscription) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountStateSubscription {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: AccountStateSubscription, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountStateSubscription_lift(_ handle: UInt64) throws -> AccountStateSubscription {
+    return try FfiConverterTypeAccountStateSubscription.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountStateSubscription_lower(_ value: AccountStateSubscription) -> UInt64 {
+    return FfiConverterTypeAccountStateSubscription.lower(value)
+}
+
+
+
+
+
+
+/**
  * Receipt for a durably retained operation/capability. No public constructor.
  */
 public protocol EnrollmentOperationProtocol: AnyObject, Sendable {
@@ -2859,6 +3012,11 @@ public func FfiConverterTypeStoredEnrollment_lower(_ value: StoredEnrollment) ->
 public protocol TinkleClientProtocol: AnyObject, Sendable {
 
     /**
+     * Confirm one other login, once. Unknown mutation outcomes must not be automatically replayed.
+     */
+    func confirmSession(sessionId: String) async throws  -> AccountSession
+
+    /**
      * List active devices on the current authenticated channel.
      */
     func getSessions() async throws  -> [AccountSession]
@@ -2879,6 +3037,11 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
      * Query transport, authorization, and retained cleanup without network I/O.
      */
     func sessionStatus() async  -> AccountStatus
+
+    /**
+     * Atomically register the Client's sole app consumer with the latest retained state.
+     */
+    func subscribeSessionState() async throws  -> AccountStateSubscription
 
     /**
      * Foreground connect: encrypted TCP + Syntra handshake to ACTIVE.
@@ -3379,6 +3542,25 @@ public static func newSqlite(config: ClientConfigFfi, trustSource: TrustSourceFf
 
 
     /**
+     * Confirm one other login, once. Unknown mutation outcomes must not be automatically replayed.
+     */
+open func confirmSession(sessionId: String)async throws  -> AccountSession  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_confirm_session(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(sessionId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeAccountSession_lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
      * List active devices on the current authenticated channel.
      */
 open func getSessions()async throws  -> [AccountSession]  {
@@ -3454,6 +3636,25 @@ open func sessionStatus()async  -> AccountStatus  {
             liftFunc: FfiConverterTypeAccountStatus_lift,
             errorHandler: nil
 
+        )
+}
+
+    /**
+     * Atomically register the Client's sole app consumer with the latest retained state.
+     */
+open func subscribeSessionState()async throws  -> AccountStateSubscription  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_subscribe_session_state(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeAccountStateSubscription_lift,
+            errorHandler: FfiConverterTypeFfiError_lift
         )
 }
 
@@ -4748,6 +4949,10 @@ public struct AccountSession: Equatable, Hashable {
      * Whether this session issued the listing request.
      */
     public var current: Bool
+    /**
+     * True until another confirmed session recognizes this login; never prompt for current.
+     */
+    public var unconfirmed: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -4787,7 +4992,10 @@ public struct AccountSession: Equatable, Hashable {
          */region: String,
         /**
          * Whether this session issued the listing request.
-         */current: Bool) {
+         */current: Bool,
+        /**
+         * True until another confirmed session recognizes this login; never prompt for current.
+         */unconfirmed: Bool) {
         self.id = id
         self.deviceModel = deviceModel
         self.platform = platform
@@ -4800,6 +5008,7 @@ public struct AccountSession: Equatable, Hashable {
         self.country = country
         self.region = region
         self.current = current
+        self.unconfirmed = unconfirmed
     }
 
 
@@ -4829,7 +5038,8 @@ public struct FfiConverterTypeAccountSession: FfiConverterRustBuffer {
                 ip: FfiConverterString.read(from: &buf),
                 country: FfiConverterString.read(from: &buf),
                 region: FfiConverterString.read(from: &buf),
-                current: FfiConverterBool.read(from: &buf)
+                current: FfiConverterBool.read(from: &buf),
+                unconfirmed: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -4846,6 +5056,7 @@ public struct FfiConverterTypeAccountSession: FfiConverterRustBuffer {
         FfiConverterString.write(value.country, into: &buf)
         FfiConverterString.write(value.region, into: &buf)
         FfiConverterBool.write(value.current, into: &buf)
+        FfiConverterBool.write(value.unconfirmed, into: &buf)
     }
 }
 
@@ -4862,6 +5073,99 @@ public func FfiConverterTypeAccountSession_lift(_ buf: RustBuffer) throws -> Acc
 #endif
 public func FfiConverterTypeAccountSession_lower(_ value: AccountSession) -> RustBuffer {
     return FfiConverterTypeAccountSession.lower(value)
+}
+
+
+/**
+ * Retained, secret-free account state; independent of contact connectivity events.
+ */
+public struct AccountState: Equatable, Hashable {
+    /**
+     * Monotonic local revision, not a server checkpoint.
+     */
+    public var revision: UInt64
+    /**
+     * The authoritative lifecycle view also returned by session_status.
+     */
+    public var status: AccountStatus
+    /**
+     * Immutable sign-out cause when known.
+     */
+    public var reason: AccountSignOutReason?
+    /**
+     * None means unavailable/unfetched, Some(empty) is a fetched empty list.
+     * Hosts prompt only for unconfirmed && !current; confirmation eligibility
+     * requires a confirmed current session and is enforced by the server.
+     */
+    public var sessions: [AccountSession]?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Monotonic local revision, not a server checkpoint.
+         */revision: UInt64,
+        /**
+         * The authoritative lifecycle view also returned by session_status.
+         */status: AccountStatus,
+        /**
+         * Immutable sign-out cause when known.
+         */reason: AccountSignOutReason?,
+        /**
+         * None means unavailable/unfetched, Some(empty) is a fetched empty list.
+         * Hosts prompt only for unconfirmed && !current; confirmation eligibility
+         * requires a confirmed current session and is enforced by the server.
+         */sessions: [AccountSession]?) {
+        self.revision = revision
+        self.status = status
+        self.reason = reason
+        self.sessions = sessions
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension AccountState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountState: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountState {
+        return
+            try AccountState(
+                revision: FfiConverterUInt64.read(from: &buf),
+                status: FfiConverterTypeAccountStatus.read(from: &buf),
+                reason: FfiConverterOptionTypeAccountSignOutReason.read(from: &buf),
+                sessions: FfiConverterOptionSequenceTypeAccountSession.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AccountState, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.revision, into: &buf)
+        FfiConverterTypeAccountStatus.write(value.status, into: &buf)
+        FfiConverterOptionTypeAccountSignOutReason.write(value.reason, into: &buf)
+        FfiConverterOptionSequenceTypeAccountSession.write(value.sessions, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountState_lift(_ buf: RustBuffer) throws -> AccountState {
+    return try FfiConverterTypeAccountState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountState_lower(_ value: AccountState) -> RustBuffer {
+    return FfiConverterTypeAccountState.lower(value)
 }
 
 
@@ -6462,6 +6766,81 @@ public func FfiConverterTypeAccountNetwork_lower(_ value: AccountNetwork) -> Rus
 
 
 /**
+ * First cause of irreversible local sign-out; cleanup retries never replace it.
+ */
+
+public enum AccountSignOutReason: Equatable, Hashable {
+
+    /**
+     * The host requested local sign-out.
+     */
+    case selfLogout
+    /**
+     * Exact current authority evidence retired this enrollment.
+     */
+    case sessionRetired
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension AccountSignOutReason: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountSignOutReason: FfiConverterRustBuffer {
+    typealias SwiftType = AccountSignOutReason
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountSignOutReason {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .selfLogout
+
+        case 2: return .sessionRetired
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: AccountSignOutReason, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .selfLogout:
+            writeInt(&buf, Int32(1))
+
+
+        case .sessionRetired:
+            writeInt(&buf, Int32(2))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountSignOutReason_lift(_ buf: RustBuffer) throws -> AccountSignOutReason {
+    return try FfiConverterTypeAccountSignOutReason.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountSignOutReason_lower(_ value: AccountSignOutReason) -> RustBuffer {
+    return FfiConverterTypeAccountSignOutReason.lower(value)
+}
+
+
+
+/**
  * Errors surfaced to Swift/Kotlin.
  *
  * This must not use `flat_error`: foreign `FfiCursorStore` implementations
@@ -7252,6 +7631,30 @@ fileprivate struct FfiConverterOptionTypeProtectedEnrollmentRecord: FfiConverter
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeAccountState: FfiConverterRustBuffer {
+    typealias SwiftType = AccountState?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeAccountState.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeAccountState.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeProtectedEnrollmentNamespace: FfiConverterRustBuffer {
     typealias SwiftType = ProtectedEnrollmentNamespace?
 
@@ -7268,6 +7671,30 @@ fileprivate struct FfiConverterOptionTypeProtectedEnrollmentNamespace: FfiConver
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeProtectedEnrollmentNamespace.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeAccountSignOutReason: FfiConverterRustBuffer {
+    typealias SwiftType = AccountSignOutReason?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeAccountSignOutReason.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeAccountSignOutReason.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -7316,6 +7743,30 @@ fileprivate struct FfiConverterOptionTypeFfiSyncEvent: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeFfiSyncEvent.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionSequenceTypeAccountSession: FfiConverterRustBuffer {
+    typealias SwiftType = [AccountSession]?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterSequenceTypeAccountSession.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterSequenceTypeAccountSession.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -7698,6 +8149,15 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_func_tinkle_ffi_init() != 34048) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tinkle_ffi_checksum_method_accountstatesubscription_next() != 38373) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_accountstatesubscription_stop() != 57584) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_confirm_session() != 24918) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_get_sessions() != 52916) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -7708,6 +8168,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_session_status() != 59367) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_subscribe_session_state() != 53169) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_connect() != 42477) {

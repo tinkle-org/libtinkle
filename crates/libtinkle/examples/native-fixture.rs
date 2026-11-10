@@ -16,8 +16,10 @@ use syntra_runtime::{
     AllowAnonymous, AuthError, Authenticator, ConnectionConfig, FnHandler, HandlerOutcome,
 };
 use tinkle_schema::proto::{
-    target, GetHistoryRequest, GetHistoryResponse, GetTargetChangesRequest,
-    GetTargetChangesResponse, TargetChange, TargetChangeKind,
+    target, ConfirmSessionRequest, ConfirmSessionResponse, GetHistoryRequest, GetHistoryResponse,
+    GetSessionsResponse, GetTargetChangesRequest, GetTargetChangesResponse, KeepAliveRequest,
+    KeepAliveResponse, RevokeSessionRequest, RevokeSessionResponse, Session, TargetChange,
+    TargetChangeKind,
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -29,6 +31,19 @@ struct Gateway {
     task: tokio::task::JoinHandle<anyhow::Result<()>>,
     stop: CancellationToken,
     log: Arc<Mutex<Value>>,
+}
+
+/// Fixed synthetic key matching the Swift ACTIVE vector, not an account authority store.
+struct SessionReviewKeys;
+
+impl syntra_core::secure_channel::KeyStore for SessionReviewKeys {
+    /// This opt-in projection fixture proves encrypted transport, not enrollment policy.
+    fn lookup(
+        &self,
+        _: &syntra_core::secure_channel::Context,
+    ) -> Result<Secret32, syntra_core::secure_channel::Error> {
+        Ok(Secret32::new([0x22; 32]))
+    }
 }
 
 impl Gateway {
@@ -95,7 +110,32 @@ async fn serve_control(control: TcpListener) -> anyhow::Result<()> {
                 // Explicit opt-in matches the Rust-validated Swift enrollment vector.
                 // Synthetic test key only; ordinary fixtures retain fresh random keys.
                 let enrollment_review = request["enrollment_review"].as_bool() == Some(true);
-                let (private, public) = if enrollment_review {
+                // Returning is a separate explicit projection-test mode. It must not
+                // weaken the Bootstrap-only restore-denial fixture's admission.
+                let session_review = request["session_review"].as_bool() == Some(true);
+                // Separate opt-in keeps the Swift confirmation fixture's empty snapshot unchanged.
+                let targeted_revocation =
+                    session_review && request["targeted_revocation"].as_bool() == Some(true);
+                let sessions = Arc::new(Mutex::new(if targeted_revocation {
+                    [
+                        ("22222222-2222-4222-8222-222222222222", true, false),
+                        ("78e5c289-656b-4428-a091-2dddf6828465", false, true),
+                        ("96007910-fd5b-4ef2-bf0c-2e4ae1d44b1b", false, true),
+                    ]
+                    .into_iter()
+                    .map(|(id, current, unconfirmed)| Session {
+                        id: id.into(),
+                        device_model: "synthetic-revocation-device".into(),
+                        app_build: "00042".into(),
+                        current,
+                        unconfirmed,
+                        ..Default::default()
+                    })
+                    .collect::<Vec<_>>()
+                } else {
+                    vec![]
+                }));
+                let (private, public) = if enrollment_review || session_review {
                     (
                         Secret32::new([0x33; 32]),
                         [
@@ -107,13 +147,13 @@ async fn serve_control(control: TcpListener) -> anyhow::Result<()> {
                 } else {
                     generate_server_key()?
                 };
-                let scope = if enrollment_review {
+                let scope = if enrollment_review || session_review {
                     "fixture"
                 } else {
                     "tinkle-mobile-fixture"
                 };
                 let log = Arc::new(Mutex::new(
-                    json!({"requests": [], "history": [], "admissions": []}),
+                    json!({"requests": [], "history": [], "admissions": [], "confirmations": [], "revocations": [], "revocation_mutations": 0}),
                 ));
                 let task_log = log.clone();
                 let deletions = request["deletions"].as_array().cloned().unwrap_or_default();
@@ -139,14 +179,23 @@ async fn serve_control(control: TcpListener) -> anyhow::Result<()> {
                         let Ok((socket, _)) = accepted else { break };
                         let log = task_log.clone();
                         let deletions = deletions.clone();
+                        let sessions = sessions.clone();
                         let stop = task_stop.clone();
                         let security = ServerConfig {
-                            mode: Mode::Bootstrap,
+                            mode: if session_review {
+                                Mode::Returning
+                            } else {
+                                Mode::Bootstrap
+                            },
                             carrier: Carrier::Tcp,
                             server_key_id: 7,
                             scope: scope.as_bytes().to_vec(),
                             private_key: Secret32::new(*private.expose()),
-                            store: None,
+                            store: if session_review {
+                                Some(Arc::new(SessionReviewKeys))
+                            } else {
+                                None
+                            },
                         };
                         connections.spawn(async move {
                             let admission_log = log.clone();
@@ -162,6 +211,7 @@ async fn serve_control(control: TcpListener) -> anyhow::Result<()> {
                                 let log = log.clone();
                                 let deletions = deletions.clone();
                                 let initialized = initialized.clone();
+                                let sessions = sessions.clone();
                                 async move {
                                     let wrapped = method == "/tinkle.v1.ConnectionService/InitConnect";
                                     let (method, payload) = if wrapped {
@@ -175,6 +225,61 @@ async fn serve_control(control: TcpListener) -> anyhow::Result<()> {
                                         (method, payload)
                                     };
                                     let result = match method.as_str() {
+                                        // Synthetic replies exercise the real native projection only;
+                                        // no account membership or review eligibility is modeled.
+                                        tinkle_schema::methods::accountservice::CONFIRM_SESSION if session_review => {
+                                            let Ok(req) = ConfirmSessionRequest::decode(payload.as_slice()) else {
+                                                return HandlerOutcome::error(syntra_core::ErrorCode::InvalidArgument, "bad fixture confirmation");
+                                            };
+                                            log.lock().unwrap()["confirmations"].as_array_mut().unwrap().push(json!(req.session_id));
+                                            match req.session_id.as_str() {
+                                                "78e5c289-656b-4428-a091-2dddf6828465" => HandlerOutcome::Payload(ConfirmSessionResponse {
+                                                    session: Some(Session {
+                                                        id: req.session_id, device_model: "projection-device".into(),
+                                                        platform: "android-fixture".into(), system_version: "36-fixture".into(),
+                                                        app_version: "9.8.7-fixture".into(), app_build: "00042".into(),
+                                                        created_date: i64::MAX - 1, active_date: i64::MAX,
+                                                        ip: "192.0.2.42".into(), country: "ZZ".into(), region: "projection-region".into(),
+                                                        current: false, unconfirmed: false,
+                                                    }),
+                                                }.encode_to_vec()),
+                                                "96007910-fd5b-4ef2-bf0c-2e4ae1d44b1b" => HandlerOutcome::error(syntra_core::ErrorCode::PermissionDenied, "synthetic fixture confirmation denied"),
+                                                _ => HandlerOutcome::error(syntra_core::ErrorCode::InvalidArgument, "unknown fixture session"),
+                                            }
+                                        }
+                                        tinkle_schema::methods::accountservice::GET_SESSIONS if session_review => {
+                                            HandlerOutcome::Payload(GetSessionsResponse { sessions: sessions.lock().unwrap().clone() }.encode_to_vec())
+                                        }
+                                        // Synthetic list mutation for SDK response-loss/no-replay coverage,
+                                        // not authority proof: no enrollment retirement or closure is modeled.
+                                        tinkle_schema::methods::accountservice::REVOKE_SESSION if targeted_revocation => {
+                                            let Ok(req) = RevokeSessionRequest::decode(payload.as_slice()) else {
+                                                return HandlerOutcome::error(syntra_core::ErrorCode::InvalidArgument, "bad fixture revocation");
+                                            };
+                                            if req.session_id != "78e5c289-656b-4428-a091-2dddf6828465" {
+                                                return HandlerOutcome::error(syntra_core::ErrorCode::NotFound, "unknown fixture revocation target");
+                                            }
+                                            let mut log = log.lock().unwrap();
+                                            let executions = log["revocations"].as_array_mut().unwrap();
+                                            if executions.len() >= 8 {
+                                                return HandlerOutcome::error(syntra_core::ErrorCode::ResourceExhausted, "fixture revocation limit");
+                                            }
+                                            executions.push(json!(req.session_id));
+                                            let mut sessions = sessions.lock().unwrap();
+                                            let before = sessions.len();
+                                            sessions.retain(|session| session.id != req.session_id);
+                                            let revoked = before != sessions.len();
+                                            if revoked {
+                                                log["revocation_mutations"] = json!(log["revocation_mutations"].as_u64().unwrap() + 1);
+                                            }
+                                            HandlerOutcome::Payload(RevokeSessionResponse { revoked }.encode_to_vec())
+                                        }
+                                        tinkle_schema::methods::connectionservice::KEEP_ALIVE if session_review => {
+                                            let Ok(req) = KeepAliveRequest::decode(payload.as_slice()) else {
+                                                return HandlerOutcome::error(syntra_core::ErrorCode::InvalidArgument, "bad fixture keepalive");
+                                            };
+                                            HandlerOutcome::Payload(KeepAliveResponse { sequence: req.sequence }.encode_to_vec())
+                                        }
                                         "/tinkle.v1.MessagesService/GetTargetChanges" => {
                                             let Ok(req) = GetTargetChangesRequest::decode(&*payload) else { return HandlerOutcome::error(syntra_core::ErrorCode::InvalidArgument, "bad fixture request") };
                                             let target_key = key(&req.target);
@@ -297,6 +402,90 @@ mod tests {
         let mut reply = String::new();
         stream.read_line(&mut reply).await.unwrap();
         serde_json::from_str(&reply).unwrap()
+    }
+
+    #[tokio::test]
+    /// Synthetic Returning replies test transport/projection only, not account authority policy.
+    async fn session_review_projects_confirmation_and_returns_typed_denial() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(serve_control(listener));
+            let fixture = control(address, json!({"op":"create", "session_review":true})).await;
+            let mut config = libtinkle::ClientConfig::new(
+                "127.0.0.1",
+                libtinkle::ClientInfo::new(
+                    "fixture".into(),
+                    "test".into(),
+                    "1".into(),
+                    "1".into(),
+                    "0001".into(),
+                    Default::default(),
+                )
+                .unwrap(),
+            );
+            config.primary_port = fixture["port"].as_u64().unwrap().try_into().unwrap();
+            config.fallback_port = None;
+            // The same synthetic ACTIVE material is already encoded in the Swift vector.
+            let status = tinkle_schema::proto::DeviceEnrollmentStatus {
+                operation_id: "11111111-1111-4111-8111-111111111111".into(),
+                session_id: "22222222-2222-4222-8222-222222222222".into(),
+                handle: vec![8; 8].into(),
+                enrollment_epoch: 1,
+                account_auth_epoch: 1,
+                user_id: 42,
+                scope: tinkle_schema::proto::DeviceKeyScope::Account as i32,
+                state: tinkle_schema::proto::DeviceEnrollmentState::Active as i32,
+                expires_at: Some(prost_types::Timestamp {
+                    seconds: 253_402_300_799,
+                    nanos: 0,
+                }),
+            };
+            let client = libtinkle::Client::new(
+                config,
+                libtinkle::TrustSource::Returning {
+                    trust: libtinkle::ServerTrust {
+                        server_public_key: serde_json::from_value(fixture["pin"].clone()).unwrap(),
+                        server_key_id: 7,
+                        scope: "fixture".into(),
+                    },
+                    enrollment: libtinkle::Enrollment::from_active_status([0x22; 32], &status)
+                        .unwrap(),
+                },
+                libtinkle::InMemoryCursorStore::new(),
+            );
+            client
+                .connect()
+                .await
+                .expect("session-review fixture must admit synthetic Returning");
+            let id = "78e5c289-656b-4428-a091-2dddf6828465";
+            let session = client.account().confirm_session(id).await.unwrap();
+            assert_eq!(session.id, id);
+            assert_eq!(session.device_model, "projection-device");
+            assert_eq!(session.platform, "android-fixture");
+            assert_eq!(session.system_version, "36-fixture");
+            assert_eq!(session.app_version, "9.8.7-fixture");
+            assert_eq!(session.app_build, "00042");
+            assert_eq!(session.created_date, i64::MAX - 1);
+            assert_eq!(session.active_date, i64::MAX);
+            assert_eq!(session.ip, "192.0.2.42");
+            assert_eq!(session.country, "ZZ");
+            assert_eq!(session.region, "projection-region");
+            assert!(!session.current && !session.unconfirmed);
+            let denied = "96007910-fd5b-4ef2-bf0c-2e4ae1d44b1b";
+            let error = client.account().confirm_session(denied).await.unwrap_err();
+            assert!(matches!(error, libtinkle::TinkleError::Syntra(error)
+                if error.code() == syntra_core::ErrorCode::PermissionDenied));
+            let log = control(address, json!({"op":"requests", "id":fixture["id"]})).await;
+            assert_eq!(log["confirmations"], json!([id, denied]));
+            assert_eq!(log["admissions"], json!(["returning"]));
+            client.close().await;
+            control(address, json!({"op":"close", "id":fixture["id"]})).await;
+            server.abort();
+            let _ = server.await;
+        })
+        .await
+        .expect("synthetic session-review fixture timed out");
     }
 
     #[tokio::test]

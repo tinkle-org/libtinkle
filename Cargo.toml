@@ -32,9 +32,9 @@ futures-channel = "0.3"
 serde_json = "1"
 uniffi = { version = "=0.32.2", features = ["tokio"] }
 
-syntra-core = { version = "=1.0.0-rc.4" }
-syntra-runtime = { version = "=1.0.0-rc.4" }
-syntra-net = { version = "=1.0.0-rc.4", default-features = false, features = ["tcp"] }
+syntra-core = { version = "=1.0.0-rc.5" }
+syntra-runtime = { version = "=1.0.0-rc.5" }
+syntra-net = { version = "=1.0.0-rc.5", default-features = false, features = ["tcp"] }
 tinkle-schema = { path = "crates/tinkle-schema", version = "0.1.0" }
 tinkle-storage = { path = "crates/tinkle-storage", version = "0.1.0" }
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -42,7 +42,7 @@ tempfile = "3"
 
 # BSR-generated bindings (public index, no token).
 # Versions pinned from `buf registry sdk version` (see PROTO_PINNING.md).
-tinkle-org_schema_community_neoeinstein-prost = { version = "=0.5.0-20261107080548-dc41c2199c76.2", registry = "buf" }
+tinkle-org_schema_community_neoeinstein-prost = { version = "=0.5.0-20261109202628-d85fcc4fe592.2", registry = "buf" }
 
 # Native SDKs must retain unwind containment and matching native symbols.
 # Select staticlib/cdylib at packaging time, not for every workspace build.

@@ -162,6 +162,43 @@ impl<'a> Account<'a> {
         Ok(response.sessions)
     }
 
+    /// Confirm one other login once. The returned commit-point projection never
+    /// replaces a newer full snapshot; review refresh remains SDK-owned.
+    pub async fn confirm_session(
+        &self,
+        session_id: &str,
+    ) -> Result<tinkle_schema::proto::Session, TinkleError> {
+        if !tinkle_schema::sync::session_id(session_id) {
+            return Err(TinkleError::Codec("invalid session identifier".into()));
+        }
+        let generation = self.client.session_generation()?;
+        let caller = self.client.for_session_generation(generation.clone());
+        // Invalidate an in-flight read before dispatch, including ambiguous outcomes.
+        self.client.session_state.dirty(Some(generation.clone()));
+        let response: Result<tinkle_schema::proto::ConfirmSessionResponse, TinkleError> =
+            call_typed(
+                &caller,
+                tinkle_schema::methods::accountservice::CONFIRM_SESSION,
+                &tinkle_schema::proto::ConfirmSessionRequest {
+                    session_id: session_id.into(),
+                },
+                3_000,
+            )
+            .await;
+        self.client.session_state.dirty(Some(generation.clone()));
+        let session = response?
+            .session
+            .ok_or_else(|| TinkleError::Codec("missing confirmed session".into()))?;
+        if session.id != session_id || session.current || session.unconfirmed {
+            return Err(TinkleError::Codec("invalid confirmed session".into()));
+        }
+        // Transport retirement cannot undo a confirmed mutation; local sign-out remains terminal.
+        if self.client.is_signed_out() {
+            return Err(TinkleError::SignedOut);
+        }
+        Ok(session)
+    }
+
     /// Revoke one device UUID once. An unknown transport outcome is never replayed.
     pub async fn revoke_session(&self, session_id: &str) -> Result<bool, TinkleError> {
         if !crate::enrollment::uuid(session_id) {

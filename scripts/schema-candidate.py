@@ -67,8 +67,8 @@ if any(p["name"] in {"tonic", "tonic-prost", "tinkle-org_schema_community_neoein
     raise SystemExit("native schema candidate unexpectedly depends on tonic")
 for name in ("syntra-core", "syntra-runtime", "syntra-net"):
     packages = [p for p in resolved["packages"] if p["name"] == name]
-    if len(packages) != 1 or packages[0]["version"] != "1.0.0-rc.4" or packages[0].get("source") != "registry+https://github.com/rust-lang/crates.io-index":
-        raise SystemExit("candidate must use the exact published Syntra rc.4 crates")
+    if len(packages) != 1 or packages[0]["version"] != "1.0.0-rc.5" or packages[0].get("source") != "registry+https://github.com/rust-lang/crates.io-index":
+        raise SystemExit("candidate must use the exact published Syntra rc.5 crates")
     if name == "syntra-net":
         node = next(n for n in resolved["resolve"]["nodes"] if n["id"] == packages[0]["id"])
         if node["features"] != ["tcp"]:

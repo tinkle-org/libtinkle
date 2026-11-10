@@ -13,6 +13,29 @@ use syntra_runtime::CancelToken;
 pub(crate) const KEEP_ALIVE_METHOD: &str = "/tinkle.v1.ConnectionService/KeepAlive";
 pub(crate) const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
 
+/// One bounded join attempt. rc.5 retains unfinished carrier/policy ownership in
+/// the handle; neither an incomplete report nor an error permits another socket.
+pub(crate) async fn transport_joined(handle: &mut syntra_net::tcp::ClientHandle) -> bool {
+    handle.suspend();
+    matches!(
+        handle.shutdown_transport(Duration::from_secs(1)).await,
+        Ok(syntra_net::TransportShutdown::Complete)
+    )
+}
+
+/// Retain a pre-install/status handle through incomplete reports and cancelled join waiters.
+pub(crate) async fn join_retained_transport(
+    slot: &mut Option<syntra_net::tcp::ClientHandle>,
+) -> bool {
+    if let Some(handle) = slot.as_mut() {
+        if !transport_joined(handle).await {
+            return false;
+        }
+    }
+    slot.take();
+    true
+}
+
 /// Public Client clones own this anchor; background callers do not retain it.
 /// Dropping the last host owner cancels background work instead of forming a
 /// Client → Live → task → Client retention cycle.
@@ -30,19 +53,35 @@ impl Drop for ClientOwner {
 /// Local identity of exactly one socket/Core generation, never a credential.
 pub(crate) struct LiveGeneration {
     pub(crate) open: AtomicBool,
+    /// Local lifecycle retirement must never masquerade as unexpected authenticated loss.
+    pub(crate) retiring: AtomicBool,
     pub(crate) returning: bool,
+    /// Local source/binding installation identity, distinct from the protocol enrollment epoch.
+    pub(crate) source_revision: u64,
     pub(crate) closed: CancelToken,
     pub(crate) classified: AtomicBool,
+    /// Sticky decision, retained even if observational teardown cancels this worker.
+    pub(crate) terminal_failure: AtomicBool,
 }
 impl LiveGeneration {
     /// Allocate fresh open/closed fences with failure classification still pending.
-    pub(crate) fn new(returning: bool) -> Arc<Self> {
+    pub(crate) fn new(returning: bool, source_revision: u64) -> Arc<Self> {
         Arc::new(Self {
             open: AtomicBool::new(true),
+            retiring: AtomicBool::new(false),
             returning,
+            source_revision,
             closed: CancelToken::new(),
             classified: AtomicBool::new(false),
+            terminal_failure: AtomicBool::new(false),
         })
+    }
+
+    /// Record terminal policy before any wake or await; a later carrier-loss result cannot undo it.
+    pub(crate) fn record_failure(&self, error: &TinkleError) {
+        if !matches!(error.recovery_decision(), crate::RecoveryDecision::Retry) {
+            self.terminal_failure.store(true, Ordering::SeqCst);
+        }
     }
 }
 
@@ -78,6 +117,26 @@ pub(crate) struct LivenessTask {
     task: Option<tokio::task::JoinHandle<()>>,
 }
 impl LivenessTask {
+    /// Run a selected failure under the same cancellable owner as the actual heartbeat loop.
+    #[cfg(test)]
+    pub(crate) fn spawn_failure(
+        client: Client,
+        generation: Arc<LiveGeneration>,
+        error: TinkleError,
+    ) -> Self {
+        let stop = CancelToken::new();
+        let stopped = stop.clone();
+        let task = tokio::spawn(async move {
+            tokio::select! { biased;
+                _ = stopped.cancelled() => {},
+                _ = client.fail_liveness(&generation, &error) => {},
+            }
+        });
+        Self {
+            stop,
+            task: Some(task),
+        }
+    }
     /// Own one generation-bound loop, cancellable by lifecycle stop or loss of host ownership.
     pub(crate) fn spawn(
         client: Client,

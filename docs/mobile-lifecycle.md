@@ -27,6 +27,12 @@ retires and parks a live Returning context until explicit authenticated trust
 installation. Task owners survive cancellation of teardown so a later stop can
 still join them. Dropping the last host Client owner cancels background work.
 
+`crates/libtinkle/src/liveness.rs` retains incomplete carrier/policy shutdown
+owners; no replacement dial is allowed until their join completes. A bounded
+stop/suspend return is not a join acknowledgement. Admission and retirement
+observation leave an active provisioning caller's slot intact; abandoned or
+explicitly closing children must join before replacement.
+
 - **Foreground**: supervised `start(targets, watch)` (or manual `connect()`
   → ACTIVE) — RPCs, subscriptions, presence live; the supervisor owns
   re-reconciliation/reconnect from here on. Hosts consume `next_event()`,
@@ -66,14 +72,34 @@ Logout cleanup is retained independently of host waiters. Rejoining or retrying
 keeps cumulative remote confirmation, the original cache principal and completed
 local steps, and never repeats remote Logout. `session_status()` distinguishes
 network unavailability, unknown authorization and signed-out cleanup progress.
+Protected storage is still invalidated when transport join is incomplete;
+cleanup then remains `Failed` until a retry finishes the retained join. Do not
+repeat an acknowledged store clear or infer remote rollback from that failure.
 Conditional protected-store hosts persist a revision-bound cleanup marker before
-clearing; it blocks restoration and late writes after restart. Legacy hosts
-explicitly report no restart-safe-store capability. Conditional restoration and
-explicit foreground entry observe permanent enrollment retirement first. An
-independent 60-second foreground timer uses bounded status-only encrypted
-connections on the retained route; returning failures never trigger or accelerate
-it. Suspend/stop cancel and join observation. Exact current negative evidence
-starts local-only cleanup; expired or unknown records never become usable keys.
+clearing; it blocks restoration and late writes after restart. Hosts without
+conditional persistence cannot attest restart safety. Conditional restore and
+foreground entry observe permanent retirement before Returning. Current
+foreground Returning loss/denial coalesces one bounded evidence check per
+generation. The 60-second offline fallback skips healthy Returning sockets.
+Every status-only Bootstrap connection waits for old transport shutdown/join;
+suspend/stop cancel and drain observation. Exact current negative evidence starts
+local-only cleanup; expired or unknown records never become usable keys. The
+canonical contract is [retirement observation](device-enrollment.md#permanent-retirement-observation).
+
+### Retained account state
+
+Use `Client::subscribe_session_state()` independently of message `next_event()`.
+`crates/libtinkle/src/session.rs` retains lifecycle, `SelfLogout`/`SessionRetired`,
+cleanup progress, and the optional full session list for one app consumer.
+UniFFI's `AccountStateSubscription.next()` exposes the same projection. Call its
+`stop()` on consumer teardown to unblock pending reads; stopping a subscription
+does not sign out or close the connection.
+
+The SDK refreshes session review on authenticated startup, foreground
+reconnection, reconnect, and typed session-change hints, with dirty-read retry.
+Hosts need no session polling timer and must not infer sign-out from network
+loss. Review prompts and targeted rejection are defined in
+[session review and state](device-enrollment.md#session-review-and-state).
 
 Push (APNs/FCM, first via OneSignal) carries only a wake hint — never
 message bodies or secrets. Notification display text (`aps.alert`,

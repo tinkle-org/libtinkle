@@ -42,6 +42,10 @@ pub(crate) mod retirement;
 pub(crate) mod services;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod session;
+#[cfg(test)]
+extern crate self as libtinkle;
+#[cfg(test)]
+mod session_review_tests;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod sqlite_store;
 pub(crate) mod sync;
@@ -71,7 +75,10 @@ pub use retirement::{
 };
 pub use services::{Account, Auth, Files, Messages, Updates};
 #[cfg(not(target_arch = "wasm32"))]
-pub use session::{SessionAuthorization, SessionCleanup, SessionNetwork, SessionStatus};
+pub use session::{
+    SessionAuthorization, SessionCleanup, SessionNetwork, SessionSignOutReason, SessionState,
+    SessionStateSubscription, SessionStatus,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use sqlite_store::SqliteCursorStore;
 pub use sync::{ReconcileStatus, SyncEvent, SyncManager};

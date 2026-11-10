@@ -83,7 +83,11 @@ impl LogoutCleanup {
             .clone();
         // Pair the first cleanup cause with the irreversible fence. Automatic
         // retirement must not expose a fenced client before retaining its cause.
-        client.begin_signed_out();
+        client.begin_signed_out(match &cause {
+            CleanupCause::Logout { .. } => crate::SessionSignOutReason::SelfLogout,
+            CleanupCause::Retired { .. } => crate::SessionSignOutReason::SessionRetired,
+        });
+        client.session_state.cleanup(crate::SessionCleanup::Pending);
         let task = tokio::spawn(async move {
             let result = client.finish_logout(&cause).await;
             *client
@@ -95,6 +99,7 @@ impl LogoutCleanup {
             } else {
                 crate::SessionCleanup::Failed
             };
+            client.session_state.cleanup(client.logout_cleanup.status());
             result
         });
         let next = async move {
@@ -221,10 +226,25 @@ impl Client {
             Ok(())
         };
         progress.cache_cleared |= cache.is_ok();
+        // Completed storage steps do not attest carrier join. Retry the retained
+        // owner without repeating the remote mutation or renewing its budget.
+        let transport_joined = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            let _connection = self.connect_lock.lock().await;
+            self.teardown_connection().await
+                && !self
+                    .connect_lock
+                    .status_open
+                    .load(std::sync::atomic::Ordering::SeqCst)
+        })
+        .await
+        .unwrap_or(false);
         if failed {
             return Err(TinkleError::SecureStore);
         }
         cache?;
+        if !transport_joined {
+            return Err(TinkleError::NetworkUnavailable);
+        }
         Ok(progress.confirmed)
     }
 }

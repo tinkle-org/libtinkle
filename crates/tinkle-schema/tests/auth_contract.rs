@@ -57,6 +57,9 @@ fn canonical_method_inventory_matches_the_actual_message_artifact() {
 fn enrollment_fields_and_capability_activation_are_exact() {
     let descriptors = prost_types::FileDescriptorSet::decode(FILE_DESCRIPTOR_SET).unwrap();
     for (message, fields) in [
+        ("ConfirmSessionRequest", vec![("session_id", 1)]),
+        ("ConfirmSessionResponse", vec![("session", 1)]),
+        ("SessionChanged", vec![("session_id", 1)]),
         ("KeepAliveRequest", vec![("sequence", 1)]),
         ("KeepAliveResponse", vec![("sequence", 1)]),
         (
@@ -149,6 +152,49 @@ fn enrollment_fields_and_capability_activation_are_exact() {
             );
         }
     }
+}
+
+#[test]
+/// Review metadata and mutation responses come from the published artifact, not local protos.
+fn session_review_types_and_field_presence_are_exact() {
+    use prost_types::field_descriptor_proto::{Label, Type};
+    let descriptors = prost_types::FileDescriptorSet::decode(FILE_DESCRIPTOR_SET).unwrap();
+    let message = |name: &str| {
+        descriptors
+            .file
+            .iter()
+            .flat_map(|f| &f.message_type)
+            .find(|m| m.name.as_deref() == Some(name))
+            .unwrap()
+    };
+    let session = message("Session");
+    assert_eq!(session.field.len(), 13);
+    let unconfirmed = session
+        .field
+        .iter()
+        .find(|f| f.name.as_deref() == Some("unconfirmed"))
+        .unwrap();
+    assert_eq!(unconfirmed.number, Some(13));
+    assert_eq!(unconfirmed.r#type, Some(Type::Bool as i32));
+    assert_eq!(unconfirmed.label, Some(Label::Optional as i32));
+    assert!(!unconfirmed.proto3_optional.unwrap_or(false));
+    assert_eq!(
+        message("ConfirmSessionResponse").field[0]
+            .type_name
+            .as_deref(),
+        Some(".tinkle.v1.Session")
+    );
+    assert_eq!(
+        tinkle_schema::methods::accountservice::CONFIRM_SESSION,
+        "/tinkle.v1.AccountService/ConfirmSession"
+    );
+    let hint = tinkle_schema::proto::SessionChanged {
+        session_id: "78e5c289-656b-4428-a091-2dddf6828465".into(),
+    };
+    assert_eq!(
+        tinkle_schema::proto::SessionChanged::decode(hint.encode_to_vec().as_slice()).unwrap(),
+        hint
+    );
 }
 
 /// Retirement is negative-only and has no application-level query identifier.

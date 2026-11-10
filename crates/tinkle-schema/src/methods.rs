@@ -11,6 +11,11 @@
 /// `(method, request, response)`; descriptors for codegen.
 pub const ALL_METHODS: &[(&str, &str, &str)] = &[
     (
+        "/tinkle.v1.AccountService/ConfirmSession",
+        "ConfirmSessionRequest",
+        "ConfirmSessionResponse",
+    ),
+    (
         "/tinkle.v1.ConnectionService/KeepAlive",
         "KeepAliveRequest",
         "KeepAliveResponse",
@@ -937,8 +942,18 @@ pub const ALL_METHODS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// Immutable initialization and authenticated application liveness methods.
+pub mod connectionservice {
+    /// Install complete client metadata and execute the first wrapped unary call.
+    pub const INIT_CONNECT: &str = "/tinkle.v1.ConnectionService/InitConnect";
+    /// Renew application presence on the current ACTIVE Returning generation.
+    pub const KEEP_ALIVE: &str = "/tinkle.v1.ConnectionService/KeepAlive";
+}
+
 /// `AccountService` methods.
 pub mod accountservice {
+    /// Confirm another active login from a confirmed current session, once.
+    pub const CONFIRM_SESSION: &str = "/tinkle.v1.AccountService/ConfirmSession";
     /// `/tinkle.v1.AccountService/ChangePhoneNumber`: `ChangePhoneNumberRequest` → `ChangePhoneNumberResponse`.
     pub const CHANGE_PHONE_NUMBER: &str = "/tinkle.v1.AccountService/ChangePhoneNumber";
     /// `/tinkle.v1.AccountService/DeleteAccount`: `DeleteAccountRequest` → `DeleteAccountResponse`.
