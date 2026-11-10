@@ -285,6 +285,22 @@ jobs:
             /tmp/kotlin-consumer/sample/build/outputs/mapping
             /tmp/kotlin-consumer/sample/build/outputs/apk
           retention-days: 14
+  native-sdk-check:
+    name: native-sdk-check
+    needs: [source, ios, android, manifest, swift-consumer, kotlin-consumer]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every native validation job to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = {name: job['result'] for name, job in json.loads(os.environ['NEEDS_JSON']).items()}
+          if not all(result == 'success' for result in results.values()):
+              raise SystemExit(f'Native validation did not succeed: {results}')
+          PY
   publish:
     needs: [source, rust-checks, manifest, swift-consumer, kotlin-consumer]
     if: needs.source.outputs.publish == 'true' && github.repository == 'tinkle-org/libtinkle' && github.event_name != 'pull_request' && (inputs.publish == true || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/tinkle-ffi-v'))) && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/tinkle-ffi-v'))
