@@ -87,7 +87,7 @@ pub(crate) struct RetirementObserver {
     observing: tokio::sync::Mutex<()>,
     /// Repeated foreground entry waits for the same status-first barrier.
     foreground_entry: tokio::sync::Mutex<Option<ForegroundEntry>>,
-    /// Coalesced, current Returning loss/denial; never triggered by local suspension.
+    /// Accepted current Returning loss/denial; its own teardown may set retiring.
     loss: Mutex<Option<Arc<crate::liveness::LiveGeneration>>>,
     checked_loss: Mutex<std::sync::Weak<crate::liveness::LiveGeneration>>,
     loss_wake: tokio::sync::Notify,
@@ -180,7 +180,7 @@ impl RetirementObserver {
     pub(crate) fn observation(&self) -> EnrollmentObservation {
         *self.observation.lock().unwrap_or_else(|e| e.into_inner())
     }
-    /// Pending current loss must settle before another Returning attempt is admitted.
+    /// Accepted current loss must settle before Returning, even after its own teardown fence.
     pub(crate) fn has_pending_loss(&self) -> bool {
         // Never hold the loss lock while reading other owners: invalidation
         // takes binding before loss. Withdraw only the exact snapshotted demand,
@@ -196,7 +196,6 @@ impl RetirementObserver {
             .and_then(|session| session.generation());
         let mut loss = self.loss.lock().unwrap_or_else(|e| e.into_inner());
         let obsolete = !self.foreground.load(Ordering::SeqCst)
-            || candidate.retiring.load(Ordering::SeqCst)
             || candidate.source_revision != revision
             || current
                 .as_ref()
@@ -685,6 +684,7 @@ impl Client {
     }
 
     /// Caller owns observing; an install barrier cannot skip the new binding's check.
+    /// Retain accepted loss through incomplete teardown without replacing newer demand.
     async fn observe_retirement_locked_until(
         &self,
         clock: syntra_runtime::elapsed::ElapsedClock,
@@ -737,17 +737,17 @@ impl Client {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take();
-        if let Some(expected) = loss {
-            if expected.retiring.load(Ordering::SeqCst)
-                || expected.source_revision != self.retirement.revision()
-            {
+        if let Some(expected) = loss.as_ref() {
+            // Admission already rejected local retirement. Our own teardown may
+            // now have fenced this accepted generation during an earlier attempt.
+            if expected.source_revision != self.retirement.revision() {
                 return Ok(None);
             }
             if self
                 .session_state
                 .generation()
                 .as_ref()
-                .is_some_and(|current| !Arc::ptr_eq(current, &expected))
+                .is_some_and(|current| !Arc::ptr_eq(current, expected))
             {
                 return Ok(None);
             }
@@ -760,11 +760,21 @@ impl Client {
             // Healthy Returning sockets are never interrupted by a periodic status check.
             return Ok(None);
         }
-        let joined = clock
-            .timeout_until(deadline, self.teardown_connection())
-            .await
-            .map_err(|_| TinkleError::NetworkUnavailable)?;
-        if !joined {
+        if !matches!(
+            clock
+                .timeout_until(deadline, self.teardown_connection())
+                .await,
+            Ok(true)
+        ) {
+            if let Some(expected) = loss {
+                // Retry accepted demand, never a newer request registered while
+                // joining. Foreground/source/current checks still fence retries.
+                self.retirement
+                    .loss
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get_or_insert(expected);
+            }
             return Err(TinkleError::NetworkUnavailable);
         }
         let mut ephemeral = self.retirement.status_transport.lock().await;
@@ -1035,7 +1045,7 @@ mod review_tests {
     }
 
     #[test]
-    /// Obsolete demand cannot park a replacement generation, and withdrawing it does not withdraw fresh demand.
+    /// Replacement fences obsolete demand; teardown alone cannot withdraw already-accepted current demand.
     fn pending_loss_withdraws_obsolete_generation_without_proof() {
         let client = client(false);
         client.retirement.enter_foreground();
@@ -1051,6 +1061,8 @@ mod review_tests {
         old.retiring.store(true, Ordering::SeqCst);
         assert!(client.retirement.has_pending_loss());
         current.retiring.store(true, Ordering::SeqCst);
+        assert!(client.retirement.has_pending_loss());
+        client.retirement.invalidate();
         assert!(!client.retirement.has_pending_loss());
         assert!(!client.is_signed_out());
     }

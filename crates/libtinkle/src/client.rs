@@ -1588,7 +1588,7 @@ impl Client {
         self.authorization.generation().map(|_| ())
     }
 
-    /// Any application denial withdraws authorization knowledge, never credentials.
+    /// Denial withdraws authorization knowledge and requests evidence, never credential erasure.
     pub(crate) fn observe_denial(&self, error: &TinkleError) {
         if matches!(
             error.code(),
@@ -1601,12 +1601,9 @@ impl Client {
             {
                 // Comparison and withdrawal happen together in the serialized reducer.
                 self.session_state.denial(generation.clone());
-                // PermissionDenied may be access policy for this RPC on an
-                // otherwise healthy channel. Heartbeat terminal failures still
-                // demand evidence through fail_liveness, regardless of their code.
-                if error.code() == syntra_core::ErrorCode::Unauthenticated {
-                    self.request_loss_observation(generation);
-                }
+                // Neither denial nor UNKNOWN disposition grants authorization.
+                // Fresh authenticated Returning can restore it and resume review.
+                self.request_loss_observation(generation);
             }
         }
     }

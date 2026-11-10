@@ -23,6 +23,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 
 /** Lives in the target APK so R8 optimizes the actual SDK call sites. No UI. */
 public object SmokeChecks {
+    /** Run SDK initialization and smoke phases within a 30-second timeout. */
     @JvmStatic
     public fun run(): Unit = runBlocking {
         withTimeout(30_000) {
@@ -51,9 +52,13 @@ public object SmokeChecks {
     private suspend fun accountStateSubscription() = coroutineScope {
         // This disconnected lifecycle smoke has no journal state to persist.
         val foreignStore = object : FfiCursorStore {
+            /** Return no journal checkpoint for this stateless fixture. */
             override suspend fun loadJournal(principal: String, targetKey: String): Long? = null
+            /** Ignore checkpoint writes in this stateless fixture. */
             override suspend fun saveJournal(principal: String, targetKey: String, acceptSeq: Long) = Unit
+            /** Ignore target removal because this fixture stores no journal state. */
             override suspend fun removeTarget(principal: String, targetKey: String) = Unit
+            /** Ignore principal cleanup because this fixture stores no journal state. */
             override suspend fun clearPrincipal(principal: String) = Unit
         }
         LoopbackGateway().use { gateway ->

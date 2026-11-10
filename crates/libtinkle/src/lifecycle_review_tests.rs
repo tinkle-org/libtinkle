@@ -8,9 +8,13 @@ use syntra_core::secure_channel::{self, Carrier, Mode, Secret32};
 use syntra_runtime::{FnHandler, HandlerOutcome};
 use tinkle_schema::proto::*;
 
+#[path = "retirement_loss_tests.rs"]
+mod retirement_loss_tests;
+
 /// Synthetic Returning material is confined to this encrypted fixture.
 struct Keys;
 impl secure_channel::KeyStore for Keys {
+    /// Resolve the synthetic Returning key shared only by this fixture.
     fn lookup(&self, _: &secure_channel::Context) -> Result<Secret32, secure_channel::Error> {
         Ok(Secret32::new([9; 32]))
     }
@@ -29,6 +33,11 @@ struct Fixture {
     store: Option<Arc<crate::enrollment::review_tests::ReviewStore>>,
     admissions: Arc<AtomicUsize>,
     deny_heartbeat: Arc<AtomicBool>,
+    deny_review_next: Arc<AtomicBool>,
+    review_reads: Arc<AtomicUsize>,
+    denied_calls: Arc<AtomicUsize>,
+    hold_returning: Arc<AtomicBool>,
+    returning_ready: Arc<tokio::sync::Notify>,
     observations: Arc<AtomicUsize>,
     server: AbortTask,
 }
@@ -78,6 +87,16 @@ impl Fixture {
         let accepted = admissions.clone();
         let deny_heartbeat = Arc::new(AtomicBool::new(false));
         let denial = deny_heartbeat.clone();
+        let deny_review_next = Arc::new(AtomicBool::new(false));
+        let review_denial = deny_review_next.clone();
+        let review_reads = Arc::new(AtomicUsize::new(0));
+        let reads = review_reads.clone();
+        let denied_calls = Arc::new(AtomicUsize::new(0));
+        let denied = denied_calls.clone();
+        let hold_returning = Arc::new(AtomicBool::new(false));
+        let hold_proof = hold_returning.clone();
+        let returning_ready = Arc::new(tokio::sync::Notify::new());
+        let proof_ready = returning_ready.clone();
         let observations = Arc::new(AtomicUsize::new(0));
         let observed = observations.clone();
         let server = AbortTask::new(tokio::spawn(async move {
@@ -94,10 +113,18 @@ impl Fixture {
                     store: Some(Arc::new(Keys)),
                 };
                 let denial = denial.clone();
+                let review_denial = review_denial.clone();
+                let reads = reads.clone();
+                let denied = denied.clone();
+                let hold_proof = hold_proof.clone();
+                let proof_ready = proof_ready.clone();
                 let observed = observed.clone();
                 peers.spawn(async move {
                     let handler = Arc::new(FnHandler(move |method: String, bytes: Vec<u8>, _| {
                         let denial = denial.clone();
+                        let review_denial = review_denial.clone();
+                        let reads = reads.clone();
+                        let denied = denied.clone();
                         let observed = observed.clone();
                         async move {
                             let wrapped =
@@ -109,6 +136,7 @@ impl Fixture {
                                 (method, bytes)
                             };
                             if method == "/example.Access/Denied" {
+                                denied.fetch_add(1, Ordering::SeqCst);
                                 return HandlerOutcome::error(
                                     syntra_core::ErrorCode::PermissionDenied,
                                     "fixture per-RPC access denial",
@@ -124,6 +152,13 @@ impl Fixture {
                             }
                             let payload = match method.as_str() {
                                 tinkle_schema::methods::accountservice::GET_SESSIONS => {
+                                    reads.fetch_add(1, Ordering::SeqCst);
+                                    if review_denial.swap(false, Ordering::SeqCst) {
+                                        return HandlerOutcome::error(
+                                            syntra_core::ErrorCode::PermissionDenied,
+                                            "fixture review denial",
+                                        );
+                                    }
                                     GetSessionsResponse { sessions: vec![] }.encode_to_vec()
                                 }
                                 tinkle_schema::methods::authservice::GET_ENROLLMENT_DISPOSITION => {
@@ -162,6 +197,9 @@ impl Fixture {
                             syntra_runtime::AuthError,
                         > { Ok(Arc::new(syntra_runtime::AllowAnonymous)) },
                     );
+                    if mode == Mode::Returning && hold_proof.load(Ordering::SeqCst) {
+                        proof_ready.notified().await;
+                    }
                     let handle = syntra_net::tcp::accept_stream(
                         stream,
                         &security,
@@ -187,6 +225,11 @@ impl Fixture {
             store,
             admissions,
             deny_heartbeat,
+            deny_review_next,
+            review_reads,
+            denied_calls,
+            hold_returning,
+            returning_ready,
             observations,
             server,
         }
@@ -382,9 +425,9 @@ async fn heartbeat_denial_records_policy_before_observation_wake() {
         .unwrap_err();
     assert_eq!(error.code(), syntra_core::ErrorCode::PermissionDenied);
     assert!(generation.terminal_failure.load(Ordering::SeqCst));
-    assert!(!client.retirement.has_pending_loss());
-    // Match the real heartbeat loop: its selected terminal result, not the
-    // general per-RPC denial observer, queues retirement evidence demand.
+    assert!(client.retirement.has_pending_loss());
+    // Denial already queued evidence, but heartbeat's terminal policy must
+    // survive the observer winning teardown before fail_liveness completes.
     let failing = caller.fail_liveness(&generation, &error);
     tokio::pin!(failing);
     assert!(futures_util::poll!(&mut failing).is_pending());
@@ -426,6 +469,7 @@ impl DropGate {
 }
 struct ReleaseOnDrop(Arc<DropGate>);
 impl Drop for ReleaseOnDrop {
+    /// Release the carrier gate even when a regression assertion unwinds.
     fn drop(&mut self) {
         self.0.release();
     }
@@ -437,6 +481,7 @@ struct HeldDropStream {
     gate: Arc<DropGate>,
 }
 impl tokio::io::AsyncRead for HeldDropStream {
+    /// Delegate encrypted carrier reads to the real TCP stream.
     fn poll_read(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -446,6 +491,7 @@ impl tokio::io::AsyncRead for HeldDropStream {
     }
 }
 impl tokio::io::AsyncWrite for HeldDropStream {
+    /// Delegate encrypted carrier writes without changing their progress semantics.
     fn poll_write(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -453,12 +499,14 @@ impl tokio::io::AsyncWrite for HeldDropStream {
     ) -> std::task::Poll<std::io::Result<usize>> {
         std::pin::Pin::new(&mut self.get_mut().stream).poll_write(cx, bytes)
     }
+    /// Preserve the TCP stream's flush behavior while holding only destruction.
     fn poll_flush(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         std::pin::Pin::new(&mut self.get_mut().stream).poll_flush(cx)
     }
+    /// Forward shutdown so only the deliberate destructor gate delays join.
     fn poll_shutdown(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -467,6 +515,7 @@ impl tokio::io::AsyncWrite for HeldDropStream {
     }
 }
 impl Drop for HeldDropStream {
+    /// Hold armed carrier destruction until released to exercise incomplete shutdown.
     fn drop(&mut self) {
         if !self.gate.armed.load(Ordering::SeqCst) {
             return;
@@ -1060,38 +1109,59 @@ async fn review_round2_cancelled_provisioning_constructor_retains_ready_owner() 
     fixture.server.shutdown().await;
 }
 
-#[tokio::test]
-/// A per-RPC access denial withdraws knowledge, not a healthy manual client's socket or credentials.
-async fn review_round3_application_permission_denied_keeps_healthy_returning() {
-    let mut fixture = Fixture::new(vec![Mode::Returning, Mode::Bootstrap], true).await;
+/// Denial and UNKNOWN cannot grant authorization; only fresh Returning resumes automatic review.
+async fn permission_denial_recovers_review(deny_review: bool) {
+    let mut fixture = Fixture::new(
+        vec![Mode::Returning, Mode::Bootstrap, Mode::Returning],
+        true,
+    )
+    .await;
     fixture.connect().await;
     let client = &fixture.client;
+    client.start(vec![]).await.unwrap();
     let generation = client.session_generation().unwrap();
-    let connection_id = client.connection_id().await;
+    let states = client.subscribe_session_state().await.unwrap();
     let observer = client.retirement.hold_observation().await;
-    let error = client
-        .call_raw("/example.Access/Denied", vec![], 1_000)
-        .await
-        .unwrap_err();
-    assert_eq!(error.code(), syntra_core::ErrorCode::PermissionDenied);
-    assert_eq!(
-        client.session_status().await.authorization,
-        crate::SessionAuthorization::Unknown
-    );
+    fixture.hold_returning.store(true, Ordering::SeqCst);
+    if deny_review {
+        fixture.deny_review_next.store(true, Ordering::SeqCst);
+        client.session_state.dirty(Some(generation.clone()));
+    } else {
+        let error = client
+            .call_raw("/example.Access/Denied", vec![], 1_000)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), syntra_core::ErrorCode::PermissionDenied);
+    }
+    let denied = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let state = states.next().await.unwrap();
+            if state.status.authorization == crate::SessionAuthorization::Unknown {
+                break state;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(denied.sessions.is_none());
     assert!(
-        !client.retirement.has_pending_loss(),
-        "ordinary PermissionDenied demanded credential proof"
+        client.retirement.has_pending_loss(),
+        "PermissionDenied stranded automatic review without authenticated recovery"
     );
     drop(observer);
-    client.observe_restored_enrollment().await.unwrap();
-    assert!(client.is_connected().await);
-    assert_eq!(client.connection_id().await, connection_id);
-    assert!(Arc::ptr_eq(
-        &client.session_generation().unwrap(),
-        &generation
-    ));
-    assert_eq!(fixture.admissions.load(Ordering::SeqCst), 1);
-    assert_eq!(fixture.observations.load(Ordering::SeqCst), 0);
+    fixture.unknown().await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while fixture.admissions.load(Ordering::SeqCst) != 3 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("supervisor must attempt fresh Returning without another hint");
+    assert_eq!(
+        client.session_status().await.authorization,
+        crate::SessionAuthorization::Unknown,
+        "UNKNOWN disposition or unauthenticated TCP admission granted authorization"
+    );
     assert!(!client.is_signed_out());
     assert!(fixture
         .store
@@ -1101,8 +1171,50 @@ async fn review_round3_application_permission_denied_keeps_healthy_returning() {
         .await
         .unwrap()
         .is_some());
+    fixture.hold_returning.store(false, Ordering::SeqCst);
+    fixture.returning_ready.notify_one();
+    let recovered = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let state = states.next().await.unwrap();
+            if state.sessions.is_some() {
+                break state;
+            }
+        }
+    })
+    .await
+    .expect("fresh Returning must resume automatic GetSessions");
+    assert_eq!(
+        recovered.status.authorization,
+        crate::SessionAuthorization::Active
+    );
+    assert!(!Arc::ptr_eq(
+        &client.session_generation().unwrap(),
+        &generation
+    ));
+    assert_eq!(fixture.observations.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fixture.review_reads.load(Ordering::SeqCst),
+        2 + usize::from(deny_review)
+    );
+    assert_eq!(
+        fixture.denied_calls.load(Ordering::SeqCst),
+        usize::from(!deny_review)
+    );
+    states.stop();
     client.stop().await;
     fixture.server.shutdown().await;
+}
+
+#[tokio::test]
+/// An ordinary PermissionDenied recovers through evidence without replaying the denied RPC.
+async fn permission_denial_recovers_automatic_review() {
+    permission_denial_recovers_review(false).await;
+}
+
+#[tokio::test]
+/// PermissionDenied from GetSessions itself cannot permanently strand the review worker.
+async fn permission_denial_during_review_recovers_automatic_review() {
+    permission_denial_recovers_review(true).await;
 }
 
 /// Retain an actual joined failed Returning generation while selecting a later deferral.

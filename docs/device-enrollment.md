@@ -374,10 +374,13 @@ Observation is foreground-only and seeks evidence separately from Returning:
   The bounded entry task survives cancellation of its waiter, including while
   reading the namespace before any RPC. Later callers join its retained result;
   only explicit lifecycle retirement cancels and drains the entry owner.
-- Current foreground Returning loss, `Unauthenticated`, or terminal KeepAlive
-  failure coalesces one immediate bounded observation per generation. An ordinary
-  per-RPC `PermissionDenied` withdraws authorization knowledge without interrupting
-  a healthy Returning connection or scheduling observation. Stale generations, local
+- Current foreground Returning loss, `Unauthenticated`, `PermissionDenied`, or
+  terminal KeepAlive failure coalesces one immediate bounded observation per
+  generation. An ordinary per-RPC denial leaves authorization Unknown and review
+  pending while the existing observation path retires the connection. Neither
+  denial nor UNKNOWN disposition grants authorization; fresh authenticated
+  Returning restores it and resumes automatic review under supervision. Manual
+  clients still own reconnect after observation. Stale generations, local
   suspension, sign-out, unsupported storage, and parked endpoint proof cannot
   schedule it. The failure itself never authorizes erasure or another route.
   Repeated calls while already foreground do not reset the entry barrier or

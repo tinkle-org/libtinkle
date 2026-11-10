@@ -20,6 +20,7 @@ const OTHER: &str = "78e5c289-656b-4428-a091-2dddf6828465";
 /// Synthetic fixture key only; the published SDK still owns channel cryptography.
 struct Keys;
 impl secure_channel::KeyStore for Keys {
+    /// Return the fixed synthetic key for the Returning fixture.
     fn lookup(
         &self,
         _: &secure_channel::Context,
@@ -46,6 +47,7 @@ struct State {
 /// Count in-flight read handlers even when the SDK cancels a request future.
 struct ReadGuard(Arc<State>);
 impl Drop for ReadGuard {
+    /// Decrement the in-flight read count when the handler exits.
     fn drop(&mut self) {
         self.0.active_reads.fetch_sub(1, Ordering::SeqCst);
     }

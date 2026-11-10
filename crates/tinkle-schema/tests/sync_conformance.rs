@@ -493,6 +493,7 @@ fn target_keys_and_parts() {
 }
 
 #[test]
+/// Verify connectivity Any round trips preserve fields and malformed input is rejected.
 fn connectivity_notification_round_trip() {
     let envelope = |value: Vec<u8>| {
         prost_types::Any {
