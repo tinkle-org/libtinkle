@@ -58,6 +58,7 @@ fn rpc_error(id: u64, code: i32, message: &str) -> Frame {
     }
 }
 
+/// Map fixture targets to logged user/room keys, using `target:unknown` when absent.
 fn target_key_of(t: &Option<Target>) -> String {
     match t.as_ref().and_then(|x| x.kind.as_ref()) {
         Some(target::Kind::UserId(id)) => format!("target:user:{id}"),
@@ -203,6 +204,7 @@ async fn mock_gateway(listener: TcpListener, log: MockLog) {
     }
 }
 
+/// Identify the `SLOW` payload marker that delays a fixture response.
 fn is_slow(frame: &Frame) -> bool {
     if let Some(Body::Result(r)) = &frame.body {
         if let Some(Outcome::Payload(b)) = &r.outcome {
@@ -212,6 +214,7 @@ fn is_slow(frame: &Frame) -> bool {
     false
 }
 
+/// Identify the `WITH_NOTIF` payload marker that emits a connectivity notification.
 fn resp_frame_needs_notif(frame: &Frame) -> bool {
     if let Some(Body::Result(r)) = &frame.body {
         if let Some(Outcome::Payload(b)) = &r.outcome {
@@ -225,6 +228,7 @@ fn is_observe(req: &RpcRequest) -> bool {
     req.method == "/tinkle.v1.UpdatesService/ObserveConnectivity"
 }
 
+/// Dispatch canned RPC responses, record requests, and inject configured history failures.
 async fn handle_mock_request(id: u64, req: RpcRequest, log: &MockLog) -> Frame {
     let result = match req.method.as_str() {
         "/example.Echo/Echo" => RpcResult {
