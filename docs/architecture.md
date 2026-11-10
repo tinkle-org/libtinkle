@@ -18,9 +18,9 @@ transport selection. Its artifact/dependency update is coordinated separately.
 `tinkle-storage` owns application SQLite rows, journals, transfer state and
 background jobs; authorization keys never enter that database.
 
-All three Syntra crates use exact crates.io rc.4 dependencies without local
+All three Syntra crates use exact crates.io rc.5 dependencies without local
 patches. Installed versions, crate-specific release tags, upstream budget APIs,
-and scoped paired qualification are in [dependency pinning](../PROTO_PINNING.md#sdk-pins-and-qualification).
+and qualification requirements are in [dependency pinning](../PROTO_PINNING.md#sdk-pins-and-qualification).
 The application/runtime boundary is
 opaque protobuf payload bytes. Device enrollment maps the public schema's exact
 messages into zeroizing native owners and secret-free status projections.
@@ -43,7 +43,25 @@ coordinator installs verified material and its principal. Raw
 `libtinkle::Client::replace_trust_source` requires identical server trust and clears
 the principal and retained application interests; it is not verified enrollment
 installation or a deployment switch. See [trust replacement](security.md#secret-ownership).
-No automatic mode change or key persistence occurs.
+No rejected Returning proof grants Bootstrap authority or persists a key.
+
+`crates/libtinkle/src/client.rs` serializes ordinary, provisioning, and status
+connections through one shared dial/retirement owner. A replacement waits for
+the old transport's shutdown and join; it does not overlap a second TCP socket.
+Cancellation retains join ownership for the next lifecycle operation. Status
+Bootstrap performs only the negative-only query, not account work.
+
+`crates/libtinkle/src/liveness.rs:transport_joined` accepts only complete SDK
+transport shutdown. An incomplete carrier/policy shutdown or an error retains
+the ordinary, establishing, provisioning, or status handle and blocks another
+dial; a timeout or lifecycle method return does not attest join completion.
+Later attempts recheck that owner without renewing its shutdown budget.
+
+An active provisioning caller retains its registered slot. Ordinary admission,
+reconnect, and retirement observation defer rather than abort its request.
+An abandoned or explicitly closing child is joined before replacement; a late
+child close cannot release a newer child's slot. These boundaries are owned by
+`crates/libtinkle/src/client.rs` and `crates/libtinkle/src/retirement.rs`.
 
 The existing application supervisor schedules reconnect attempts. The SDK's
 reconnecting client is not enabled. Manual `reconnect` makes one attempt and
@@ -70,22 +88,47 @@ Local logout synchronously fences admission and spawns retained, joinable cleanu
 Its single remote mutation uses only the captured Returning generation. Cache and
 secure-store retries preserve completed steps and the original principal.
 Conditional hosts compare a durable namespace incarnation/revision, persist a
-cleanup marker, and reject stale writes or clears after replacement. Legacy
-hosts cannot attest restart-safe cleanup. The account lifecycle query keeps
+cleanup marker, and reject stale writes or clears after replacement. Unconditional
+stores cannot attest restart-safe cleanup. The account lifecycle query keeps
 network availability, authorization knowledge and cleanup progress distinct.
 
-The enrollment observer uses status-first restore/foreground entry plus one
-independent 60-second foreground schedule. Each status-only Bootstrap connection
-shares the main selected route and public trust, with a five-second absolute
-budget. Returning outcomes cannot schedule or accelerate it. Source-install and
-durable namespace revisions fence stale responses, pending activation and
-cross-Client writes. Stop/suspend cancel and drain host-owned observations as
-well as the periodic task; foreground Returning admission stays parked until
-status-first work settles. Exact retirement invokes retained local-only cleanup.
-The disposition contract is published in BSR prost artifact
-`0.5.0-20261107080548-dc41c2199c76.2` following schema #57. Release qualification
-uses the published Cargo pin and ordinary `--locked` workspace checks; required
-CI needs neither Buf nor schema-candidate generation.
+`crates/libtinkle/src/logout.rs` invalidates protected storage independently of
+whether retained transport work can finish joining. Cleanup remains `Failed`
+when a join is incomplete, even if storage and cache clearing already succeeded.
+Retry joins unfinished work and preserves acknowledged steps, the first sign-out
+cause, and remote confirmation without replaying Logout. See
+[the cleanup contract](device-enrollment.md#local-sign-out-and-remote-revocation).
+
+`crates/libtinkle/src/retirement.rs` owns status-first restore/foreground entry,
+coalesced current-generation loss/denial checks, and a 60-second offline fallback.
+A healthy Returning socket skips periodic observation. Each status-only Bootstrap
+connection shares the selected route/trust and a five-second evidence budget;
+shutdown/join remains mandatory after that budget expires. Source-install and
+protected-store revisions fence stale evidence. Stop/suspend cancel and drain
+observation; exact current retirement invokes retained local-only cleanup. See
+[the host contract](device-enrollment.md#permanent-retirement-observation).
+
+## Account state and review
+
+`crates/libtinkle/src/session.rs` owns the single retained `SessionState`
+projection. Typed producers enter a bounded MPSC queue consumed by one serialized
+reducer, which assigns local revisions without awaiting UI, network, or storage.
+`Client::session_status()` reads the same lifecycle view delivered by
+`Client::subscribe_session_state()`, not a separate event-derived status.
+
+One `SessionStateSubscription` consumer receives the initial/latest snapshot.
+Slow consumers coalesce revisions; first sign-out cause and final cleanup state
+remain retained. `stop()` releases the slot and unblocks `next()`; a later
+subscriber starts from current state. Network loss and generic authorization
+denial do not imply `SessionRetired`.
+
+The generation-fenced review worker fetches full `GetSessions` snapshots after
+Returning establishment, on session-change demand, and after confirmation. Failed
+reads stay dirty and retry with bounded backoff. Demand arriving during a read
+requires another fetch; an old generation or confirmation reply cannot overwrite
+a newer list. `sessions: None` means no current fetched list, not an empty list.
+See [session review and state](device-enrollment.md#session-review-and-state) for
+host actions and confirmation eligibility.
 
 ## Application data
 
@@ -116,19 +159,20 @@ The implementation boundary is `client.rs:call_budget`,
 `call_initialized_with_budget`, and `remaining_timeout_ms`, with retained Logout
 ownership in `logout.rs`. Forwarding the original `timeout_ms` after locks or
 starting a new 3000 ms call after lifecycle waits would violate this contract.
-The [scoped paired result](https://github.com/tinkle-org/chorus/blob/d639d617a30bf3c2246e9491dd4af0a9c7674fc3/src/controllers/client-api/tests/native_acceptance/README.md#current-qualification)
-qualifies the tested consumer implementation/published pins. Changed pins or
-budgets require fresh scoped qualification; the result is not a global
-suspension or `logout()` wall-clock guarantee.
-The linked Chorus record requires private-repository access; no public copy of
-the qualification or runner instructions was found. See the
-[access limitation](../PROTO_PINNING.md#sdk-pins-and-qualification).
+Changed pins or budgets require fresh scoped qualification through the
+[actual-application lane](../PROTO_PINNING.md#sdk-pins-and-qualification).
+A healthy baseline or an older paired result does not qualify this implementation
+or establish a global suspension or `logout()` wall-clock guarantee.
 
 ### Data flow
 
 Typed request → application protobuf → Syntra RPC → encrypted TCP → response
-correlation → application decode. Notifications are opaque reconciliation hints
-or validated ephemeral connectivity observations. Per-target `GetTargetChanges`
+correlation → application decode. `crates/tinkle-schema/src/sync.rs` dispatches
+recognized runtime notifications by exact `google.protobuf.Any` type URL:
+`SessionChanged` demands an authoritative session refresh, while
+`ConnectivityChanged` is ephemeral contact presence. Neither changes authorization
+or advances a message checkpoint. Malformed recognized payloads are discarded;
+other payloads remain conversation reconciliation hints. Per-target `GetTargetChanges`
 pages hydrate with `GetMessages`, then cache rows and accept positions commit
 atomically. Paged history repair retains continuation, window budgets and scope
 fences. History and dialog snapshots never forge journal progress.

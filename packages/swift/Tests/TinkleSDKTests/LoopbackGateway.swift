@@ -9,6 +9,19 @@ func fixtureClientInfo() -> ClientInfoFfi {
             installId: "", acceptLanguage: "", timeZone: "", userAgent: ""))
 }
 
+/// Loads Rust-validated opaque synthetic ACTIVE bytes without recreating the private record format.
+func fixtureActiveEnrollmentRecord() throws -> ProtectedEnrollmentRecord {
+    let hex = Array(EnrollmentReviewVector.activeRecordHex)
+    var bytes = Data(try stride(from: 0, to: hex.count, by: 2).map {
+        guard let byte = UInt8(String(hex[$0..<$0 + 2]), radix: 16) else {
+            throw FixtureError("invalid synthetic ACTIVE vector")
+        }
+        return byte
+    })
+    defer { bytes.resetBytes(in: 0..<bytes.count) }
+    return ProtectedEnrollmentRecord.fromSecureStorage(bytes: bytes)
+}
+
 /// Controls the host-only Rust fixture. All application encryption, framing and
 /// handshakes live in the published Syntra SDK used by that fixture.
 final class LoopbackGateway: @unchecked Sendable {
@@ -24,13 +37,17 @@ final class LoopbackGateway: @unchecked Sendable {
         let afterAcceptSeq: Int64
     }
 
-    /// Allocates a Bootstrap gateway; enrollment review opts into the synthetic vector's key.
-    init(enrollmentReview: Bool = false) throws {
-        let response = try Self.control(["op": "create", "deletions": [], "enrollment_review": enrollmentReview])
+    /// Defaults to Bootstrap; session review explicitly selects synthetic Returning for projection, not authority proof.
+    init(enrollmentReview: Bool = false, sessionReview: Bool = false) throws {
+        guard !(enrollmentReview && sessionReview) else {
+            throw FixtureError("restore-denial and Returning projection modes must be separate")
+        }
+        let response = try Self.control(["op": "create", "deletions": [],
+            "enrollment_review": enrollmentReview, "session_review": sessionReview])
         id = (response["id"] as! NSNumber).int64Value
         port = (response["port"] as! NSNumber).uint16Value
         pin = Data((response["pin"] as! [NSNumber]).map(\.uint8Value))
-        scope = enrollmentReview ? "fixture" : "tinkle-mobile-fixture"
+        scope = enrollmentReview || sessionReview ? "fixture" : "tinkle-mobile-fixture"
     }
 
     /// Recorded by Syntra's verified-identity callback, never inferred from RPCs.
@@ -53,6 +70,17 @@ final class LoopbackGateway: @unchecked Sendable {
                     targetId: ($0["target_id"] as! NSNumber).int64Value,
                     afterAcceptSeq: ($0["after_accept_seq"] as! NSNumber).int64Value)
             }
+        }
+    }
+
+    /// Returns session identifiers decoded by the Rust handler from encrypted ConfirmSession requests.
+    var confirmSessionRequests: [String] {
+        get throws {
+            let response = try Self.control(["op": "requests", "id": id])
+            guard let ids = response["confirmations"] as? [String] else {
+                throw FixtureError("fixture response lacks confirmation requests")
+            }
+            return ids
         }
     }
 

@@ -50,7 +50,7 @@ class CandidateBindingsTests(unittest.TestCase):
         """Snapshot every destination binding so tests can detect partial updates."""
         return {name: (self.root / "bindings" / name).read_bytes() for name in BINDINGS}
 
-    def generate(self, missing=None, directory=False, syntra_version="1.0.0-rc.4",
+    def generate(self, missing=None, directory=False, syntra_version="1.0.0-rc.5",
                  bindings_runner=None):
         """Run candidate generation with stubbed tools and optional broken outputs."""
         def run(command, **kwargs):
@@ -149,10 +149,10 @@ elif sys.argv[1] != "rustc":
         self.assertTrue((self.output / "workspace/bindings" / missing).is_file())
 
     def test_previous_syntra_release_is_rejected(self):
-        """Candidate metadata must keep the exact published RC4 pin."""
+        """Candidate metadata must keep the exact published release pin."""
         original = self.bindings()
-        with self.assertRaisesRegex(SystemExit, "exact published Syntra rc.4"):
-            self.generate(syntra_version="1.0.0-rc.3")
+        with self.assertRaisesRegex(SystemExit, "exact published Syntra rc.5"):
+            self.generate(syntra_version="1.0.0-rc.4")
         self.assertEqual(self.bindings(), original)
 
 

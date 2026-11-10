@@ -1032,7 +1032,7 @@ impl Client {
         let revoked = epoch.revoked();
         tokio::select! { biased;
             _ = revoked.cancelled() => return Err(TinkleError::SignedOut),
-            result = client.connect() => result?,
+            result = self.connect_provisioning_child(&client) => result?,
         }
         epoch.check(self)?;
         if self
@@ -1649,6 +1649,18 @@ pub(crate) mod review_tests {
         let record = active(client, &client.authorization.generation().unwrap());
         *store.active.lock().unwrap() = Some(record.encode().unwrap().expose_secret().to_vec());
         store
+    }
+
+    /// Seed exact conditional observation metadata using a real fixture's provisioned trust.
+    pub(crate) async fn observation_store(
+        client: &Client,
+    ) -> (Arc<ReviewStore>, DeviceEnrollmentStatus) {
+        let store = Arc::new(ReviewStore::default());
+        let mut record = active(client, &client.authorization.generation().unwrap());
+        record.trust = client.enrollment_trust().await;
+        let status = record.status.clone().unwrap();
+        *store.active.lock().unwrap() = Some(record.encode().unwrap().expose_secret().to_vec());
+        (store, status)
     }
 
     /// Seed one exact source/secret binding and its permit without dialing a peer.

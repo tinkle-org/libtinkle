@@ -5,10 +5,11 @@ defaults to 443, and optional `fallback_port` defaults to `Some(80)` (`None`
 disables fallback). Fallback is available only after an initial primary dial
 failure, before any socket has been selected. Custom ports use the same encryption
 and trust requirements: one provisioned server public key, server key ID, exact
-UTF-8 scope, and explicit channel mode. Once a socket connects,
-channel/authentication/protocol failures park automatic reconnect.
-EOF and timeout before authenticated readiness also park: remote first-flight
-rejection can look identical to network loss. There is
+UTF-8 scope, and explicit channel mode. Failure after TCP selection but before
+authenticated readiness parks automatic reconnect, including EOF and timeout:
+remote first-flight rejection can look identical to network loss. Typed
+trust/protocol failures remain terminal for automatic reconnect after readiness.
+There is
 no HTTP/TLS wrapper, alternate carrier, insecure mode or mode downgrade.
 
 After socket selection the chosen port remains fixed for reconnects. The
@@ -23,20 +24,27 @@ local route choice; its scope restrictions are described below.
 published SDK owns all cryptographic operations and checks. Rejected Returning
 proof must be resolved by explicit host policy, never by switching to Bootstrap.
 
-Permanent-retirement observation has its own pre-authorized foreground schedule:
-status-first restore/foreground entry and a fixed 60-second interval, established
-before any Returning outcome. It opens only a bounded status-only Bootstrap
-connection using the same provisioned trust and selected route. Returning failure
-cannot schedule, accelerate or reset it. Endpoint proof rejection parks both
-users; unverified Bootstrap establishment also parks conservatively. Neither
-UNKNOWN nor an error erases credentials. Exact current negative evidence is
-rechecked against local source and durable namespace revisions before retained,
-conditional local cleanup. It never confirms remote Logout.
+`crates/libtinkle/src/retirement.rs` observes negative-only retirement at
+conditional restore/foreground entry and after coalesced loss or denial of the
+current foreground Returning generation. A 60-second offline fallback skips
+healthy Returning sockets. Before status Bootstrap opens, the old transport is
+retired and joined; the query uses the same provisioned trust and selected route.
+Failure is only a reason to seek evidence, never evidence itself. Endpoint proof
+rejection parks all uses; unverified Bootstrap establishment also parks
+conservatively. UNKNOWN and errors retain credentials. Exact current negative
+evidence is rechecked against source and protected-store revisions before
+conditional local cleanup; it never confirms a prior remote Logout.
 
 Capability-bearing provisioning children share the parent's rejection fence and
 proof serialization. A parked parent cannot dial a fresh child or send a retained
 capability; child rejection also parks parent/sibling uses. This is independent of
 foreground scheduling and clears only through explicit configuration recovery.
+
+`crates/libtinkle/src/client.rs` also preserves an active provisioning caller's
+registered slot against ordinary admission and retirement observation. Abandoned
+or explicitly closing children are joined before replacement. An incomplete
+carrier/policy shutdown retains its owner and blocks a new dial; neither timeout
+nor a bounded lifecycle return proves join completion.
 
 Conditional credential adoption requires host install exclusion: an atomic
 incarnation/revision/full-record comparison plus a permit held through adoption
@@ -44,7 +52,7 @@ and Returning setup. Namespace mutation must wait or reject until release.
 Cancellation fences the old runtime before releasing its permit. This provides
 ordered installation, not continuous cross-process revocation of an already
 installed session after a later account switch; that switch also requires host
-coordination of the previous Client. Legacy rereads do not provide this guarantee.
+coordination of the previous Client. Separate rereads do not provide this guarantee.
 
 ## Secret ownership
 

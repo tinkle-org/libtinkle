@@ -5,7 +5,8 @@ use async_trait::async_trait;
 use libtinkle::{
     Client, ClientConfig, ClientInfo, EnrollmentNamespaceSnapshot, EnrollmentObservation,
     InMemoryCursorStore, SecretBlob, SecureEnrollmentStore, SecureStoreError, SecureWrite,
-    ServerTrust, SessionAuthorization, SessionCleanup, SignInDetails, TinkleError, TrustSource,
+    ServerTrust, SessionAuthorization, SessionCleanup, SessionSignOutReason, SessionState,
+    SessionStateSubscription, SignInDetails, TinkleError, TrustSource,
 };
 use prost::Message;
 use std::{
@@ -14,7 +15,10 @@ use std::{
     io::Write,
     os::unix::fs::OpenOptionsExt,
     path::PathBuf,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, OnceLock,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use syntra_core::ErrorCode;
@@ -31,6 +35,8 @@ struct DiskStore {
     gate: bool,
     entered: tokio::sync::Notify,
     release: tokio::sync::Notify,
+    /// Fault only the acknowledgement step, retaining the durable tombstone.
+    fail_finish: AtomicBool,
 }
 
 /// OS-owned restore exclusion has no lease expiry. Cancellation IDs are shared
@@ -88,6 +94,7 @@ impl DiskStore {
             gate,
             entered: Default::default(),
             release: Default::default(),
+            fail_finish: AtomicBool::new(false),
         })
     }
     /// Every namespace mutation and install uses the same nonblocking OS lock.
@@ -293,6 +300,9 @@ impl SecureEnrollmentStore for DiskStore {
     }
     /// Erase all records under the matching tombstone and durably retain that marker.
     async fn finish_clear(&self, expected: &str) -> Result<bool, SecureStoreError> {
+        if self.fail_finish.load(Ordering::SeqCst) {
+            return Err(SecureStoreError);
+        }
         let _install = self.install_lock()?;
         let _lock = self.lock.lock().unwrap();
         let mut state = self.read()?;
@@ -614,8 +624,9 @@ async fn enroll(model: &str, name: &str) -> (Arc<Client>, Arc<DiskStore>, Device
     (c, store, active)
 }
 
-/// Socket loss alone must not erase credentials. Only a separately explicit
-/// foreground transition queries disposition on its own verified Bootstrap route.
+/// Automatic foreground loss checks and explicit resume may race or coalesce.
+/// Neither socket loss nor UNKNOWN permits cleanup: require retained exact
+/// retirement proof and a separately acknowledged conditional namespace clear.
 async fn observe_kicked(
     c: &Client,
     store: &DiskStore,
@@ -645,20 +656,44 @@ async fn observe_kicked(
     })
     .await
     .expect("server-driven joined close removes the exact live generation");
-    assert!(
-        !c.is_signed_out(),
-        "network loss is not retirement evidence"
-    );
-    assert!(store.load_active().await.unwrap().is_some());
-    let unchanged = closures().await;
-    assert_eq!(unchanged["completed"], 0);
-    assert_eq!(
-        unchanged["disposition_calls"], before["disposition_calls"],
-        "Returning failure must not trigger a fallback probe"
-    );
+    // Registration includes a completed automatic observation when it wins.
+    // A cancelled loss check may already have reached authn before explicit
+    // foreground entry starts another; global call counts are not a proof gate.
+    let states = c.subscribe_session_state().await.unwrap();
     c.suspend().await;
     c.resume().await;
-    let status = c.session_status().await;
+    let state = session_state_until(&states, "verified retirement and durable clear", |state| {
+        let status = &state.status;
+        if status.authorization == SessionAuthorization::SignedOut {
+            assert_eq!(
+                status.enrollment_observation,
+                EnrollmentObservation::Retired,
+                "loss or UNKNOWN cannot substitute for exact retirement evidence"
+            );
+            assert_eq!(state.reason, Some(SessionSignOutReason::SessionRetired));
+            assert!(
+                state.sessions.is_none(),
+                "retirement withdraws the account snapshot"
+            );
+        } else {
+            assert_eq!(state.reason, None);
+            assert_eq!(
+                status.cleanup,
+                SessionCleanup::NotStarted,
+                "unfenced authorization cannot clear credentials"
+            );
+        }
+        assert_ne!(
+            status.cleanup,
+            SessionCleanup::Failed,
+            "durable clear failed"
+        );
+        status.authorization == SessionAuthorization::SignedOut
+            && status.cleanup == SessionCleanup::Complete
+    })
+    .await;
+    states.stop();
+    let status = state.status;
     assert_eq!(status.authorization, SessionAuthorization::SignedOut);
     assert_eq!(
         status.enrollment_observation,
@@ -677,15 +712,16 @@ async fn observe_kicked(
         "acknowledged conditional clear erases all protected records"
     );
     let after = closures().await;
+    assert_eq!(after["completed"], 0);
     assert_eq!(
-        after["disposition_calls"].as_i64().unwrap(),
-        before["disposition_calls"].as_i64().unwrap() + 1
+        after["retired_sessions"][session], true,
+        "real private authority must have echoed this exact retired reference"
     );
     assert!(
         !c.logout().await.unwrap(),
         "retirement observation does not acknowledge Logout"
     );
-    eprintln!("PASS server-driven joined close; independent explicit foreground disposition; SignedOut and acknowledged conditional namespace clear");
+    eprintln!("PASS server-driven joined close; retained verified automatic/foreground retirement; SignedOut and acknowledged conditional namespace clear");
 }
 
 /// Read-only checkpoint of real production Redis state and private RPC evidence.
@@ -849,10 +885,15 @@ async fn observe_real_liveness(c: &Client, user: i64, session: &str) {
 
 /// The real courier accepts the queue job before returning a captured code.
 async fn details(c: &Client) -> SignInDetails {
+    details_for(c, "+14155550100").await
+}
+
+/// Obtain phone proof from the real encrypted courier for an isolated account.
+async fn details_for(c: &Client, phone: &str) -> SignInDetails {
     let response = c
         .auth()
         .send_code(SendCodeRequest {
-            phone_number: "+14155550100".into(),
+            phone_number: phone.into(),
             lang_code: "en".into(),
         })
         .await
@@ -867,7 +908,7 @@ async fn details(c: &Client) -> SignInDetails {
         "private courier must have accepted the durable job"
     );
     SignInDetails::new(
-        "+14155550100".into(),
+        phone.into(),
         capture["code"].as_str().unwrap().into(),
         response.verification_id,
     )
@@ -876,7 +917,9 @@ async fn details(c: &Client) -> SignInDetails {
 
 /// Staging, durable acknowledgement, fresh Returning, session revoke and logout
 /// cross actual Go authority/Vault/PG boundaries. All assertions are opt-in.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+// One executor orders the fresh-connection first-call qualification below;
+// the independent review/state flow retains its four-worker runtime.
+#[tokio::test(flavor = "current_thread")]
 #[ignore = "requires Chorus Bazel native_acceptance fixture; run its run.py"]
 async fn native_chorus_enrollment_and_revocation() {
     tokio::time::timeout(Duration::from_secs(90), acceptance_flow())
@@ -943,6 +986,9 @@ async fn acceptance_flow() {
         signed.enrollment.status().state,
         DeviceEnrollmentState::Staged as i32
     );
+    // Demand a fresh Bootstrap transport for this negative authorization probe:
+    // an already-closed sign-in socket proves neither admission nor denial.
+    first.reconnect().await.unwrap();
     assert_eq!(
         sessions(&first).await.unwrap_err().code(),
         ErrorCode::Unauthenticated,
@@ -1016,6 +1062,7 @@ async fn acceptance_flow() {
     let list = sessions(&first).await.unwrap();
     assert_eq!(list.sessions.len(), 2);
     assert_eq!(list.sessions.iter().filter(|s| s.current).count(), 1);
+    settle_initial_review(&second, &second_active.session_id, 2).await;
     let retained2 = store2.retained("old-two.json");
     assert!(first
         .account()
@@ -1037,6 +1084,7 @@ async fn acceptance_flow() {
 
     let (third, store3, third_active) = enroll("native-acceptance-three", "three.json").await;
     assert_eq!(third_active.user_id, active.user_id);
+    settle_initial_review(&third, &third_active.session_id, 2).await;
     let retained3 = store3.retained("old-three.json");
     assert!(first.account().revoke_other_sessions().await.unwrap());
     let joined = closures().await;
@@ -1061,43 +1109,73 @@ async fn acceptance_flow() {
 
     let (wrapped, store4, _) = enroll("native-acceptance-wrapped", "four.json").await;
     let retained4 = store4.retained("old-four.json");
-    // Fresh Returning transport, whose first public request is SDK-owned
-    // InitConnect(Logout). No explicit InitConnect escape hatch is used.
-    wrapped.reconnect().await.unwrap();
-    let wrapped_started = tokio::time::Instant::now();
-    let logged: LogoutResponse = call(
-        &wrapped,
-        "/tinkle.v1.AccountService/Logout",
-        LogoutRequest {},
-    )
-    .await
-    .expect("healthy first-wrapped Logout must deliver a correlated response");
-    assert!(logged.logged_out);
-    let wrapped_elapsed = wrapped_started.elapsed();
+    // Keep reconnect and immediate dispatch in one current-thread poll, without
+    // Tokio's cooperative-budget yield handing initialization to GetSessions.
+    // Real I/O still yields, all request deadlines remain enabled, and the Go
+    // authority must verify one actual InitConnect-owned terminal transition.
+    // No explicit InitConnect escape hatch or disabled review worker is used.
+    let wrapped_elapsed = tokio::task::coop::unconstrained(async {
+        wrapped.reconnect().await.unwrap();
+        let started = tokio::time::Instant::now();
+        let logged: LogoutResponse = call(
+            &wrapped,
+            "/tinkle.v1.AccountService/Logout",
+            LogoutRequest {},
+        )
+        .await
+        .expect("healthy first-wrapped Logout must deliver a correlated response");
+        assert!(logged.logged_out);
+        started.elapsed()
+    })
+    .await;
     assert!(
         wrapped_elapsed < Duration::from_secs(3),
         "healthy wrapped Logout must finish inside the original 3s budget"
     );
     assert_eq!(closures().await["completed"], 1);
     reject_old_returning(retained4).await;
-    // Offline namespace reset remains a separate regression: raw remote Logout
-    // above did not clear the SDK host namespace. Closed transport cannot ack it.
+    // The raw Logout can independently trigger verified retirement cleanup.
+    // Join it before testing offline local clearing on a separate ACTIVE device.
+    let wrapped_state = wrapped.subscribe_session_state().await.unwrap();
+    wrapped.suspend().await;
+    wrapped.resume().await;
+    session_state_until(&wrapped_state, "raw Logout retirement cleanup", |state| {
+        state.reason == Some(SessionSignOutReason::SessionRetired)
+            && state.status.cleanup == SessionCleanup::Complete
+    })
+    .await;
+    wrapped_state.stop();
     wrapped.close().await;
-    assert!(store4.load_active().await.unwrap().is_some());
-    assert!(!wrapped.logout().await.unwrap());
-    assert!(wrapped.is_signed_out());
-    let cleared = store4.namespace_snapshot().await.unwrap().unwrap();
-    assert!(cleared.cleanup_pending && cleared.active.is_none() && !cleared.has_pending);
+    assert!(store4.load_active().await.is_err());
     assert!(store4.read().unwrap().rows.is_empty());
+
+    let (offline, offline_store, offline_active) =
+        enroll("native-acceptance-offline", "five.json").await;
+    let retained_offline = offline_store.retained("old-five.json");
+    settle_initial_review(&offline, &offline_active.session_id, 2).await;
+    offline.close().await;
+    assert!(offline_store.load_active().await.unwrap().is_some());
+    assert!(!offline.logout().await.unwrap());
+    assert!(offline.is_signed_out());
+    let cleared = offline_store.namespace_snapshot().await.unwrap().unwrap();
+    assert!(cleared.cleanup_pending && cleared.active.is_none() && !cleared.has_pending);
+    assert!(offline_store.read().unwrap().rows.is_empty());
     assert!(
         store1.load_active().await.unwrap().is_some(),
         "offline clear preserves another active namespace"
     );
     assert!(matches!(
-        wrapped.connect().await,
+        offline.connect().await,
         Err(TinkleError::SignedOut)
     ));
     eprintln!("PASS actual offline Client.logout: irreversible local fence, durable namespace clear, other namespace preserved");
+    assert!(first
+        .account()
+        .revoke_session(&offline_active.session_id)
+        .await
+        .unwrap());
+    assert_eq!(closures().await["completed"], 1);
+    reject_old_returning(retained_offline).await;
 
     let retained1 = store1.retained("old-one.json");
     let direct_started = tokio::time::Instant::now();
@@ -1134,6 +1212,549 @@ async fn acceptance_flow() {
         direct_elapsed.as_millis(),
         wrapped_elapsed.as_millis()
     );
+}
+
+/// Finish the new startup snapshot before a closure test selects its live target.
+/// Otherwise that in-flight authorized read may legitimately close the revoked
+/// socket before worker selection, obscuring this lane's exact joined-count proof.
+async fn settle_initial_review(c: &Client, current: &str, count: usize) {
+    let stream = c.subscribe_session_state().await.unwrap();
+    session_state_until(&stream, "startup read completes before revocation", |s| {
+        s.sessions.as_ref().is_some_and(|rows| {
+            rows.len() == count && rows.iter().any(|row| row.id == current && row.current)
+        })
+    })
+    .await;
+    stream.stop();
+}
+
+/// Read retained state only: no explicit GetSessions may make an automatic
+/// refresh assertion pass. Revisions may coalesce but cannot run backwards.
+async fn session_state_until(
+    stream: &SessionStateSubscription,
+    description: &str,
+    accept: impl Fn(&SessionState) -> bool,
+) -> SessionState {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut revision = None;
+        loop {
+            let state = stream
+                .next()
+                .await
+                .expect("session-state owner remains live");
+            if let Some(previous) = revision {
+                assert!(state.revision > previous, "state revisions must advance");
+            }
+            revision = Some(state.revision);
+            if accept(&state) {
+                break state;
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("bounded session-state wait: {description}"))
+}
+
+/// Require an exact full session set with one current device, not a hint-derived row.
+fn review_snapshot(state: &SessionState, current: &str, expected: &[(&str, bool)]) -> bool {
+    let Some(rows) = state.sessions.as_ref() else {
+        return false;
+    };
+    rows.len() == expected.len()
+        && rows.iter().filter(|s| s.current).count() == 1
+        && rows.iter().all(|s| s.current == (s.id == current))
+        && expected.iter().all(|(id, unconfirmed)| {
+            rows.iter()
+                .any(|s| s.id == *id && s.unconfirmed == *unconfirmed)
+        })
+}
+
+/// Explicitly drain the production durable worker, never synthesize a hint.
+async fn session_hints() -> serde_json::Value {
+    let (code, result) = private("/session-hints", serde_json::json!({})).await;
+    assert_eq!(code, 200, "real durable mTLS hint worker must run");
+    result
+}
+
+/// Bootstrap an isolated real account, without changing authority or admission.
+async fn review_enroll(
+    model: &str,
+    name: &str,
+    phone: &str,
+    new_user: bool,
+) -> (Arc<Client>, Arc<DiskStore>, DeviceEnrollmentStatus) {
+    // Refill the unchanged gateway source budget between enrollment bursts.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let c = client(model);
+    c.connect().await.unwrap();
+    let store = DiskStore::new(name, false);
+    let operation = c.prepare_enrollment(store.clone()).await.unwrap();
+    let signed = c
+        .auth()
+        .sign_in(details_for(&c, phone).await, &operation)
+        .await
+        .unwrap();
+    assert_eq!(signed.is_new_user, new_user);
+    let active = c
+        .auth()
+        .activate_enrollment(&signed.enrollment)
+        .await
+        .unwrap();
+    (c, store, active)
+}
+
+/// Exercise the published wire error, not merely a facade's local validation.
+async fn confirm_error(c: &Client, target: &str, expected: ErrorCode) {
+    let error = call::<_, ConfirmSessionResponse>(
+        c,
+        "/tinkle.v1.AccountService/ConfirmSession",
+        ConfirmSessionRequest {
+            session_id: target.into(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), expected);
+}
+
+/// Wait for server-owned teardown without closing the client to make it pass.
+async fn server_disconnected(c: &Client) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut poll = tokio::time::interval(Duration::from_millis(10));
+        while c.is_connected().await {
+            poll.tick().await;
+        }
+    })
+    .await
+    .expect("production worker closes the target connection");
+}
+
+/// With a pending candidate, socket loss cannot authorize namespace cleanup.
+async fn disconnected_without_retirement(c: &Client, store: &DiskStore) {
+    server_disconnected(c).await;
+    assert!(
+        !c.is_signed_out(),
+        "connection loss must remain unknown, not retired"
+    );
+    assert_eq!(
+        c.session_status().await.authorization,
+        SessionAuthorization::Unknown
+    );
+    assert!(store.load_active().await.unwrap().is_some());
+}
+
+/// Real public review, durable postcommit mTLS hints, and retained application
+/// state. The Go owner supplies fresh PG/Vault/Redis and tears down on failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Chorus Bazel native_acceptance fixture; run its run.py"]
+async fn native_chorus_session_review() {
+    tokio::time::timeout(Duration::from_secs(120), session_review_flow())
+        .await
+        .expect("bounded real-service session review acceptance");
+}
+
+/// One flow owns every device and account so assertions never depend on order.
+async fn session_review_flow() {
+    let phone = "+14155550100";
+    let (first, store1, active1) =
+        review_enroll("review-first", "review-one.json", phone, true).await;
+    let initial = sessions(&first).await.unwrap().sessions;
+    assert_eq!(initial.len(), 1);
+    assert!(initial[0].current && !initial[0].unconfirmed);
+    // A newly constructed coordinator must fetch its authoritative snapshot on
+    // restore, without waiting for a notification from an older process.
+    first.close().await;
+    let first = client("review-first-restored");
+    first
+        .restore_active_enrollment(store1.clone())
+        .await
+        .unwrap();
+    // Foreground reconnect is a supervised lifecycle contract. Empty interests
+    // install that owner without requiring unrelated conversation services.
+    first.start(Vec::new()).await.unwrap();
+    let states1 = first.subscribe_session_state().await.unwrap();
+    session_state_until(&states1, "startup snapshot", |s| {
+        review_snapshot(s, &active1.session_id, &[(&active1.session_id, false)])
+    })
+    .await;
+    session_hints().await;
+
+    let (second, store2, active2) =
+        review_enroll("review-second", "review-two.json", phone, false).await;
+    let states2 = second.subscribe_session_state().await.unwrap();
+    session_state_until(&states2, "second device initially unconfirmed", |s| {
+        review_snapshot(
+            s,
+            &active2.session_id,
+            &[(&active1.session_id, false), (&active2.session_id, true)],
+        )
+    })
+    .await;
+    session_hints().await;
+    session_state_until(
+        &states1,
+        "activation hint automatically refreshes first",
+        |s| {
+            review_snapshot(
+                s,
+                &active1.session_id,
+                &[(&active1.session_id, false), (&active2.session_id, true)],
+            )
+        },
+    )
+    .await;
+    confirm_error(&second, &active1.session_id, ErrorCode::FailedPrecondition).await;
+    confirm_error(&second, &active2.session_id, ErrorCode::FailedPrecondition).await;
+    confirm_error(&first, &active1.session_id, ErrorCode::FailedPrecondition).await;
+    for malformed in ["", "not-a-session", "00000000-0000-0000-0000-000000000000"] {
+        confirm_error(&first, malformed, ErrorCode::InvalidArgument).await;
+    }
+    confirm_error(
+        &first,
+        "d251c299-001f-4482-84de-b20d3f7e014c",
+        ErrorCode::NotFound,
+    )
+    .await;
+
+    let (foreign, foreign_store, foreign_active) = review_enroll(
+        "review-foreign",
+        "review-foreign.json",
+        "+14155550101",
+        true,
+    )
+    .await;
+    assert_ne!(foreign_active.user_id, active1.user_id);
+    let foreign_states = foreign.subscribe_session_state().await.unwrap();
+    session_state_until(&foreign_states, "isolated foreign snapshot", |s| {
+        review_snapshot(
+            s,
+            &foreign_active.session_id,
+            &[(&foreign_active.session_id, false)],
+        )
+    })
+    .await;
+    confirm_error(&first, &foreign_active.session_id, ErrorCode::NotFound).await;
+    confirm_error(&foreign, &active2.session_id, ErrorCode::NotFound).await;
+    session_hints().await;
+
+    let before = presence(active1.user_id).await;
+    let first_lease = before["leases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["session_id"] == active1.session_id)
+        .unwrap()
+        .clone();
+    let confirmed = first
+        .account()
+        .confirm_session(&active2.session_id)
+        .await
+        .unwrap();
+    assert_eq!(confirmed.id, active2.session_id);
+    assert!(!confirmed.current && !confirmed.unconfirmed);
+    let repeated = first
+        .account()
+        .confirm_session(&active2.session_id)
+        .await
+        .unwrap();
+    assert_eq!(repeated.id, confirmed.id);
+    assert!(!repeated.current && !repeated.unconfirmed);
+    session_hints().await;
+    session_state_until(
+        &states2,
+        "same-account confirmation hint refreshes second",
+        |s| {
+            review_snapshot(
+                s,
+                &active2.session_id,
+                &[(&active1.session_id, false), (&active2.session_id, false)],
+            )
+        },
+    )
+    .await;
+    session_state_until(&states1, "confirmation refreshes first", |s| {
+        review_snapshot(
+            s,
+            &active1.session_id,
+            &[(&active1.session_id, false), (&active2.session_id, false)],
+        )
+    })
+    .await;
+    let after = presence(active1.user_id).await;
+    let first_leases: Vec<_> = after["leases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| l["session_id"] == active1.session_id)
+        .collect();
+    assert_eq!(
+        first_leases.len(),
+        1,
+        "one ordinary Returning connection for review and fetch"
+    );
+    for field in ["connection_id", "gateway_id", "generation"] {
+        assert_eq!(
+            first_leases[0][field], first_lease[field],
+            "review cannot open a replacement application TCP"
+        );
+    }
+    // GetSessions must remain principal-isolated. Actual foreign notification
+    // exclusion is checked on both encrypted sockets in the separate Go lane.
+    assert_eq!(sessions(&foreign).await.unwrap().sessions.len(), 1);
+    eprintln!("PASS real review: initial confirmed, new device unconfirmed, typed wire denials, foreign isolation, idempotent confirmation, automatic same-TCP snapshot refresh");
+
+    let operation2 = second.prepare_enrollment(store2.clone()).await.unwrap();
+    let candidate2 = second.auth().rotate_enrollment(&operation2).await.unwrap();
+    let rotated2 = second
+        .auth()
+        .activate_enrollment(&candidate2)
+        .await
+        .unwrap();
+    assert_eq!(rotated2.session_id, active2.session_id);
+    assert!(rotated2.enrollment_epoch > active2.enrollment_epoch);
+    let list = sessions(&second).await.unwrap().sessions;
+    assert_eq!(list.len(), 2, "rotation cannot duplicate a session");
+    assert!(list
+        .iter()
+        .any(|s| s.id == active2.session_id && s.current && !s.unconfirmed));
+    assert_eq!(
+        closures().await["completed"],
+        1,
+        "rotation predecessor closes independently"
+    );
+
+    first.suspend().await;
+    let (third, store3, active3) =
+        review_enroll("review-third", "review-three.json", phone, false).await;
+    session_hints().await; // deliberately missed while first is suspended
+    first.resume().await;
+    session_state_until(
+        &states1,
+        "foreground recovers a missed activation hint",
+        |s| {
+            review_snapshot(
+                s,
+                &active1.session_id,
+                &[
+                    (&active1.session_id, false),
+                    (&active2.session_id, false),
+                    (&active3.session_id, true),
+                ],
+            )
+        },
+    )
+    .await;
+    first.reconnect().await.unwrap();
+    session_state_until(&states1, "reconnect refetches without another hint", |s| {
+        review_snapshot(
+            s,
+            &active1.session_id,
+            &[
+                (&active1.session_id, false),
+                (&active2.session_id, false),
+                (&active3.session_id, true),
+            ],
+        )
+    })
+    .await;
+    let retained3 = store3.retained("review-old-three.json");
+    let operation3 = third.prepare_enrollment(store3.clone()).await.unwrap();
+    let candidate3 = third.auth().rotate_enrollment(&operation3).await.unwrap();
+    assert!(
+        third.is_connected().await,
+        "staging preserves the current connection"
+    );
+    let registered3 = presence(active1.user_id).await["leases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["session_id"] == active3.session_id)
+        .expect("third live lease")
+        .clone();
+    let reviewing = first.account();
+    let rejecting = second.account();
+    let (confirmation, revoked) = tokio::join!(
+        reviewing.confirm_session(&active3.session_id),
+        rejecting.revoke_session(&active3.session_id)
+    );
+    assert!(revoked.unwrap());
+    match confirmation {
+        Ok(s) => assert!(!s.unconfirmed && s.id == active3.session_id),
+        Err(e) => assert_eq!(e.code(), ErrorCode::NotFound),
+    }
+    confirm_error(&first, &active3.session_id, ErrorCode::NotFound).await;
+    let joined = closures().await;
+    assert_eq!(joined["completed"], 1);
+    // Production request/idle authorization may close the revoked socket before
+    // worker selection. Prove the exact server removal, not which owner won.
+    assert!(joined["joined_sockets"].as_u64().unwrap() <= 1);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut poll = tokio::time::interval(Duration::from_millis(10));
+        loop {
+            poll.tick().await;
+            let state = presence(active1.user_id).await;
+            if state["events"].as_array().unwrap().iter().any(|e| {
+                e["action"] == "remove"
+                    && ["session_id", "connection_id", "gateway_id", "generation"]
+                        .iter()
+                        .all(|f| e[*f] == registered3[*f])
+            }) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("server close removes the exact previously live third connection");
+    disconnected_without_retirement(&third, &store3).await;
+    assert!(
+        third.auth().activate_enrollment(&candidate3).await.is_err(),
+        "revocation cancels the staged successor"
+    );
+    reject_old_returning(retained3).await;
+    assert!(!third.logout().await.unwrap());
+    session_hints().await;
+    session_state_until(
+        &states1,
+        "rejection removes target but preserves confirmed peers",
+        |s| {
+            review_snapshot(
+                s,
+                &active1.session_id,
+                &[(&active1.session_id, false), (&active2.session_id, false)],
+            )
+        },
+    )
+    .await;
+    assert_eq!(sessions(&second).await.unwrap().sessions.len(), 2);
+    eprintln!("PASS rotation preserves review; foreground/reconnect recovery; concurrent confirm/revoke cannot revive; target old key and staged successor rejected while two peers survive");
+
+    let (expired, expired_store, expired_active) =
+        review_enroll("review-expired", "review-expired.json", phone, false).await;
+    let reviewing = first.account();
+    let (confirmation, expiry) = tokio::join!(
+        reviewing.confirm_session(&expired_active.session_id),
+        private(
+            "/expire-session",
+            serde_json::json!({"session_id": expired_active.session_id})
+        )
+    );
+    assert_eq!(expiry.0, 200);
+    if let Err(e) = confirmation {
+        assert_eq!(e.code(), ErrorCode::NotFound);
+    }
+    confirm_error(&first, &expired_active.session_id, ErrorCode::NotFound).await;
+    assert!(!sessions(&first)
+        .await
+        .unwrap()
+        .sessions
+        .iter()
+        .any(|s| s.id == expired_active.session_id));
+    assert!(first
+        .account()
+        .revoke_session(&expired_active.session_id)
+        .await
+        .unwrap());
+    closures().await;
+    server_disconnected(&expired).await;
+    expired.suspend().await;
+    expired.resume().await;
+    let expired_states = expired.subscribe_session_state().await.unwrap();
+    session_state_until(
+        &expired_states,
+        "late retirement consumer after expiry",
+        |s| {
+            s.reason == Some(SessionSignOutReason::SessionRetired)
+                && s.status.cleanup == SessionCleanup::Complete
+        },
+    )
+    .await;
+    assert!(expired_store.read().unwrap().rows.is_empty());
+    expired_states.stop();
+    eprintln!("PASS expiry/confirmation interleaving: inactive target NotFound, never listed or revived; late consumer retains SessionRetired completion");
+
+    let (failure, failure_store, failure_active) =
+        review_enroll("review-clear-failure", "review-failure.json", phone, false).await;
+    failure_store.fail_finish.store(true, Ordering::SeqCst);
+    assert!(first
+        .account()
+        .revoke_session(&failure_active.session_id)
+        .await
+        .unwrap());
+    closures().await;
+    server_disconnected(&failure).await;
+    failure.suspend().await;
+    failure.resume().await;
+    let failed_states = failure.subscribe_session_state().await.unwrap();
+    let failed = session_state_until(
+        &failed_states,
+        "cleanup failure retained for late consumer",
+        |s| s.status.cleanup == SessionCleanup::Failed,
+    )
+    .await;
+    assert_eq!(failed.reason, Some(SessionSignOutReason::SessionRetired));
+    assert_eq!(failed.status.authorization, SessionAuthorization::SignedOut);
+    assert!(failed.sessions.is_none());
+    let durable = failure_store.namespace_snapshot().await.unwrap().unwrap();
+    assert!(
+        durable.cleanup_pending && durable.active.is_some(),
+        "failure preserves tombstone without claiming erasure"
+    );
+    assert!(failure_store.load_active().await.is_err());
+    assert!(matches!(
+        failure.connect().await,
+        Err(TinkleError::SignedOut)
+    ));
+    failure_store.fail_finish.store(false, Ordering::SeqCst);
+    assert!(
+        !failure.logout().await.unwrap(),
+        "cleanup retry cannot acknowledge remote Logout"
+    );
+    let complete = session_state_until(
+        &failed_states,
+        "conditional clear retry acknowledged",
+        |s| s.status.cleanup == SessionCleanup::Complete,
+    )
+    .await;
+    assert_eq!(
+        complete.reason,
+        Some(SessionSignOutReason::SessionRetired),
+        "retry cannot replace retirement cause with SelfLogout"
+    );
+    assert!(failure_store.read().unwrap().rows.is_empty());
+    failed_states.stop();
+    eprintln!("PASS cleanup failure safety: retained SignedOut/SessionRetired/Failed, tombstone blocks restore, retry erases conditionally without remote acknowledgement");
+
+    states2.stop();
+    assert!(second.logout().await.unwrap());
+    let late2 = second.subscribe_session_state().await.unwrap();
+    let signed_out = session_state_until(&late2, "late self-logout consumer", |s| {
+        s.status.cleanup == SessionCleanup::Complete
+    })
+    .await;
+    assert_eq!(signed_out.reason, Some(SessionSignOutReason::SelfLogout));
+    assert_eq!(
+        signed_out.status.authorization,
+        SessionAuthorization::SignedOut
+    );
+    assert!(signed_out.sessions.is_none() && signed_out.status.restart_safe_store);
+    late2.stop();
+    assert!(first.logout().await.unwrap());
+    session_state_until(&states1, "attached self-logout consumer", |s| {
+        s.reason == Some(SessionSignOutReason::SelfLogout)
+            && s.status.cleanup == SessionCleanup::Complete
+            && s.sessions.is_none()
+    })
+    .await;
+    states1.stop();
+    assert!(foreign.logout().await.unwrap());
+    foreign_states.stop();
+    closures().await;
+    offline_presence(active1.user_id).await;
+    offline_presence(foreign_active.user_id).await;
+    assert!(store1.read().unwrap().rows.is_empty());
+    assert!(store2.read().unwrap().rows.is_empty());
+    assert!(foreign_store.read().unwrap().rows.is_empty());
+    eprintln!("PASS self-logout state retained for attached and late consumers; all owned connections and protected namespaces cleared");
 }
 
 /// The fixture adapter must satisfy clear's stale-write fence and namespace scope.
@@ -1294,4 +1915,39 @@ async fn native_chorus_store_clear_namespace() {
         .unwrap());
     other.end_restore("next-install").await.unwrap();
     eprintln!("PASS conditional restore permits: exact incarnation/revision/ACTIVE match; cross-adapter write/clear/reset exclusion; matching idempotent release; cancellation fences late acquisition");
+
+    // A failed acknowledgement cannot erase the marker or claim erased records.
+    let failing = DiskStore::new("clear-failed.json", false);
+    let original = failing.namespace_snapshot().await.unwrap().unwrap();
+    let revision = failing
+        .commit_current(
+            &original.revision,
+            SecureWrite::Operation,
+            "operation",
+            &blob,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let revision = failing
+        .commit_current(&revision, SecureWrite::Active, "operation", &blob)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(failing.begin_clear(&revision).await.unwrap());
+    failing.fail_finish.store(true, Ordering::SeqCst);
+    assert!(failing.finish_clear(&revision).await.is_err());
+    let reopened = DiskStore::new("clear-failed.json", false);
+    let marked = reopened.namespace_snapshot().await.unwrap().unwrap();
+    assert!(marked.cleanup_pending && marked.active.is_some());
+    assert!(reopened.load_active().await.is_err());
+    assert!(reopened
+        .commit_current(&revision, SecureWrite::Operation, "late", &blob)
+        .await
+        .unwrap()
+        .is_none());
+    failing.fail_finish.store(false, Ordering::SeqCst);
+    assert!(failing.finish_clear(&revision).await.unwrap());
+    assert!(reopened.read().unwrap().rows.is_empty());
+    eprintln!("PASS failed conditional clear: durable marker survives reopen, secret reads and late writes fenced, acknowledged retry erases records");
 }

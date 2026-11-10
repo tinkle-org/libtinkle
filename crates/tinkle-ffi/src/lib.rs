@@ -23,7 +23,8 @@ uniffi::setup_scaffolding!();
 mod account;
 pub use account::AccountEnrollmentObservation;
 pub use account::{
-    AccountAuthorization, AccountCleanup, AccountNetwork, AccountSession, AccountStatus,
+    AccountAuthorization, AccountCleanup, AccountNetwork, AccountSession, AccountSignOutReason,
+    AccountState, AccountStateSubscription, AccountStatus,
 };
 pub mod client;
 pub mod config;

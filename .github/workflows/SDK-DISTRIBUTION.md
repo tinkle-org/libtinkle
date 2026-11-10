@@ -3,8 +3,8 @@
 ## Release chain
 
 Required Rust checks and native packaging use the same published BSR prost pin
-and committed `Cargo.lock`. Schema #57 is included in
-`0.5.0-20261107080548-dc41c2199c76.2`; no schema checkout, registry patch, Buf
+and committed `Cargo.lock`. Session review and confirmation are included in
+`0.5.0-20261109202628-d85fcc4fe592.2`; no schema checkout, registry patch, Buf
 installation or repository variable is required in these jobs. The optional
 schema-candidate helper is for future-contract integration only, not release
 qualification. See [public pinning](../../PROTO_PINNING.md).

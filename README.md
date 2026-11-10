@@ -2,9 +2,9 @@
 
 Native Rust client runtime for Tinkle, with Swift/Kotlin bindings. Application
 RPCs, history, cache hydration, journal reconciliation and file transfers use
-encrypted Syntra TCP. The SDK uses exact rc.4 pins for
+encrypted Syntra TCP. The SDK uses exact rc.5 pins for
 `syntra-core`, `syntra-runtime`, and TCP-only `syntra-net`; see
-[dependency pins, upstream release links, and scoped paired qualification](PROTO_PINNING.md#sdk-pins-and-qualification).
+[dependency pins, upstream release links, and qualification requirements](PROTO_PINNING.md#sdk-pins-and-qualification).
 `Cargo.toml` / `Cargo.lock` own the installed pins.
 
 ## Native configuration
@@ -39,11 +39,12 @@ client.connect().await?;
 | `connection: syntra_runtime::ConnectionConfig` | Published runtime defaults |
 | `reconnect: ReconnectPolicy` | Supervisor backoff: 500 ms base, ×2, 30-second cap, 10 attempts |
 
-Both ports use the same host, pin, scope, key ID and mode. Only an initial TCP dial
-failure permits trying the fallback port. Once a socket connects, any channel,
-authentication, framing, timeout or I/O failure parks automatic reconnect. There is no
-HTTP/TLS wrapper or alternate network transport. Custom ports use the same
-encryption and trust checks as the defaults.
+Both ports use the same host, pin, scope, key ID, and mode. Only an initial TCP
+dial failure permits trying the fallback port. Failure after TCP selection but
+before authenticated readiness parks automatic reconnect; post-ready recovery
+uses the supervisor's typed failure policy without changing the selected port.
+There is no HTTP/TLS wrapper or alternate network transport. Custom ports use the
+same encryption and trust checks as the defaults.
 
 Socket selection is retained across reconnects and suspend/resume. The TCP-only
 SDK does not expose its private post-ready failure category, so opaque channel
@@ -77,16 +78,16 @@ The first public unary call on every connection is InitConnect-wrapped. See
 [device enrollment](docs/device-enrollment.md) for the exact staged API, storage
 contract, recovery path and runnable checks.
 
-Schema #57 merged at `2b15bb6db2e282f8f962742a800cab1f15ab54c5` and includes the
-enrollment-disposition contract in the published BSR prost artifact
-`0.5.0-20261107080548-dc41c2199c76.2`. Release qualification uses the published
-Cargo pin and ordinary `--locked` checks in this workspace, without Buf or a
-schema-candidate dependency in required CI. See [public pins](PROTO_PINNING.md).
+The published schema includes enrollment disposition, session review, and typed
+session-change hints. Release qualification uses the published Cargo pin and
+ordinary `--locked` checks, without Buf or schema candidates in required CI.
+See [public pins](PROTO_PINNING.md#current-published-schema-pin).
 
-`client.account().get_sessions()`, `revoke_session(session_id)` and
-`revoke_other_sessions()` expose device-session management. UniFFI exports the
-same names directly on `TinkleClient`. These calls never replay a mutation or
-interpret a denied request as proof of retirement.
+`client.account()` exposes `get_sessions()`, `confirm_session(session_id)`,
+`revoke_session(session_id)`, and `revoke_other_sessions()`. UniFFI exports these
+directly on `TinkleClient`. For a review prompt, “Yes” confirms that session;
+“No” revokes only that session, not every other device. Eligibility and typed
+errors are defined in [session review and state](docs/device-enrollment.md#session-review-and-state).
 
 `logout()` fences authorization before awaiting anything, then joins retained
 cleanup. Dropping a waiter leaves cleanup running. Retrying a local failure
@@ -94,15 +95,25 @@ preserves the original cache principal and cumulative remote confirmation, with
 no repeated remote mutation. `session_status()` distinguishes transport
 availability, unknown authorization, signed-out state and cleanup progress.
 Restart-safe cleanup additionally requires a conditional secure-store host and
-`cleanup == Complete`; legacy hosts report `restart_safe_store == false`.
+`cleanup == Complete`; unconditional stores report `restart_safe_store == false`.
+An incomplete transport join leaves cleanup `Failed` even when protected storage
+was already invalidated. Retry `logout()` to join unfinished work without
+repeating the remote mutation or acknowledged clearing.
 
 Conditional ACTIVE restoration observes permanent retirement before attempting
-Returning. Independent foreground entry and a fixed 60-second foreground timer
-also observe; Returning failures never create or accelerate that work. Each
-status-only encrypted connection shares the selected route/trust and has its own
-five-second absolute budget. Exact current RETIRED evidence starts local-only
-cleanup; unknown/error outcomes retain credentials. Expired records supply
-structural lookup metadata only and cannot install a Returning key.
+Returning. Foreground entry and coalesced loss/denial of the current Returning
+generation also request evidence. The offline fallback timer never disconnects
+a healthy Returning socket. Status-only Bootstrap replaces the old connection
+only after its transport work has joined, on the same selected route and trust.
+Exact current RETIRED evidence starts local-only cleanup; unknown/error outcomes
+retain credentials. See [retirement observation](docs/device-enrollment.md#permanent-retirement-observation).
+
+`Client::subscribe_session_state()` returns the sole `SessionStateSubscription`.
+Its `next()` yields the initial/latest retained `SessionState`, including lifecycle,
+first sign-out reason, and an optional complete session list. `stop()` unblocks
+waiters and releases the consumer slot. The SDK refreshes the list automatically;
+hosts do not need a polling loop or a second connection. This account stream is
+separate from `next_event()` and contact connectivity.
 
 ## Application lifecycle and synchronization
 
@@ -111,7 +122,11 @@ and `reconnect`. `reconnect` performs one attempt; the existing supervisor alone
 owns automatic retry scheduling. Trust/configuration and unverified establishment failures park
 automatic reconnect until an explicit trust replacement. `suspend` closes the
 connection and suppresses dialing; `resume` permits the supervisor to reconnect.
-`stop`/`shutdown` release live state while keeping durable application state.
+`stop`/`shutdown` fence live state while keeping durable application state.
+Incomplete carrier/policy shutdown retains its owner and blocks another dial
+until join completion. Ordinary admission and observation do not abort an active
+provisioning caller; abandoned children are joined before replacement. See
+[connection ownership](docs/architecture.md#establishment).
 
 Typed/raw request interfaces, `load_history`, `load_dialogs`, `get_messages`,
 `get_target_changes`, file transfers and push-driven synchronization share the
@@ -141,15 +156,16 @@ See [platform integration](docs/platform-ios-android-wasm.md).
 cells, joins liveness work, and clears every bound protected namespace through
 the acknowledged `SecureEnrollmentStore::clear` callback. Late enrollment
 responses cannot revive it. `Ok(true)` confirms remote revocation; `Ok(false)`
-means remote revocation is unconfirmed but local durable clearing succeeded.
-Cleanup errors leave `is_signed_out()` true and are never a durable-logout ack.
+means remote revocation is unconfirmed but required local clearing and transport
+joins completed. Cleanup errors leave `is_signed_out()` true and do not attest
+complete cleanup, even if protected-store invalidation already succeeded.
 Resolve failed host invalidation before allowing restoration after restart.
 Use a new Client for deliberate sign-in. The
 [high-level Logout contract](docs/device-enrollment.md#local-sign-out-and-remote-revocation)
 requires a single remote-eligibility budget of up to three seconds, captured before fencing
 or lifecycle waits, retained without renewal on join/retry. Local durable clearing
 is independent and may outlast three seconds. The
-[scoped paired result](PROTO_PINNING.md#sdk-pins-and-qualification) does not imply
+[qualification requirements](PROTO_PINNING.md#sdk-pins-and-qualification) do not imply
 a global three-second wall-clock guarantee for `logout()`.
 Raw calls retain their selected timeout; see the
 [request-budget integration contract](docs/architecture.md#request-budget-integration-contract).

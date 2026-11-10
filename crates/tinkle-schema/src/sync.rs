@@ -51,8 +51,65 @@ pub enum SyncError {
 pub fn validate_connectivity_notification(
     payload: &[u8],
 ) -> Result<ConnectivityChanged, SyncError> {
-    ConnectivityChanged::decode(payload)
-        .map_err(|_| SyncError::Malformed("cannot decode ConnectivityChanged".into()))
+    match notification(payload)? {
+        Notification::Connectivity(value) => Ok(value),
+        _ => Err(SyncError::Malformed(
+            "not a ConnectivityChanged notification".into(),
+        )),
+    }
+}
+
+/// Exact application notification binding; transport framing stays opaque to this crate.
+pub enum Notification {
+    /// Validated bare connectivity observation inside google.protobuf.Any.
+    Connectivity(ConnectivityChanged),
+    /// Validated session refresh hint, not an authoritative session projection.
+    SessionChanged(crate::proto::SessionChanged),
+    /// Existing opaque conversation reconciliation hint.
+    Hint,
+}
+
+/// Dispatch by exact Any type URL, never by trying unrelated protobuf decoders.
+pub fn notification(payload: &[u8]) -> Result<Notification, SyncError> {
+    let Ok(any) = prost_types::Any::decode(payload) else {
+        return Ok(Notification::Hint);
+    };
+    match any.type_url.as_str() {
+        "type.googleapis.com/tinkle.v1.ConnectivityChanged" => {
+            let value = ConnectivityChanged::decode(any.value.as_slice())
+                .map_err(|_| SyncError::Malformed("invalid ConnectivityChanged".into()))?;
+            if value.user_id <= 0 {
+                return Err(SyncError::InvalidUpdate(
+                    "connectivity user id must be positive".into(),
+                ));
+            }
+            Ok(Notification::Connectivity(value))
+        }
+        "type.googleapis.com/tinkle.v1.SessionChanged" => {
+            let value = crate::proto::SessionChanged::decode(any.value.as_slice())
+                .map_err(|_| SyncError::Malformed("invalid SessionChanged".into()))?;
+            if !session_id(&value.session_id) {
+                return Err(SyncError::InvalidUpdate(
+                    "invalid session hint identifier".into(),
+                ));
+            }
+            Ok(Notification::SessionChanged(value))
+        }
+        _ => Ok(Notification::Hint),
+    }
+}
+
+/// Canonical nonzero neutral session UUID, not an enrollment handle or credential.
+pub fn session_id(value: &str) -> bool {
+    value.len() == 36
+        && value != "00000000-0000-0000-0000-000000000000"
+        && value.bytes().enumerate().all(|(i, b)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                b == b'-'
+            } else {
+                b.is_ascii_digit() || (b'a'..=b'f').contains(&b)
+            }
+        })
 }
 
 /// Whether a `GetTargetChanges` page reports continuation beyond

@@ -1,4 +1,4 @@
-//! Negative-only enrollment observation on independently scheduled foreground work.
+//! Negative-only foreground enrollment observation, serialized with all owned sockets.
 
 use crate::liveness::AbortTask;
 use crate::{Client, SecureEnrollmentStore, ServerTrust, TinkleError, TrustSource};
@@ -15,7 +15,7 @@ use tinkle_schema::proto::{
     InitConnectResponse,
 };
 
-/// Foreground status cadence, independent of KeepAlive and Returning outcomes.
+/// Offline fallback cadence; healthy authenticated Returning sockets skip these checks.
 pub const RETIREMENT_OBSERVATION_INTERVAL: Duration = Duration::from_secs(60);
 /// Absolute ceiling for snapshot, route selection, proof, RPC and evidence recheck.
 pub const RETIREMENT_OBSERVATION_BUDGET: Duration = Duration::from_secs(5);
@@ -78,6 +78,7 @@ struct ForegroundEntry {
 /// One bounded observation at a time, owned independently of the main supervisor.
 #[derive(Default)]
 pub(crate) struct RetirementObserver {
+    session: Option<Arc<crate::session::SessionCoordinator>>,
     observation: Mutex<EnrollmentObservation>,
     binding: Mutex<BindingState>,
     foreground: AtomicBool,
@@ -86,9 +87,52 @@ pub(crate) struct RetirementObserver {
     observing: tokio::sync::Mutex<()>,
     /// Repeated foreground entry waits for the same status-first barrier.
     foreground_entry: tokio::sync::Mutex<Option<ForegroundEntry>>,
+    /// Coalesced, current Returning loss/denial; never triggered by local suspension.
+    loss: Mutex<Option<Arc<crate::liveness::LiveGeneration>>>,
+    checked_loss: Mutex<std::sync::Weak<crate::liveness::LiveGeneration>>,
+    loss_wake: tokio::sync::Notify,
+    /// Retain shutdown/join ownership if an observer, suspend, or foreign waiter is cancelled.
+    status_transport: tokio::sync::Mutex<Option<syntra_net::tcp::ClientHandle>>,
+    /// Test-only scheduling observations; no production metrics or public API.
+    #[cfg(test)]
+    scheduled_attempts: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    scheduled_finished: tokio::sync::Notify,
 }
 
 impl RetirementObserver {
+    /// Select the end of a scheduled attempt, including a pre-dial deferral.
+    #[cfg(test)]
+    pub(crate) async fn scheduled_attempt_finished(&self) {
+        self.scheduled_finished.notified().await;
+    }
+    /// Inspect actual scheduler dispatches without inferring progress from socket EOF.
+    #[cfg(test)]
+    pub(crate) fn scheduled_attempt_count(&self) -> usize {
+        self.scheduled_attempts.load(Ordering::SeqCst)
+    }
+    /// Install a real stalled SDK transport for cancellation/join-ownership regressions.
+    #[cfg(test)]
+    pub(crate) async fn install_status_transport(&self, handle: syntra_net::tcp::ClientHandle) {
+        *self.status_transport.lock().await = Some(handle);
+    }
+    /// Inspect retained status ownership independently of the admission barrier.
+    #[cfg(test)]
+    pub(crate) async fn has_status_transport(&self) -> bool {
+        self.status_transport.lock().await.is_some()
+    }
+    /// Hold observation admission so a supervisor interleaving can be selected deterministically.
+    #[cfg(test)]
+    pub(crate) async fn hold_observation(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.observing.lock().await
+    }
+    /// Wire every observation into the same account projection as authorization and cleanup.
+    pub(crate) fn new(session: Arc<crate::session::SessionCoordinator>) -> Self {
+        Self {
+            session: Some(session),
+            ..Self::default()
+        }
+    }
     /// Serialize foreground entry with cancellation; failures never call this.
     fn enter_foreground(&self) -> bool {
         let mut cancelled = self
@@ -110,6 +154,7 @@ impl RetirementObserver {
             .unwrap_or_else(|e| e.into_inner());
         self.foreground.store(false, Ordering::SeqCst);
         cancelled.cancel();
+        self.loss.lock().unwrap_or_else(|e| e.into_inner()).take();
         // Retain metadata for the next foreground interval, but fence in-flight
         // observations and protected reads from the interval being retired.
         let mut state = self.binding.lock().unwrap_or_else(|e| e.into_inner());
@@ -135,16 +180,62 @@ impl RetirementObserver {
     pub(crate) fn observation(&self) -> EnrollmentObservation {
         *self.observation.lock().unwrap_or_else(|e| e.into_inner())
     }
+    /// Pending current loss must settle before another Returning attempt is admitted.
+    pub(crate) fn has_pending_loss(&self) -> bool {
+        // Never hold the loss lock while reading other owners: invalidation
+        // takes binding before loss. Withdraw only the exact snapshotted demand,
+        // not a replacement registered while those owners were being inspected.
+        let candidate = self.loss.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let Some(candidate) = candidate else {
+            return false;
+        };
+        let revision = self.revision();
+        let current = self
+            .session
+            .as_ref()
+            .and_then(|session| session.generation());
+        let mut loss = self.loss.lock().unwrap_or_else(|e| e.into_inner());
+        let obsolete = !self.foreground.load(Ordering::SeqCst)
+            || candidate.retiring.load(Ordering::SeqCst)
+            || candidate.source_revision != revision
+            || current
+                .as_ref()
+                .is_none_or(|current| !Arc::ptr_eq(current, &candidate));
+        if obsolete
+            && loss
+                .as_ref()
+                .is_some_and(|generation| Arc::ptr_eq(generation, &candidate))
+        {
+            loss.take();
+        }
+        loss.is_some()
+    }
+
+    /// External resource release may accelerate one pending attempt; the worker never self-notifies.
+    pub(crate) fn wake_pending_loss(&self) {
+        if self.has_pending_loss() {
+            self.loss_wake.notify_one();
+        }
+    }
+
+    /// Retry local admission at 1/2/4/5 seconds, not every poll and not the offline sixty-second cadence.
+    fn loss_retry_delay(failures: u32) -> Duration {
+        Duration::from_secs((1u64 << failures.saturating_sub(1).min(3)).min(5))
+    }
 
     /// Publish only a secret-free lifecycle result, never a retained reference.
     fn record(&self, result: EnrollmentObservation) {
         *self.observation.lock().unwrap_or_else(|e| e.into_inner()) = result;
+        if let Some(session) = &self.session {
+            session.observation(result);
+        }
     }
     /// Invalidate predecessor evidence before a source/persistence transition.
     pub(crate) fn invalidate(&self) {
         let mut state = self.binding.lock().unwrap_or_else(|e| e.into_inner());
         state.revision = state.revision.wrapping_add(1);
         state.current = None;
+        self.loss.lock().unwrap_or_else(|e| e.into_inner()).take();
     }
 
     /// Pair metadata with the source while the caller holds connect_lock.
@@ -299,6 +390,75 @@ fn reference(status: &DeviceEnrollmentStatus) -> DeviceEnrollmentReference {
 }
 
 impl Client {
+    /// With the dial gate held, adopt a cancelled observer's retained join owner.
+    /// An active observer is never interrupted by an unrelated connect request.
+    pub(crate) async fn drain_cancelled_status(&self) -> Result<(), TinkleError> {
+        let _observer = self
+            .retirement
+            .observing
+            .try_lock()
+            .map_err(|_| TinkleError::NotConnected("status observation pending".into()))?;
+        // A provisioning child has a distinct observer and cannot drain its parent's handle.
+        if self.provisioning_context.is_some() {
+            return Err(TinkleError::NotConnected(
+                "parent status retirement pending".into(),
+            ));
+        }
+        if !self.join_status_transport().await {
+            return Err(TinkleError::NetworkUnavailable);
+        }
+        self.retirement.wake_pending_loss();
+        Ok(())
+    }
+    /// Queue at most one immediate bounded check on an already-authorized foreground observer.
+    /// This only schedules read-only evidence work; it never grants admission or replays a mutation.
+    pub(crate) fn request_loss_observation(
+        &self,
+        generation: Arc<crate::liveness::LiveGeneration>,
+    ) {
+        if !generation.returning
+            || generation.source_revision != self.retirement.revision()
+            || generation.retiring.load(Ordering::SeqCst)
+            || self.is_signed_out()
+            || self.is_locally_suspended()
+            || self.endpoint_rejected.load(Ordering::SeqCst)
+            || !self.retirement.foreground.load(Ordering::SeqCst)
+            || self
+                .retirement
+                .current()
+                .is_none_or(|binding| !binding.enabled)
+        {
+            return;
+        }
+        if self
+            .session_state
+            .generation()
+            .as_ref()
+            .is_none_or(|current| !Arc::ptr_eq(current, &generation))
+        {
+            return;
+        }
+        let mut loss = self
+            .retirement
+            .loss
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut checked = self
+            .retirement
+            .checked_loss
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // A generation can request only one check, including concurrent denial and EOF.
+        if checked
+            .upgrade()
+            .is_some_and(|g| Arc::ptr_eq(&g, &generation))
+        {
+            return;
+        }
+        *checked = Arc::downgrade(&generation);
+        *loss = Some(generation);
+        self.retirement.loss_wake.notify_one();
+    }
     /// Pending writes cannot leave predecessor observations eligible for cleanup.
     pub(crate) async fn invalidate_retirement_binding(&self) {
         let _source = self.connect_lock.lock().await;
@@ -342,15 +502,50 @@ impl Client {
         *owner = Some(AbortTask::new(tokio::spawn(async move {
             let mut ticks = tokio::time::interval_at(first, RETIREMENT_OBSERVATION_INTERVAL);
             ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut retry = None;
+            let mut failures = 0u32;
             loop {
-                tokio::select! { biased;
+                let caller_gone = if client.retirement.has_pending_loss() {
+                    client.provisioning_caller_gone()
+                } else {
+                    None
+                };
+                let periodic = tokio::select! { biased;
                     _ = gone.cancelled() => break,
                     _ = revoked.cancelled() => break,
                     _ = stopped.cancelled() => break,
-                    _ = ticks.tick() => {},
+                    _ = ticks.tick() => true,
+                    _ = client.retirement.loss_wake.notified() => false,
+                    _ = async { match retry { Some(at) => tokio::time::sleep_until(at).await, None => std::future::pending::<()>().await } } => false,
+                    _ = async { match caller_gone { Some(gone) => gone.cancelled().await, None => std::future::pending::<()>().await } } => false,
+                };
+                if client.is_locally_suspended()
+                    || (!periodic && !client.retirement.has_pending_loss())
+                {
+                    retry = None;
+                    failures = 0;
+                    continue;
                 }
                 // Never await cleanup from this task: its owner may join us.
-                if matches!(client.observe_retirement().await, Ok(Some(_))) {
+                #[cfg(test)]
+                client
+                    .retirement
+                    .scheduled_attempts
+                    .fetch_add(1, Ordering::SeqCst);
+                let result = client.observe_retirement().await;
+                if client.retirement.has_pending_loss() {
+                    failures = failures.saturating_add(1);
+                    retry = Some(
+                        tokio::time::Instant::now()
+                            + RetirementObserver::loss_retry_delay(failures),
+                    );
+                } else {
+                    failures = 0;
+                    retry = None;
+                }
+                #[cfg(test)]
+                client.retirement.scheduled_finished.notify_one();
+                if matches!(result, Ok(Some(_))) {
                     break;
                 }
             }
@@ -376,6 +571,29 @@ impl Client {
             // The entry task never awaits cleanup, so cleanup may safely join it.
             let _ = previous.completion.await;
         }
+        // Bootstrap children share the dial gate, not the parent's status owner.
+        // Their empty status slot must never clear the parent's retained barrier.
+        if self.provisioning_context.is_none()
+            && self.connect_lock.status_open.load(Ordering::SeqCst)
+        {
+            let _connection = self.connect_lock.lock().await;
+            self.join_status_transport().await;
+        }
+    }
+
+    /// Caller holds the shared dial gate; retain the handle through cancelled shutdown awaits.
+    async fn join_status_transport(&self) -> bool {
+        let mut status = self.retirement.status_transport.lock().await;
+        self.join_status_handle(&mut status).await
+    }
+
+    /// Keep both handle and shared barrier until rc.5 attests carrier/policy join completion.
+    async fn join_status_handle(&self, status: &mut Option<syntra_net::tcp::ClientHandle>) -> bool {
+        if !crate::liveness::join_retained_transport(status).await {
+            return false;
+        }
+        self.connect_lock.status_open.store(false, Ordering::SeqCst);
+        true
     }
 
     /// Only an explicit foreground transition authorizes status-first observation.
@@ -441,7 +659,7 @@ impl Client {
         Ok(())
     }
 
-    /// An observation never mutates the main trust source, principal or connection.
+    /// Observe without granting authorization, after retiring and joining the previous socket.
     async fn observe_retirement(
         &self,
     ) -> Result<Option<crate::logout::CleanupAttempt>, TinkleError> {
@@ -479,6 +697,11 @@ impl Client {
             return Ok(None);
         }
         let Some(binding) = self.retirement.current() else {
+            self.retirement
+                .loss
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
             return Ok(None);
         };
         let Some(stopped) = self.retirement.foreground_token() else {
@@ -489,7 +712,62 @@ impl Client {
             return Ok(None);
         }
         let endpoint_revision = self.retirement.endpoint_revision();
-        let mut ephemeral = None;
+        // Keep the shared dial gate through status shutdown/join, not merely
+        // establishment: no Returning dial may overlap this temporary socket.
+        let mut connection = Some(
+            clock
+                .timeout_until(deadline, self.connect_lock.lock())
+                .await
+                .map_err(|_| TinkleError::NetworkUnavailable)?,
+        );
+        // Periodic/negative-only observation is also admission work, not
+        // permission to cancel a caller's active capability-bearing request.
+        if self.active_provisioning_child() {
+            return Ok(None);
+        }
+        if !self.join_status_transport().await {
+            return Err(TinkleError::NetworkUnavailable);
+        }
+        if stopped.is_cancelled() || !self.retirement_source_matches(&binding).await {
+            return Ok(None);
+        }
+        let loss = self
+            .retirement
+            .loss
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if let Some(expected) = loss {
+            if expected.retiring.load(Ordering::SeqCst)
+                || expected.source_revision != self.retirement.revision()
+            {
+                return Ok(None);
+            }
+            if self
+                .session_state
+                .generation()
+                .as_ref()
+                .is_some_and(|current| !Arc::ptr_eq(current, &expected))
+            {
+                return Ok(None);
+            }
+        } else if !binding.restoring
+            && self
+                .session_state
+                .generation()
+                .is_some_and(|g| g.returning && g.open.load(Ordering::SeqCst))
+        {
+            // Healthy Returning sockets are never interrupted by a periodic status check.
+            return Ok(None);
+        }
+        let joined = clock
+            .timeout_until(deadline, self.teardown_connection())
+            .await
+            .map_err(|_| TinkleError::NetworkUnavailable)?;
+        if !joined {
+            return Err(TinkleError::NetworkUnavailable);
+        }
+        let mut ephemeral = self.retirement.status_transport.lock().await;
         let mut unverified_socket = false;
         let mut superseded = false;
         let mut cancelled = false;
@@ -527,7 +805,6 @@ impl Client {
                     return Ok(None);
                 }
                 {
-                    let _source = self.connect_lock.lock().await;
                     if !self.retirement_source_matches(&binding).await {
                         return Ok(None);
                     }
@@ -535,9 +812,10 @@ impl Client {
                     let budget = syntra_net::EstablishmentBudget::new(clock.clone(), remaining)
                         .map_err(TinkleError::from_network)?;
                     let stream = self.dial_selected_tcp(&budget).await?;
+                    self.connect_lock.status_open.store(true, Ordering::SeqCst);
                     unverified_socket = true;
                     let security = TrustSource::Bootstrap(binding.trust.clone()).security()?;
-                    ephemeral = Some(
+                    *ephemeral = Some(
                         syntra_net::tcp::connect_stream_with_budget(
                             stream,
                             security,
@@ -597,6 +875,12 @@ impl Client {
                 {
                     return Ok(None);
                 }
+                // Evidence may fence credentials even while carrier cleanup is
+                // unfinished. The retained barrier still prevents any new dial.
+                let _joined = self.join_status_handle(&mut ephemeral).await;
+                // Restore enrollment -> connection lock order before protected
+                // evidence recheck. Unfinished status I/O remains admission-fenced.
+                drop(connection.take());
                 let _flow = self.enrollment_lock.lock().await;
                 let _source = self.connect_lock.lock().await;
                 if !self.retirement_source_matches(&binding).await {
@@ -670,11 +954,12 @@ impl Client {
             Err(_) => EnrollmentObservation::Unavailable,
         };
         self.retirement.record(outcome);
-        if let Some(mut handle) = ephemeral {
-            handle.suspend();
-            let _ = clock
-                .timeout_until(deadline, handle.shutdown_transport(Duration::from_secs(1)))
-                .await;
+        // An incomplete/error report leaves the exact handle and barrier retained.
+        if !self.join_status_handle(&mut ephemeral).await
+            && observed.is_ok()
+            && !self.is_signed_out()
+        {
+            return Err(TinkleError::NetworkUnavailable);
         }
         observed
     }
@@ -738,6 +1023,37 @@ impl Client {
 mod review_tests {
     use super::*;
     use crate::enrollment::review_tests::{client, expired_store};
+
+    #[test]
+    /// Deferred admission uses a bounded exponential timer, never immediate self-notification.
+    fn loss_retry_delay_is_exponential_and_capped() {
+        let seconds: Vec<_> = [1, 2, 3, 4, 5, u32::MAX]
+            .into_iter()
+            .map(|failures| RetirementObserver::loss_retry_delay(failures).as_secs())
+            .collect();
+        assert_eq!(seconds, [1, 2, 4, 5, 5, 5]);
+    }
+
+    #[test]
+    /// Obsolete demand cannot park a replacement generation, and withdrawing it does not withdraw fresh demand.
+    fn pending_loss_withdraws_obsolete_generation_without_proof() {
+        let client = client(false);
+        client.retirement.enter_foreground();
+        let revision = client.retirement.revision();
+        let old = crate::liveness::LiveGeneration::new(true, revision);
+        client.session_state.network(old.clone(), true);
+        *client.retirement.loss.lock().unwrap() = Some(old.clone());
+        assert!(client.retirement.has_pending_loss());
+        let current = crate::liveness::LiveGeneration::new(true, revision);
+        client.session_state.network(current.clone(), true);
+        assert!(!client.retirement.has_pending_loss());
+        *client.retirement.loss.lock().unwrap() = Some(current.clone());
+        old.retiring.store(true, Ordering::SeqCst);
+        assert!(client.retirement.has_pending_loss());
+        current.retiring.store(true, Ordering::SeqCst);
+        assert!(!client.retirement.has_pending_loss());
+        assert!(!client.is_signed_out());
+    }
 
     #[tokio::test]
     /// Expired credentials retain negative-only lookup metadata without blocking future admission.

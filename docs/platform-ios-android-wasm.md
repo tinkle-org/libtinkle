@@ -3,9 +3,9 @@
 ## iOS and Android
 
 `TinkleClient` wraps the native Rust client on a shared process-wide Tokio
-runtime. Both platforms use encrypted TCP with exact rc.4 SDK pins;
+runtime. Both platforms use encrypted TCP with exact rc.5 SDK pins;
 [dependency pinning](../PROTO_PINNING.md#sdk-pins-and-qualification)
-owns crate-specific release links and scoped paired qualification.
+owns crate-specific release links and qualification requirements.
 Configuration is `ClientConfigFfi(host, primary_port, fallback_port)`;
 production defaults in Rust are 443/80. Both ports have identical trust checks.
 The configuration also requires `ClientInfoFfi`: all five device/app labels and
@@ -25,10 +25,11 @@ erased. The complete callback and recovery contract is in `device-enrollment.md`
 [high-level Logout contract](device-enrollment.md#local-sign-out-and-remote-revocation):
 one nonrenewable entry-time budget limits remote eligibility, while acknowledged
 local durable clearing may take longer. Do not impose a three-second cutoff on
-host invalidation or equate an unknown remote result with rollback. The
-[scoped paired result](../PROTO_PINNING.md#sdk-pins-and-qualification) qualifies the
-tested native consumer implementation/published pins, not Keychain/Keystore or
-installed mobile-consumer acceptance.
+host invalidation or equate an unknown remote result with rollback. Incomplete
+transport join leaves cleanup `Failed` even after protected storage was
+invalidated; retry finishes retained work without remote replay. The
+[native verification lanes](../PROTO_PINNING.md#sdk-pins-and-qualification) and
+installed platform tests cover different boundaries.
 
 The application surface retains `start`, `connect`, `subscribe`, typed/raw calls,
 `loadHistory`, `loadDialogs`, `getMessages`, `getTargetChanges`, file transfers,
@@ -38,14 +39,32 @@ Swift/Kotlin keep structured authentication and retryable error variants.
 Direct Rust calls support `CancelToken`; explicit cancellation-token bridging
 across UniFFI remains separate work.
 
+`crates/tinkle-ffi/src/account.rs` exports `subscribeSessionState()` as an
+`AccountStateSubscription`, plus `sessionStatus()`, `getSessions()`,
+`confirmSession(sessionId)`, `revokeSession(sessionId)`, and
+`revokeOtherSessions()`. The generated surface is in
+`bindings/swift/TinkleSDK.swift` and `bindings/kotlin/`.
+
+Only one account-state consumer may be active. Its `next()` returns the
+initial/latest `AccountState`; `stop()` releases the slot and unblocks pending
+reads with nil/null without signing out. The subscription does not retain the
+Client or a foreign callback. `AccountState.sessions` is optional: nil/null means
+unavailable/unfetched, while an empty collection is a fetched empty list.
+`SelfLogout` and `SessionRetired` remain distinct through cleanup retries.
+
+The SDK owns automatic session refresh. Prompt only for `unconfirmed && !current`
+when the current session is confirmed; use targeted `revokeSession` for “No”,
+not `revokeOtherSessions`. See
+[session review and state](device-enrollment.md#session-review-and-state) for the
+server gate and unknown mutation outcomes.
+
 For background execution, suspend the foreground socket. Push wakes drive
 bounded authoritative fetch/reconciliation through the existing durable job and
 scope-fencing pipeline. Application cache and cursors survive process death;
 channel state and in-flight requests do not.
 
-Check and regenerate bindings from the original workspace against the published
-BSR prost artifact `0.5.0-20261107080548-dc41c2199c76.2`, including schema #57's
-enrollment-disposition contract:
+Check and regenerate bindings from the original workspace against the
+[published schema pin](../PROTO_PINNING.md#current-published-schema-pin):
 
 ```sh
 bash scripts/generate-bindings.sh --check
@@ -83,6 +102,26 @@ the full application cache/history contracts.
 ```sh
 python3 scripts/with-native-fixture.py --port 0 cargo test --locked -p libtinkle --test mobile_fixture -- --ignored
 ```
+
+`packages/swift/Tests/TinkleSDKTests/TinkleSDKTests.swift` exercises retained
+account state, synthetic encrypted Returning confirmation projection, and typed
+confirmation denial through Rust and UniFFI. These fixture replies test the
+native bridge, not production account authority. Use the
+[Swift simulator lane](../packages/swift/README.md#local-development-and-simulator-checks)
+for the package's build and runtime commands.
+
+The Kotlin initializer, generated binding, and sample compilation are separate
+from installed Android runtime testing. The account-state smoke in
+`packages/kotlin/sample/src/main/kotlin/com/tinkle/sdk/smoke/SmokeChecks.kt` uses
+the asynchronous `FfiCursorStore` adapter and JNI-backed subscription methods.
+Run the [installed Android lane](../packages/kotlin/README.md#verification) with
+the configured NDK, system image, and emulator or device; missing runtime
+prerequisites do not turn compilation into an execution result.
+
+A simulator/device result covers only its tested runtime and architecture.
+Minimum-OS behavior, physical devices, protected-store durability/security, and
+release artifacts require their own scoped evidence; no fixture or compilation
+result alone qualifies a release.
 
 ## Browser
 

@@ -166,7 +166,7 @@ async fn mock_gateway(listener: TcpListener, log: MockLog) {
                         log.init_response_pending.store(false, Ordering::SeqCst);
                     }
                     if resp_frame_needs_notif(&resp_frame) {
-                        // Opaque hint carrying ConnectivityChanged bytes directly.
+                        // Production's exact Any binding contains bare ConnectivityChanged.
                         let obs = ConnectivityChanged {
                             user_id: 42,
                             online: true,
@@ -174,7 +174,12 @@ async fn mock_gateway(listener: TcpListener, log: MockLog) {
                             revision: 1,
                         };
                         let mut pbuf = Vec::new();
-                        obs.encode(&mut pbuf).unwrap();
+                        prost_types::Any {
+                            type_url: "type.googleapis.com/tinkle.v1.ConnectivityChanged".into(),
+                            value: obs.encode_to_vec(),
+                        }
+                        .encode(&mut pbuf)
+                        .unwrap();
                         let _ = host.notify(pbuf).await;
                     }
                     if is_slow(&resp_frame) {

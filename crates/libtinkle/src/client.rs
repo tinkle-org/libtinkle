@@ -108,6 +108,32 @@ impl Initialization {
 pub(crate) struct ConnectionGate {
     lock: tokio::sync::Mutex<()>,
     selected_port: AtomicU16,
+    /// A cancelled status owner must be joined before any main/provisioning dial.
+    pub(crate) status_open: AtomicBool,
+    /// Provisioning I/O remains join-owned by the parent after waiter cancellation.
+    auxiliary: std::sync::Mutex<Option<Arc<AuxiliaryConnection>>>,
+    /// A ready SDK handle remains owned here through all cancellable installation awaits.
+    establishing: tokio::sync::Mutex<Option<syntra_net::tcp::ClientHandle>>,
+    /// Select cancellation after actual SDK readiness, before application installation.
+    #[cfg(test)]
+    ready_transport: tokio::sync::Notify,
+}
+
+/// A temporary child's transports, without retaining its Client or host lifetime anchor.
+struct AuxiliaryConnection {
+    live: Arc<RwLock<Option<Live>>>,
+    retiring: Arc<tokio::sync::Mutex<Vec<Live>>>,
+    /// Observes the last actual caller, without retaining its Client ownership anchor.
+    caller_gone: CancelToken,
+    /// Explicit close or forced retirement ends admission even while a caller keeps the object.
+    closing: AtomicBool,
+}
+
+impl AuxiliaryConnection {
+    /// Background clones and retained transport owners do not count as an active caller.
+    fn active(&self) -> bool {
+        !self.caller_gone.is_cancelled() && !self.closing.load(Ordering::SeqCst)
+    }
 }
 
 impl ConnectionGate {
@@ -140,6 +166,12 @@ struct ReconnectFence {
     source_revision: u64,
     attempt: Arc<()>,
     generation: Option<Arc<LiveGeneration>>,
+}
+
+/// Local admission can defer without creating or charging a network attempt.
+enum ReconnectAdmission {
+    Connected,
+    Deferred,
 }
 
 /// Join ownership for the single retained foreground transition.
@@ -237,11 +269,13 @@ struct CatchupCommitCtx<'a> {
 /// is reusable across native iOS/Android via thin platform adapters.
 #[derive(Clone)]
 pub struct Client {
+    /// Serialized, retained account projection shared by every producer and client clone.
+    pub(crate) session_state: Arc<crate::session::SessionCoordinator>,
     pub(crate) authorization: Arc<crate::authorization::Authorization>,
     /// Retains cleanup ownership independently of any host waiter.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) logout_cleanup: Arc<crate::logout::LogoutCleanup>,
-    /// Independent foreground observation; never driven by Returning failures.
+    /// Negative-only foreground observation, including coalesced current-generation loss checks.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) retirement: Arc<crate::retirement::RetirementObserver>,
     /// A genuine endpoint proof rejection parks every use of this configuration.
@@ -252,6 +286,8 @@ pub struct Client {
     /// for arbitrary application methods after local sign-out.
     logout_only: bool,
     owner: Arc<ClientOwner>,
+    /// Original host lifetime signal, preserved by background clones without retaining its anchor.
+    lifetime: CancelToken,
     /// Heartbeats and reconnect restoration address only their captured generation.
     call_generation: Option<Arc<LiveGeneration>>,
     config: ClientConfig,
@@ -345,9 +381,194 @@ fn parse_target_key(target_key: &str) -> Result<tinkle_schema::proto::Target, Ti
 }
 
 impl Client {
+    /// Non-destructive admission must not interrupt another live provisioning operation.
+    pub(crate) fn active_provisioning_child(&self) -> bool {
+        self.connect_lock
+            .auxiliary
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|slot| !Arc::ptr_eq(&slot.live, &self.live) && slot.active())
+    }
+
+    /// The observer can wait on caller release without retaining that caller or spawning a watcher.
+    pub(crate) fn provisioning_caller_gone(&self) -> Option<CancelToken> {
+        self.connect_lock
+            .auxiliary
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .filter(|slot| !Arc::ptr_eq(&slot.live, &self.live) && slot.active())
+            .map(|slot| slot.caller_gone.clone())
+    }
+
+    /// Wake the parent only for an actual provisioning resource-release edge.
+    fn wake_provisioning_observer(&self) {
+        if let Some((parent, _)) = &self.provisioning_context {
+            parent.wake_pending_loss();
+        }
+    }
+
+    /// A private child can dial or admit requests only within its current live caller lease.
+    fn check_provisioning_admission(&self) -> Result<(), TinkleError> {
+        if self.provisioning_context.is_some()
+            && !self
+                .connect_lock
+                .auxiliary
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .is_some_and(|slot| Arc::ptr_eq(&slot.live, &self.live) && slot.active())
+        {
+            return Err(TinkleError::NotConnected(
+                "provisioning owner retired".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Explicit lifecycle retirement ends this child's caller lease, not its retained join ownership.
+    fn close_provisioning_admission(&self) {
+        let changed = self
+            .connect_lock
+            .auxiliary
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .filter(|slot| Arc::ptr_eq(&slot.live, &self.live))
+            .is_some_and(|slot| !slot.closing.swap(true, Ordering::SeqCst));
+        if changed {
+            self.wake_provisioning_observer();
+        }
+    }
+
+    /// Only an explicit, joined child close releases its registration. Pre-dial cleanup does not.
+    fn release_closed_provisioning(&self) {
+        let mut slot = self
+            .connect_lock
+            .auxiliary
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let released = slot.as_ref().is_some_and(|slot| {
+            Arc::ptr_eq(&slot.live, &self.live) && slot.closing.load(Ordering::SeqCst)
+        });
+        if released {
+            slot.take();
+        }
+        drop(slot);
+        if released {
+            self.wake_provisioning_observer();
+        }
+    }
+    /// Project only the current source/generation's sticky terminal decision into supervisor policy.
+    async fn retain_liveness_policy(&self, generation: &Arc<LiveGeneration>) {
+        if !generation.terminal_failure.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut sup = self.sup_state.lock().await;
+        if generation.source_revision == self.retirement.revision()
+            && self
+                .session_state
+                .generation()
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, generation))
+        {
+            sup.reconnect_blocked = true;
+        }
+    }
+    /// Under the shared dial gate, join a predecessor provisioning socket before any new dial.
+    async fn drain_auxiliary_connection(&self) -> bool {
+        // Only the parent adopts abandoned children. A late child's close must
+        // not cancel a different, newer child registered on the shared gate.
+        if self.provisioning_context.is_some() {
+            return true;
+        }
+        let auxiliary = self
+            .connect_lock
+            .auxiliary
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let Some(auxiliary) = auxiliary.filter(|a| !Arc::ptr_eq(&a.live, &self.live)) else {
+            return true;
+        };
+        auxiliary.closing.store(true, Ordering::SeqCst);
+        let mut retiring = auxiliary.retiring.lock().await;
+        if let Some(live) = auxiliary.live.write().await.take() {
+            live.generation.retiring.store(true, Ordering::SeqCst);
+            live.generation.open.store(false, Ordering::SeqCst);
+            live.generation.closed.cancel();
+            live.handle.suspend();
+            retiring.push(live);
+        }
+        while let Some(live) = retiring.last_mut() {
+            if let Some(task) = live.liveness.as_mut() {
+                task.shutdown().await;
+            }
+            if let Some(task) = live.watch_restore.as_mut() {
+                task.shutdown().await;
+            }
+            live.pump.shutdown().await;
+            if !crate::liveness::transport_joined(&mut live.handle).await {
+                return false;
+            }
+            live.sync_mgr.on_disconnect().await;
+            retiring.pop();
+        }
+        let mut slot = self
+            .connect_lock
+            .auxiliary
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if slot
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &auxiliary))
+        {
+            slot.take();
+        }
+        drop(slot);
+        self.retirement.wake_pending_loss();
+        true
+    }
+
+    /// Provisioning replaces, rather than overlaps, the parent's socket. The parent
+    /// retains the child's transport owners until explicit close or a later lifecycle join.
+    pub(crate) async fn connect_provisioning_child(
+        &self,
+        child: &Client,
+    ) -> Result<(), TinkleError> {
+        let _connection = self.connect_lock.lock().await;
+        child.check_provisioning_context()?;
+        if self.active_provisioning_child() {
+            return Err(TinkleError::NotConnected(
+                "provisioning operation pending".into(),
+            ));
+        }
+        if !self.teardown_connection().await {
+            return Err(TinkleError::NetworkUnavailable);
+        }
+        // The child's observer cannot attest parent status completion. Drain the
+        // parent's exact retained handle before registering any new child owner.
+        if self.connect_lock.status_open.load(Ordering::SeqCst) {
+            self.drain_cancelled_status().await?;
+        }
+        self.authorization.generation()?;
+        *self
+            .connect_lock
+            .auxiliary
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(AuxiliaryConnection {
+            live: child.live.clone(),
+            retiring: child.retiring.clone(),
+            caller_gone: child.owner_gone(),
+            closing: AtomicBool::new(false),
+        }));
+        child.connect_locked().await
+    }
     /// Irreversibly revoke local admission and invalidate native reconcile work before cleanup awaits.
-    pub(crate) fn begin_signed_out(&self) {
-        self.authorization.sign_out();
+    pub(crate) fn begin_signed_out(&self, reason: crate::SessionSignOutReason) {
+        self.close_provisioning_admission();
+        self.authorization.sign_out(reason);
         self.suspended.store(true, Ordering::SeqCst);
         #[cfg(not(target_arch = "wasm32"))]
         self.reconcile_epoch.fetch_add(1, Ordering::SeqCst);
@@ -430,9 +651,27 @@ impl Client {
         caller
     }
 
+    /// A review/confirmation worker may address only its captured Returning socket.
+    pub(crate) fn for_session_generation(&self, generation: Arc<LiveGeneration>) -> Self {
+        let mut caller = self.background_clone();
+        caller.call_generation = Some(generation);
+        caller
+    }
+
+    /// Capture exactly the active Returning generation for single-attempt account mutations.
+    pub(crate) fn session_generation(&self) -> Result<Arc<LiveGeneration>, TinkleError> {
+        self.authorization.generation()?;
+        self.session_state
+            .generation()
+            .filter(|generation| generation.returning && generation.open.load(Ordering::SeqCst))
+            .ok_or_else(|| {
+                TinkleError::NotConnected("authenticated Returning connection required".into())
+            })
+    }
+
     /// Background owners observe host lifetime without retaining the host anchor.
     pub(crate) fn owner_gone(&self) -> CancelToken {
-        self.owner.gone.clone()
+        self.lifetime.clone()
     }
 
     /// Settle only this failed socket generation. Never join our own liveness
@@ -444,13 +683,19 @@ impl Client {
     ) {
         // Logout owns the final best-effort revocation and channel retirement.
         // A locally fenced heartbeat must not close that healthy channel first.
-        if self.authorization.is_signed_out() {
+        if self.authorization.is_signed_out() || generation.retiring.load(Ordering::SeqCst) {
             return;
         }
         // Stop admission immediately, even if a lifecycle owner currently holds
         // the connection lock. This fence cannot invalidate a replacement live.
+        generation.record_failure(error);
         generation.open.store(false, Ordering::SeqCst);
         generation.closed.cancel();
+        self.session_state.network(generation.clone(), false);
+        self.request_loss_observation(generation.clone());
+        generation.classified.store(true, Ordering::SeqCst);
+        // LivenessTask's outer stop select cancels this wait before a lifecycle
+        // owner joins it. Status work runs on a separate owner, never this task.
         let connection = self.connect_lock.lock().await;
         let mut current = self.live.write().await;
         let Some(live) = current
@@ -459,16 +704,14 @@ impl Client {
         else {
             return;
         };
-        let blocked = !matches!(error.recovery_decision(), RecoveryDecision::Retry);
+        let blocked = generation.terminal_failure.load(Ordering::SeqCst);
         self.sup_state.lock().await.reconnect_blocked |= blocked;
         generation.open.store(false, Ordering::SeqCst);
         generation.closed.cancel();
         self.transport_ok.store(false, Ordering::SeqCst);
-        live.handle.suspend();
-        let _ = live
-            .handle
-            .shutdown_transport(std::time::Duration::from_secs(1))
-            .await;
+        self.session_state.network(generation.clone(), false);
+        // Keep Live and its handle even if this bounded attempt is incomplete.
+        let _joined = crate::liveness::transport_joined(&mut live.handle).await;
         generation.classified.store(true, Ordering::SeqCst);
         let manager = live.sync_mgr.clone();
         drop(current);
@@ -483,17 +726,26 @@ impl Client {
         trust_source: TrustSource,
         store: Arc<dyn CursorStore>,
     ) -> Self {
-        let authorization = crate::authorization::Authorization::new(&trust_source);
+        let session_state = crate::session::SessionCoordinator::new(matches!(
+            trust_source,
+            TrustSource::SignedOut(_)
+        ));
+        let authorization =
+            crate::authorization::Authorization::with_session(&trust_source, session_state.clone());
+        let owner = Arc::new(ClientOwner::default());
+        let lifetime = owner.gone.clone();
         Self {
+            session_state: session_state.clone(),
             authorization,
             #[cfg(not(target_arch = "wasm32"))]
             logout_cleanup: Arc::new(crate::logout::LogoutCleanup::default()),
             #[cfg(not(target_arch = "wasm32"))]
-            retirement: Arc::new(crate::retirement::RetirementObserver::default()),
+            retirement: Arc::new(crate::retirement::RetirementObserver::new(session_state)),
             endpoint_rejected: Arc::new(AtomicBool::new(false)),
             provisioning_context: None,
             logout_only: false,
-            owner: Arc::new(ClientOwner::default()),
+            owner,
+            lifetime,
             call_generation: None,
             config,
             trust_source: Arc::new(RwLock::new(trust_source)),
@@ -531,17 +783,26 @@ impl Client {
         trust_source: TrustSource,
         storage: Arc<tinkle_storage::Storage>,
     ) -> Self {
-        let authorization = crate::authorization::Authorization::new(&trust_source);
+        let session_state = crate::session::SessionCoordinator::new(matches!(
+            trust_source,
+            TrustSource::SignedOut(_)
+        ));
+        let authorization =
+            crate::authorization::Authorization::with_session(&trust_source, session_state.clone());
         let store: Arc<dyn CursorStore> =
             Arc::new(crate::sqlite_store::SqliteCursorStore::new(storage.clone()));
+        let owner = Arc::new(ClientOwner::default());
+        let lifetime = owner.gone.clone();
         Self {
+            session_state: session_state.clone(),
             authorization,
             logout_cleanup: Arc::new(crate::logout::LogoutCleanup::default()),
-            retirement: Arc::new(crate::retirement::RetirementObserver::default()),
+            retirement: Arc::new(crate::retirement::RetirementObserver::new(session_state)),
             endpoint_rejected: Arc::new(AtomicBool::new(false)),
             provisioning_context: None,
             logout_only: false,
-            owner: Arc::new(ClientOwner::default()),
+            owner,
+            lifetime,
             call_generation: None,
             config,
             trust_source: Arc::new(RwLock::new(trust_source)),
@@ -885,6 +1146,12 @@ impl Client {
         authorization: &crate::authorization::EnrollmentEpoch,
     ) -> Result<(), TinkleError> {
         self.check_provisioning_context()?;
+        self.check_provisioning_admission()?;
+        if self.active_provisioning_child() {
+            return Err(TinkleError::NotConnected(
+                "provisioning operation pending".into(),
+            ));
+        }
         if self.endpoint_rejected.load(Ordering::SeqCst) {
             return Err(TinkleError::TrustRejected);
         }
@@ -892,6 +1159,14 @@ impl Client {
             return Err(TinkleError::NotConnected(
                 "status-first restoration is pending".into(),
             ));
+        }
+        if self.retirement.has_pending_loss() {
+            return Err(TinkleError::NotConnected(
+                "retirement evidence check pending".into(),
+            ));
+        }
+        if self.connect_lock.status_open.load(Ordering::SeqCst) {
+            self.drain_cancelled_status().await?;
         }
         if self.suspended.load(Ordering::SeqCst) {
             return Err(TinkleError::NotConnected(
@@ -903,8 +1178,10 @@ impl Client {
             return Ok(());
         }
         self.authorization.set_authentication_known(false);
-        if self.live.read().await.is_some() {
-            self.teardown_connection().await;
+        // Retired handles survive cancellation/incomplete shutdown even when
+        // `live` is empty. They must be joined before any replacement dial.
+        if !self.teardown_connection().await {
+            return Err(TinkleError::NetworkUnavailable);
         }
         self.config.validate()?;
         // Hold one source through dial selection and establishment. Neither a
@@ -912,48 +1189,56 @@ impl Client {
         let source = self.trust_source.read().await;
         let returning = matches!(&*source, TrustSource::Returning { .. });
         let security = source.security()?;
+        let mut establishing = self.connect_lock.establishing.lock().await;
         let budget = syntra_net::EstablishmentBudget::new(
             syntra_runtime::elapsed::ElapsedClock::new(),
             std::time::Duration::from_secs(15),
         )
         .map_err(TinkleError::from_network)?;
         let stream = self.dial_selected_tcp(&budget).await?;
-        let handle = match syntra_net::tcp::connect_stream_with_budget(
-            stream,
-            security,
-            Vec::new(),
-            self.config.connection.clone(),
-            Default::default(),
-            budget,
-        )
-        .await
-        {
-            Ok(handle) => handle,
-            Err(error) => {
-                self.sup_state.lock().await.reconnect_blocked = true;
-                let error = self.classify_establishment(error);
-                if self.provisioning_context.is_some()
-                    && matches!(error, TinkleError::EstablishmentFailed)
-                {
-                    // An unverified Bootstrap proof may conceal rejection. This
-                    // shared flag is set while holding the parent's connect lock.
-                    self.endpoint_rejected.store(true, Ordering::SeqCst);
+        *establishing = Some(
+            match syntra_net::tcp::connect_stream_with_budget(
+                stream,
+                security,
+                Vec::new(),
+                self.config.connection.clone(),
+                Default::default(),
+                budget,
+            )
+            .await
+            {
+                Ok(handle) => handle,
+                Err(error) => {
+                    self.sup_state.lock().await.reconnect_blocked = true;
+                    let error = self.classify_establishment(error);
+                    if self.provisioning_context.is_some()
+                        && matches!(error, TinkleError::EstablishmentFailed)
+                    {
+                        // An unverified Bootstrap proof may conceal rejection. This
+                        // shared flag is set while holding the parent's connect lock.
+                        self.endpoint_rejected.store(true, Ordering::SeqCst);
+                    }
+                    return Err(error);
                 }
-                return Err(error);
-            }
-        };
+            },
+        );
+        #[cfg(test)]
+        self.connect_lock.ready_transport.notify_one();
         drop(source);
         if self.suspended.load(Ordering::SeqCst) || self.sup_state.lock().await.epoch != epoch {
-            handle.close().await;
+            let _joined = crate::liveness::join_retained_transport(&mut establishing).await;
             return Err(TinkleError::NotConnected(
                 "connection retired during establishment".into(),
             ));
         }
 
+        let handle = establishing
+            .as_ref()
+            .ok_or_else(|| TinkleError::NotConnected("ready transport missing".into()))?;
         let conn = handle.conn.clone();
         let connection_id = handle.connection_id.clone();
         let version = handle.version;
-        let generation = LiveGeneration::new(returning);
+        let generation = LiveGeneration::new(returning, self.retirement.revision());
 
         let principal = self.principal.read().await.clone();
         let sync_mgr = SyncManager::new(principal);
@@ -972,71 +1257,85 @@ impl Client {
             sync_mgr.set_signal_tx(tx).await;
         }
 
-        // Notification pump: opaque hints only. A frame that decodes as a
-        // plausible connectivity observation (positive user_id) is emitted
-        // as an ephemeral event and nothing else; every other frame —
-        // decode failures and implausible observations included — is a
-        // reconcile hint. Accepted observations never double-trigger a
-        // reconcile sweep.
+        // Dispatch the exact application Any binding. Account hints only demand
+        // a review read; connectivity stays ephemeral. Existing opaque conversation
+        // hints still reconcile, but malformed recognized payloads are discarded.
         let pump_conn = conn.clone();
         let pump_mgr = sync_mgr.clone();
         let pump_ok = self.transport_ok.clone();
         let pump_generation = generation.clone();
-        let pump = tokio::spawn(async move {
+        let pump_state = self.session_state.clone();
+        let pump = AbortTask::new(tokio::spawn(async move {
             while let Some(payload) = pump_conn.next_notification().await {
-                match tinkle_schema::sync::validate_connectivity_notification(&payload) {
-                    Ok(obs) if obs.user_id > 0 => {
+                match tinkle_schema::sync::notification(&payload) {
+                    Ok(tinkle_schema::sync::Notification::Connectivity(obs)) => {
                         pump_mgr.emit_connectivity(obs).await;
                     }
-                    _ => {
+                    Ok(tinkle_schema::sync::Notification::SessionChanged(_)) => {
+                        pump_state.dirty(Some(pump_generation.clone()));
+                    }
+                    Ok(tinkle_schema::sync::Notification::Hint) => {
                         pump_mgr.handle_hint(&payload).await;
                     }
+                    Err(_) => {}
                 }
             }
             pump_generation.closed.cancel();
             if pump_generation.open.swap(false, Ordering::SeqCst) {
                 pump_ok.store(false, Ordering::SeqCst);
+                pump_state.network(pump_generation.clone(), false);
                 // Returning failures are classified by its bounded in-flight
                 // KeepAlive (if any) before the supervisor may reconnect.
                 if !pump_generation.returning {
                     pump_mgr.emit_signal(RecoverySignal::PumpDead).await;
                 }
             }
-        });
+        }));
 
         let mut live_w = self.live.write().await;
         if live_w.is_some() {
             drop(live_w);
-            handle.close().await;
-            return Ok(());
+            if crate::liveness::join_retained_transport(&mut establishing).await {
+                return Ok(());
+            }
+            return Err(TinkleError::NetworkUnavailable);
         }
         let initialized = Arc::new(Initialization::default());
         let watch_restore = self.spawn_watch_restore(conn, initialized.clone(), generation.clone());
-        let live = Live {
-            handle,
-            connection_id,
-            version,
-            sync_mgr,
-            pump: AbortTask::new(pump),
-            initialized,
-            watch_restore: Some(watch_restore),
-            generation: generation.clone(),
-            liveness: None,
-        };
         self.authorization
             .with_generation(authorization.generation, || {
-                *live_w = Some(live);
+                self.check_provisioning_admission()?;
+                // No await between withdrawing the retained handle and installing Live.
+                let handle = establishing
+                    .take()
+                    .ok_or_else(|| TinkleError::NotConnected("ready transport missing".into()))?;
+                *live_w = Some(Live {
+                    handle,
+                    connection_id,
+                    version,
+                    sync_mgr,
+                    pump,
+                    initialized,
+                    watch_restore: Some(watch_restore),
+                    generation: generation.clone(),
+                    liveness: None,
+                });
                 self.transport_ok.store(true, Ordering::SeqCst);
+                self.session_state.network(generation.clone(), true);
                 if returning {
-                    let owner_gone = self.owner.gone.clone();
+                    let owner_gone = self.owner_gone();
                     let mut caller = self.background_clone();
                     caller.call_generation = Some(generation.clone());
                     live_w.as_mut().expect("installed live generation").liveness =
                         Some(LivenessTask::spawn(caller, generation, owner_gone));
                 }
-            })?;
+                Ok::<(), TinkleError>(())
+            })??;
         drop(live_w);
         self.authorization.set_authentication_known(returning);
+        if returning {
+            self.session_state.start_review(self);
+        }
         // Reissue the retained watch set on the fresh connection.
         // `ObserveConnectivity` is per-connection; without this a reconnect
         // silently drops presence observations. Presence is optional: a
@@ -1174,7 +1473,12 @@ impl Client {
         let payload = Zeroizing::new(payload);
         self.check_call_admission(method)?;
         let budget = self.call_budget(timeout_ms)?;
-        self.call_initialized_with_budget(method, payload, &budget, token, None, None)
+        let mut caller = self.background_clone();
+        if caller.call_generation.is_none() {
+            caller.call_generation = self.session_state.generation();
+        }
+        caller
+            .call_initialized_with_budget(method, payload, &budget, token, None, None)
             .await
     }
 
@@ -1235,6 +1539,13 @@ impl Client {
             _ = token.cancelled() => Err(TinkleError::Syntra(syntra_core::SyntraError::Cancelled("call cancelled".into()))),
         };
         if let Err(error) = &result {
+            // The denial observer can win the dial gate and cancel the heartbeat
+            // worker. Retain its decision before that observer can be awakened.
+            if method == crate::liveness::KEEP_ALIVE_METHOD {
+                if let Some(generation) = &self.call_generation {
+                    generation.record_failure(error);
+                }
+            }
             self.observe_denial(error);
         }
         result
@@ -1252,6 +1563,7 @@ impl Client {
         progress: Option<&CallProgress>,
     ) -> Result<(), TinkleError> {
         self.check_provisioning_context()?;
+        self.check_provisioning_admission()?;
         if self.endpoint_rejected.load(Ordering::SeqCst) {
             return Err(TinkleError::TrustRejected);
         }
@@ -1282,7 +1594,20 @@ impl Client {
             error.code(),
             syntra_core::ErrorCode::Unauthenticated | syntra_core::ErrorCode::PermissionDenied
         ) {
-            self.authorization.set_authentication_known(false);
+            if let Some(generation) = self
+                .call_generation
+                .clone()
+                .or_else(|| self.session_state.generation())
+            {
+                // Comparison and withdrawal happen together in the serialized reducer.
+                self.session_state.denial(generation.clone());
+                // PermissionDenied may be access policy for this RPC on an
+                // otherwise healthy channel. Heartbeat terminal failures still
+                // demand evidence through fail_liveness, regardless of their code.
+                if error.code() == syntra_core::ErrorCode::Unauthenticated {
+                    self.request_loss_observation(generation);
+                }
+            }
         }
     }
 
@@ -1484,7 +1809,7 @@ impl Client {
     ) -> AbortTask {
         let watch = self.watch.clone();
         let revoked = self.authorization.revoked.clone();
-        let owner_gone = self.owner.gone.clone();
+        let owner_gone = self.owner_gone();
         AbortTask::new(tokio::spawn(async move {
             let restore = async {
                 loop {
@@ -3396,17 +3721,36 @@ impl Client {
         }
     }
 
-    /// Fence the live channel and join retired workers, retaining ownership if teardown is cancelled.
-    async fn teardown_connection(&self) {
+    /// Fence and join owned transport workers. False means a bounded attempt
+    /// remains unfinished; cancellation/incompleteness never withdraws its owner.
+    pub(crate) async fn teardown_connection(&self) -> bool {
         let mut retiring = self.retiring.lock().await;
         {
             let mut live = self.live.write().await;
             if let Some(live) = live.take() {
+                live.generation.retiring.store(true, Ordering::SeqCst);
                 live.generation.open.store(false, Ordering::SeqCst);
                 live.generation.closed.cancel();
+                live.handle.suspend();
                 self.transport_ok.store(false, Ordering::SeqCst);
+                self.session_state.network(live.generation.clone(), false);
                 retiring.push(live);
             }
+        }
+        // Fence and retain current Live before any join can return incomplete or
+        // be cancelled. Its terminal decision must also survive those early exits.
+        for live in retiring.iter() {
+            self.retain_liveness_policy(&live.generation).await;
+        }
+        if !crate::liveness::join_retained_transport(
+            &mut *self.connect_lock.establishing.lock().await,
+        )
+        .await
+        {
+            return false;
+        }
+        if !self.drain_auxiliary_connection().await {
+            return false;
         }
         while let Some(live) = retiring.last_mut() {
             if let Some(task) = live.liveness.as_mut() {
@@ -3416,15 +3760,14 @@ impl Client {
                 task.shutdown().await;
             }
             live.pump.shutdown().await;
-            live.handle.suspend();
-            let _ = live
-                .handle
-                .shutdown_transport(std::time::Duration::from_secs(1))
-                .await;
+            if !crate::liveness::transport_joined(&mut live.handle).await {
+                return false;
+            }
             live.sync_mgr.on_disconnect().await;
             self.retain_manager(live.sync_mgr.clone()).await;
             retiring.pop();
         }
+        true
     }
 
     /// Stop transport and supervised work without signing out or erasing protected credentials.
@@ -3434,11 +3777,15 @@ impl Client {
 
     /// Stop observation, supervisor, and transport before draining native commits outside the dial gate.
     pub async fn stop(&self) {
+        self.close_provisioning_admission();
+        self.session_state.stop_consumer();
         self.pause_retirement_schedule().await;
         self.stop_supervisor().await;
         {
             let _connect = self.connect_lock.lock().await;
-            self.teardown_connection().await;
+            if self.teardown_connection().await {
+                self.release_closed_provisioning();
+            }
         }
         // Explicit stop may drain writes, but must not hold up logout's
         // transport retirement/protected-store invalidation via connect_lock.
@@ -3467,6 +3814,7 @@ impl Client {
 
     /// Make suspension authoritative over older resume work, then retire observation and transport.
     pub async fn suspend(&self) {
+        self.close_provisioning_admission();
         {
             let mut sup = self.sup_state.lock().await;
             sup.epoch = sup.epoch.wrapping_add(1);
@@ -3478,7 +3826,9 @@ impl Client {
         }
         self.pause_retirement_schedule().await;
         let _connect = self.connect_lock.lock().await;
-        self.teardown_connection().await;
+        if self.teardown_connection().await {
+            self.release_closed_provisioning();
+        }
     }
 
     /// Join or retain a foreground transition so waiter cancellation cannot strand local suspension.
@@ -3560,12 +3910,22 @@ impl Client {
 
     /// Inspect the local admission gate used by lifecycle and background workers.
     pub async fn is_suspended(&self) -> bool {
+        self.is_locally_suspended()
+    }
+
+    /// Security/lifecycle producers must inspect suspension without entering an async queue.
+    pub(crate) fn is_locally_suspended(&self) -> bool {
         self.suspended.load(Ordering::SeqCst)
     }
 
     /// Make one explicit replacement attempt and restore interests without replaying application RPCs.
     pub async fn reconnect(&self) -> Result<(), TinkleError> {
-        self.reconnect_once(false, &mut None).await
+        match self.reconnect_once(false, &mut None).await? {
+            ReconnectAdmission::Connected => Ok(()),
+            ReconnectAdmission::Deferred => Err(TinkleError::NotConnected(
+                "connection admission deferred".into(),
+            )),
+        }
     }
 
     /// Fence restoration and retry bookkeeping to this attempt's source and installed generation.
@@ -3573,7 +3933,7 @@ impl Client {
         &self,
         automatic: bool,
         fence: &mut Option<ReconnectFence>,
-    ) -> Result<(), TinkleError> {
+    ) -> Result<ReconnectAdmission, TinkleError> {
         self.authorization.generation()?;
         if self.suspended.load(Ordering::SeqCst) {
             return Err(TinkleError::NotConnected(
@@ -3583,6 +3943,17 @@ impl Client {
         let connection = self.connect_lock.lock().await;
         // Policy may become terminal while this attempt waits behind account
         // retirement/activation. A queued supervisor request cannot unpark it.
+        if self.active_provisioning_child() {
+            return Ok(ReconnectAdmission::Deferred);
+        }
+        if self.retirement.has_pending_loss() {
+            return Ok(ReconnectAdmission::Deferred);
+        }
+        if automatic {
+            if let Some(generation) = self.session_state.generation() {
+                self.retain_liveness_policy(&generation).await;
+            }
+        }
         if automatic && self.sup_state.lock().await.reconnect_blocked {
             return Err(TinkleError::Configuration(
                 "automatic reconnect is parked".into(),
@@ -3591,7 +3962,18 @@ impl Client {
         // Resume may wake the supervisor while a manual dial already owns this
         // gate. Its queued loss observation must not retire that healthy result.
         if automatic && self.is_connected().await {
-            return Ok(());
+            return Ok(ReconnectAdmission::Connected);
+        }
+        if self.connect_lock.status_open.load(Ordering::SeqCst)
+            && self.drain_cancelled_status().await.is_err()
+        {
+            return Ok(ReconnectAdmission::Deferred);
+        }
+        if !self.teardown_connection().await {
+            return Ok(ReconnectAdmission::Deferred);
+        }
+        if self.retirement.has_pending_loss() {
+            return Ok(ReconnectAdmission::Deferred);
         }
         let attempt = Arc::new(());
         self.sup_state.lock().await.reconnect_attempt = Some(attempt.clone());
@@ -3601,9 +3983,14 @@ impl Client {
             attempt: attempt.clone(),
             generation: None,
         });
-        self.teardown_connection().await;
         // One attempt only. The supervisor schedules subsequent attempts.
-        self.connect_locked().await?;
+        let connected = self.connect_locked().await;
+        if matches!(connected, Err(TinkleError::NotConnected(_)))
+            && self.retirement.has_pending_loss()
+        {
+            return Ok(ReconnectAdmission::Deferred);
+        }
+        connected?;
         let generation = self
             .live
             .read()
@@ -3651,7 +4038,7 @@ impl Client {
                 }
             }
         }
-        Ok(())
+        Ok(ReconnectAdmission::Connected)
     }
 
     /// Delayed restoration failure may retire only the connection this attempt created.
@@ -3695,7 +4082,7 @@ impl Client {
                     return Err(TinkleError::NotConnected("stopped during start".into()));
                 }
                 let task_client = self.background_clone();
-                let owner_gone = self.owner.gone.clone();
+                let owner_gone = self.owner_gone();
                 let handle = tokio::spawn(async move {
                     tokio::select! {
                         biased;
@@ -3921,7 +4308,11 @@ impl Client {
         }
         tracing::debug!("supervisor re-establishing connection");
         let mut fence = None;
-        let result = self.reconnect_once(true, &mut fence).await;
+        let result = match self.reconnect_once(true, &mut fence).await {
+            Ok(ReconnectAdmission::Deferred) => return,
+            Ok(ReconnectAdmission::Connected) => Ok(()),
+            Err(error) => Err(error),
+        };
         if let Some(fence) = fence {
             self.apply_reconnect_result(&fence, result).await;
         }
@@ -4630,6 +5021,10 @@ impl Client {
 }
 
 #[cfg(test)]
+#[path = "lifecycle_review_tests.rs"]
+mod lifecycle_review_tests;
+
+#[cfg(test)]
 mod tests {
     use super::TargetDemand;
 
@@ -4682,6 +5077,23 @@ mod tests {
             } else {
                 (method, payload)
             };
+            // Account review is an independent automatic read, not a tested
+            // budget probe. Keep its traffic out of the probe log/gates.
+            if method == tinkle_schema::methods::accountservice::GET_SESSIONS {
+                let payload =
+                    tinkle_schema::proto::GetSessionsResponse { sessions: vec![] }.encode_to_vec();
+                return Box::pin(async move {
+                    let _lease = lease;
+                    syntra_runtime::HandlerOutcome::Payload(if wrapped {
+                        tinkle_schema::proto::InitConnectResponse {
+                            payload: payload.into(),
+                        }
+                        .encode_to_vec()
+                    } else {
+                        payload
+                    })
+                });
+            }
             self.0
                 .lock()
                 .unwrap()
@@ -4842,6 +5254,38 @@ mod tests {
         });
         client.connect().await.unwrap();
         (client, handler, server)
+    }
+
+    /// A serial-accept peer cannot complete another handshake until the old socket closes.
+    #[tokio::test]
+    async fn provisioning_replaces_parent_and_cancelled_child_is_joined_before_next_dial() {
+        use std::time::Duration;
+        let (client, _, server) =
+            budget_fixture_connections(false, Duration::from_secs(1), Duration::from_secs(3), 3)
+                .await;
+        let trust = client.enrollment_trust().await;
+        let epoch = client.authorization.generation().unwrap();
+        let child = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.provisioning_client(&trust, &epoch),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(!client.is_connected().await);
+        assert!(child.is_connected().await);
+        // Drop without explicit close: the parent still owns every unfinished join.
+        drop(child);
+        tokio::time::timeout(Duration::from_secs(2), client.connect())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(client.is_connected().await);
+        client.stop().await;
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     /// A confirmed result cannot be lost waiting for optional restoration locks.
@@ -5435,7 +5879,7 @@ mod tests {
             client.enrollment_trust().await,
             &followup_status(),
             store.clone(),
-            false,
+            true, // Bootstrap status-first work requires a restoring binding.
             true,
         );
         let caller = client.clone();

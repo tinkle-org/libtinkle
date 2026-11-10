@@ -1,6 +1,68 @@
 //! Secret-free device-session management for native hosts.
 
 use crate::{FfiError, TinkleClient};
+use std::sync::Arc;
+
+/// First cause of irreversible local sign-out; cleanup retries never replace it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum AccountSignOutReason {
+    /// The host requested local sign-out.
+    SelfLogout,
+    /// Exact current authority evidence retired this enrollment.
+    SessionRetired,
+}
+
+/// Retained, secret-free account state; independent of contact connectivity events.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AccountState {
+    /// Monotonic local revision, not a server checkpoint.
+    pub revision: u64,
+    /// The authoritative lifecycle view also returned by session_status.
+    pub status: AccountStatus,
+    /// Immutable sign-out cause when known.
+    pub reason: Option<AccountSignOutReason>,
+    /// None means unavailable/unfetched, Some(empty) is a fetched empty list.
+    /// Hosts prompt only for unconfirmed && !current; confirmation eligibility
+    /// requires a confirmed current session and is enforced by the server.
+    pub sessions: Option<Vec<AccountSession>>,
+}
+
+impl From<libtinkle::SessionState> for AccountState {
+    /// Project owned records only; no prost or credential-bearing objects cross UniFFI.
+    fn from(state: libtinkle::SessionState) -> Self {
+        Self {
+            revision: state.revision,
+            status: state.status.into(),
+            reason: state.reason.map(|r| match r {
+                libtinkle::SessionSignOutReason::SelfLogout => AccountSignOutReason::SelfLogout,
+                libtinkle::SessionSignOutReason::SessionRetired => {
+                    AccountSignOutReason::SessionRetired
+                }
+            }),
+            sessions: state
+                .sessions
+                .map(|sessions| sessions.into_iter().map(Into::into).collect()),
+        }
+    }
+}
+
+/// Opaque one-consumer subscription. It does not retain TinkleClient or a foreign callback.
+#[derive(uniffi::Object)]
+pub struct AccountStateSubscription {
+    inner: libtinkle::SessionStateSubscription,
+}
+
+#[uniffi::export(async_runtime = "tokio")]
+impl AccountStateSubscription {
+    /// Await the initial/latest snapshot. Stop or Client release returns None.
+    pub async fn next(&self) -> Option<AccountState> {
+        self.inner.next().await.map(Into::into)
+    }
+    /// Unblock pending next calls and release the consumer slot synchronously.
+    pub fn stop(&self) {
+        self.inner.stop();
+    }
+}
 
 /// Foreground transport availability, independent of account retirement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -137,6 +199,8 @@ pub struct AccountSession {
     pub region: String,
     /// Whether this session issued the listing request.
     pub current: bool,
+    /// True until another confirmed session recognizes this login; never prompt for current.
+    pub unconfirmed: bool,
 }
 
 impl From<tinkle_schema::proto::Session> for AccountSession {
@@ -155,12 +219,33 @@ impl From<tinkle_schema::proto::Session> for AccountSession {
             country: session.country,
             region: session.region,
             current: session.current,
+            unconfirmed: session.unconfirmed,
         }
     }
 }
 
 #[uniffi::export(async_runtime = "tokio")]
 impl TinkleClient {
+    /// Atomically register the Client's sole app consumer with the latest retained state.
+    pub async fn subscribe_session_state(&self) -> Result<Arc<AccountStateSubscription>, FfiError> {
+        Ok(Arc::new(AccountStateSubscription {
+            inner: self
+                .core_client()
+                .subscribe_session_state()
+                .await
+                .map_err(FfiError::from)?,
+        }))
+    }
+
+    /// Confirm one other login, once. Unknown mutation outcomes must not be automatically replayed.
+    pub async fn confirm_session(&self, session_id: String) -> Result<AccountSession, FfiError> {
+        self.core_client()
+            .account()
+            .confirm_session(&session_id)
+            .await
+            .map(Into::into)
+            .map_err(confirmation_error)
+    }
     /// Query transport, authorization, and retained cleanup without network I/O.
     pub async fn session_status(&self) -> AccountStatus {
         self.core_client().session_status().await.into()
@@ -182,7 +267,7 @@ impl TinkleClient {
             .account()
             .revoke_session(&session_id)
             .await
-            .map_err(FfiError::from)
+            .map_err(revocation_error)
     }
 
     /// Revoke every other device while retaining this device's enrollment.
@@ -193,14 +278,23 @@ impl TinkleClient {
             .account()
             .revoke_other_sessions()
             .await
-            .map_err(revoke_other_sessions_error)
+            .map_err(revocation_error)
     }
 }
 
 /// Keep ambiguous revocation outcomes nonretryable without changing other error mappings.
-fn revoke_other_sessions_error(error: libtinkle::TinkleError) -> FfiError {
+fn revocation_error(error: libtinkle::TinkleError) -> FfiError {
     if error.is_unknown_outcome() {
         FfiError::Network("revocation outcome unknown; do not retry automatically".into())
+    } else {
+        FfiError::from(error)
+    }
+}
+
+/// A lost confirmation reply is not a retryable read or proof that the mutation did not commit.
+fn confirmation_error(error: libtinkle::TinkleError) -> FfiError {
+    if error.is_unknown_outcome() {
+        FfiError::Network("confirmation outcome unknown; do not retry automatically".into())
     } else {
         FfiError::from(error)
     }
@@ -210,10 +304,93 @@ fn revoke_other_sessions_error(error: libtinkle::TinkleError) -> FfiError {
 mod tests {
     use super::*;
 
+    /// Offline native construction exercises the real proc-macro exports without credentials.
+    fn offline_client() -> Arc<TinkleClient> {
+        TinkleClient::new(
+            crate::ClientConfigFfi {
+                host: "127.0.0.1".into(),
+                primary_port: 9,
+                fallback_port: None,
+                client_info: crate::ClientInfoFfi {
+                    device_model: "fixture".into(),
+                    platform: "test".into(),
+                    os_version: "1".into(),
+                    app_version: "1".into(),
+                    app_build: "0001".into(),
+                    options: crate::ClientOptionsFfi {
+                        agent: String::new(),
+                        device_id: String::new(),
+                        install_id: String::new(),
+                        accept_language: String::new(),
+                        time_zone: String::new(),
+                        user_agent: String::new(),
+                    },
+                },
+            },
+            crate::TrustSourceFfi::bootstrap(crate::ServerTrustFfi {
+                server_public_key: vec![1; 32],
+                server_key_id: 7,
+                scope: "fixture".into(),
+            })
+            .unwrap(),
+            crate::InMemoryFfiStore::new(),
+        )
+        .unwrap()
+    }
+
     #[tokio::test]
-    #[ignore = "run via scripts/with-native-fixture.py --port 0 cargo test -p tinkle-ffi exported_revocation_lost_response -- --ignored"]
-    /// Drop a real encrypted reply and verify the export reports unknown outcome, not sign-out.
-    async fn exported_revocation_lost_response_is_network_unknown() {
+    /// Cancelling a next waiter does not consume the single app consumer or discard terminal state.
+    async fn exported_state_subscription_cancellation_stop_and_late_attach() {
+        let client = offline_client();
+        let stream = client.subscribe_session_state().await.unwrap();
+        assert_eq!(
+            stream.next().await.unwrap().status,
+            client.session_status().await
+        );
+        assert!(client.subscribe_session_state().await.is_err());
+        let waiting = stream.clone();
+        let task = tokio::spawn(async move { waiting.next().await });
+        tokio::task::yield_now().await;
+        task.abort();
+        let _ = task.await;
+        client.logout().await.unwrap();
+        let terminal = stream.next().await.unwrap();
+        assert_eq!(terminal.reason, Some(AccountSignOutReason::SelfLogout));
+        assert_eq!(
+            terminal.status.authorization,
+            AccountAuthorization::SignedOut
+        );
+        assert_eq!(terminal.status.cleanup, AccountCleanup::Complete);
+        stream.stop();
+        assert!(stream.next().await.is_none());
+        let late = client.subscribe_session_state().await.unwrap();
+        assert_eq!(late.next().await.unwrap(), terminal);
+        client.shutdown().await;
+        assert!(late.next().await.is_none());
+    }
+
+    #[test]
+    /// Missing and explicitly empty snapshots stay distinct and review flags are not inferred.
+    fn exported_state_projection_preserves_review_flags_and_absence() {
+        let session = AccountSession::from(tinkle_schema::proto::Session {
+            unconfirmed: true,
+            current: false,
+            ..Default::default()
+        });
+        assert!(session.unconfirmed && !session.current);
+        let current = AccountSession::from(tinkle_schema::proto::Session {
+            unconfirmed: true,
+            current: true,
+            ..Default::default()
+        });
+        assert!(current.unconfirmed && current.current);
+    }
+
+    #[tokio::test]
+    #[ignore = "run via scripts/with-native-fixture.py --port 0 cargo test -p tinkle-ffi exported_targeted_revocation_returning_lost_response -- --ignored"]
+    /// Lose a synthetic Returning mutation reply; reconnect must preserve peers without replay.
+    /// This exercises SDK transport/exports, not account authority or retirement policy.
+    async fn exported_targeted_revocation_returning_lost_response_is_unknown_and_never_replayed() {
         use std::sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
@@ -232,7 +409,9 @@ mod tests {
                 BufReader::new(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
             control
                 .get_mut()
-                .write_all(b"{\"op\":\"create\"}\n")
+                .write_all(
+                    b"{\"op\":\"create\",\"session_review\":true,\"targeted_revocation\":true}\n",
+                )
                 .await
                 .unwrap();
             let mut reply = String::new();
@@ -274,26 +453,35 @@ mod tests {
             let discard_next = discard.clone();
             let observed = discarded.clone();
             let relay_task = tokio::spawn(async move {
-                let (client, _) = relay.accept().await.unwrap();
-                let gateway = TcpStream::connect(("127.0.0.1", gateway_port))
-                    .await
-                    .unwrap();
-                let (mut client_read, mut client_write) = client.into_split();
-                let (mut gateway_read, mut gateway_write) = gateway.into_split();
-                tokio::select! {
-                    result = tokio::io::copy(&mut client_read, &mut gateway_write) => { result.unwrap(); }
-                    _ = async {
-                        let mut bytes = [0; 8192];
-                        loop {
-                            let count = gateway_read.read(&mut bytes).await.unwrap();
-                            if count == 0 { break; }
-                            if discard_next.load(Ordering::SeqCst) {
-                                observed.store(true, Ordering::SeqCst);
-                                break;
+                // Forward opaque bytes only: Syntra owns both encrypted handshakes and RPC framing.
+                for connection in 0..2 {
+                    let (mut client, _) = relay.accept().await.unwrap();
+                    let mut gateway = TcpStream::connect(("127.0.0.1", gateway_port))
+                        .await
+                        .unwrap();
+                    if connection == 1 {
+                        tokio::io::copy_bidirectional(&mut client, &mut gateway)
+                            .await
+                            .unwrap();
+                        continue;
+                    }
+                    let (mut client_read, mut client_write) = client.into_split();
+                    let (mut gateway_read, mut gateway_write) = gateway.into_split();
+                    tokio::select! {
+                        result = tokio::io::copy(&mut client_read, &mut gateway_write) => { result.unwrap(); }
+                        _ = async {
+                            let mut bytes = [0; 8192];
+                            loop {
+                                let count = gateway_read.read(&mut bytes).await.unwrap();
+                                if count == 0 { break; }
+                                if discard_next.load(Ordering::SeqCst) {
+                                    observed.store(true, Ordering::SeqCst);
+                                    break;
+                                }
+                                client_write.write_all(&bytes[..count]).await.unwrap();
                             }
-                            client_write.write_all(&bytes[..count]).await.unwrap();
-                        }
-                    } => {}
+                        } => {}
+                    }
                 }
             });
             let client = TinkleClient::new(
@@ -318,20 +506,57 @@ mod tests {
                     },
                 },
                 crate::TrustSourceFfi::bootstrap(crate::ServerTrustFfi {
-                    server_public_key: pin,
+                    server_public_key: pin.clone(),
                     server_key_id: 7,
-                    scope: "tinkle-mobile-fixture".into(),
+                    scope: "fixture".into(),
                 })
                 .unwrap(),
                 crate::InMemoryFfiStore::new(),
             )
             .unwrap();
+            // Test-only host adoption of validated synthetic ACTIVE material. No public bypass API.
+            let mut active = tinkle_schema::proto::DeviceEnrollmentStatus {
+                operation_id: "11111111-1111-4111-8111-111111111111".into(),
+                session_id: "22222222-2222-4222-8222-222222222222".into(),
+                handle: vec![8; 8].into(),
+                enrollment_epoch: 1,
+                account_auth_epoch: 1,
+                user_id: 42,
+                scope: tinkle_schema::proto::DeviceKeyScope::Account as i32,
+                state: tinkle_schema::proto::DeviceEnrollmentState::Active as i32,
+                expires_at: Some(Default::default()),
+            };
+            active.expires_at.as_mut().unwrap().seconds = 253_402_300_799;
+            client
+                .core_client()
+                .replace_trust_source(libtinkle::TrustSource::Returning {
+                    trust: libtinkle::ServerTrust {
+                        server_public_key: pin.try_into().unwrap(),
+                        server_key_id: 7,
+                        scope: "fixture".into(),
+                    },
+                    enrollment: libtinkle::Enrollment::from_active_status([0x22; 32], &active)
+                        .unwrap(),
+                })
+                .await
+                .unwrap();
+            let states = client.subscribe_session_state().await.unwrap();
             client.connect().await.unwrap();
-            // Drop the fixture's terminal RPC reply, not any handshake traffic.
-            // The fixture does not implement revocation; this claims response loss,
-            // not successful remote mutation or rollback.
+            let before = loop {
+                let state = states.next().await.unwrap();
+                if let Some(sessions) = state.sessions {
+                    assert_eq!(state.status.authorization, AccountAuthorization::Active);
+                    break sessions;
+                }
+            };
+            assert_eq!(before.len(), 3);
+            let target = "78e5c289-656b-4428-a091-2dddf6828465";
+            assert!(before
+                .iter()
+                .any(|session| session.id == target && session.unconfirmed && !session.current));
+            // Initial snapshot has arrived; discard ciphertext only after initialization/readiness.
             discard.store(true, Ordering::SeqCst);
-            let error = client.revoke_other_sessions().await.unwrap_err();
+            let error = client.revoke_session(target.into()).await.unwrap_err();
             assert!(
                 discarded.load(Ordering::SeqCst),
                 "the peer reply must actually be lost"
@@ -339,6 +564,62 @@ mod tests {
             assert!(matches!(error, FfiError::Network(message)
                 if message == "revocation outcome unknown; do not retry automatically"));
             assert!(!client.is_signed_out());
+            loop {
+                let state = states.next().await.unwrap();
+                assert_eq!(state.reason, None);
+                assert_eq!(state.status.cleanup, AccountCleanup::NotStarted);
+                if state.status.network == AccountNetwork::Unavailable {
+                    assert_eq!(state.status.authorization, AccountAuthorization::Unknown);
+                    assert!(
+                        state.sessions.is_none(),
+                        "loss is not an authoritative empty snapshot"
+                    );
+                    break;
+                }
+            }
+            client.reconnect().await.unwrap();
+            let remaining: Vec<_> = before
+                .into_iter()
+                .filter(|session| session.id != target)
+                .collect();
+            loop {
+                let state = states.next().await.unwrap();
+                if let Some(sessions) = state.sessions {
+                    assert_eq!(state.status.network, AccountNetwork::Available);
+                    assert_eq!(state.status.authorization, AccountAuthorization::Active);
+                    assert_eq!(state.status.cleanup, AccountCleanup::NotStarted);
+                    assert_eq!(state.reason, None);
+                    assert_eq!(
+                        sessions, remaining,
+                        "full snapshot preserves caller and untouched peer"
+                    );
+                    break;
+                }
+            }
+            assert_eq!(client.get_sessions().await.unwrap(), remaining);
+            // Query executions only after reconnect and a successful exported read on that channel.
+            let mut control =
+                BufReader::new(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
+            control
+                .get_mut()
+                .write_all(format!("{{\"op\":\"requests\",\"id\":{id}}}\n").as_bytes())
+                .await
+                .unwrap();
+            let mut log = String::new();
+            control.read_line(&mut log).await.unwrap();
+            assert!(
+                log.contains(&format!("\"revocations\":[\"{target}\"]")),
+                "exactly one server execution required"
+            );
+            assert!(
+                log.contains("\"revocation_mutations\":1"),
+                "target mutation must have executed before reply loss"
+            );
+            assert!(
+                log.contains("\"admissions\":[\"returning\",\"returning\"]"),
+                "both connections must be encrypted Returning"
+            );
+            states.stop();
             client.shutdown().await;
             relay_task.await.unwrap();
             let mut control =
@@ -352,7 +633,7 @@ mod tests {
             control.read_line(&mut reply).await.unwrap();
             assert_eq!(reply.trim(), "{\"closed\":true}");
         };
-        tokio::time::timeout(std::time::Duration::from_secs(10), regression)
+        tokio::time::timeout(std::time::Duration::from_secs(15), regression)
             .await
             .expect("native FFI response-loss regression timed out");
     }
@@ -382,7 +663,11 @@ mod tests {
             let error = libtinkle::TinkleError::Syntra(error);
             assert!(error.is_unknown_outcome());
             assert!(matches!(
-                revoke_other_sessions_error(error),
+                confirmation_error(error.clone()),
+                FfiError::Network(_)
+            ));
+            assert!(matches!(
+                revocation_error(error),
                 FfiError::Network(message)
                     if message == "revocation outcome unknown; do not retry automatically"
             ));
@@ -405,6 +690,15 @@ mod tests {
             ErrorCode::PermissionDenied,
             ErrorCode::ResourceExhausted,
             ErrorCode::InvalidArgument,
+            ErrorCode::NotFound,
+            ErrorCode::AlreadyExists,
+            ErrorCode::FailedPrecondition,
+            ErrorCode::OutOfRange,
+            ErrorCode::Unimplemented,
+            ErrorCode::Cancelled,
+            ErrorCode::Aborted,
+            ErrorCode::DataLoss,
+            ErrorCode::Unspecified,
         ] {
             errors.push(libtinkle::TinkleError::Syntra(SyntraError::Rpc {
                 code,
@@ -415,7 +709,7 @@ mod tests {
         for error in errors {
             assert!(!error.is_unknown_outcome());
             let expected = FfiError::from(error.clone());
-            let actual = revoke_other_sessions_error(error);
+            let actual = revocation_error(error);
             assert_eq!(
                 std::mem::discriminant(&actual),
                 std::mem::discriminant(&expected)
@@ -440,6 +734,7 @@ mod tests {
             country: "US".into(),
             region: "CA".into(),
             current: true,
+            unconfirmed: false,
         };
         let mapped = AccountSession::from(session.clone());
         assert_eq!(mapped.id, session.id);
@@ -454,5 +749,6 @@ mod tests {
         assert_eq!(mapped.country, session.country);
         assert_eq!(mapped.region, session.region);
         assert_eq!(mapped.current, session.current);
+        assert_eq!(mapped.unconfirmed, session.unconfirmed);
     }
 }

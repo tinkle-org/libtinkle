@@ -134,6 +134,14 @@ impl Fixture {
                                 } else {
                                     (method, payload)
                                 };
+                                // Authenticated startup now owns an automatic review read.
+                                // A valid response completes the same initialization gate.
+                                if method == tinkle_schema::methods::accountservice::GET_SESSIONS {
+                                    let bytes = tinkle_schema::proto::GetSessionsResponse { sessions: vec![] }.encode_to_vec();
+                                    return HandlerOutcome::Payload(if wrapped {
+                                        InitConnectResponse { payload: bytes.into() }.encode_to_vec()
+                                    } else { bytes });
+                                }
                                 if method != "/tinkle.v1.ConnectionService/KeepAlive" {
                                     return HandlerOutcome::error(
                                         ErrorCode::Unimplemented,
@@ -270,6 +278,15 @@ async fn exact_monotonic_sequences_initialize_once_and_renew_once() {
     let client = fixture.client(Mode::Returning);
     client.connect().await.unwrap();
     until(|| fixture.connections() == 1).await;
+    // Settle startup review before advancing timers beyond its three-second
+    // request budget; an expired first request legitimately reinitializes.
+    let review = client.subscribe_session_state().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while review.next().await.unwrap().sessions.is_none() {}
+    })
+    .await
+    .unwrap();
+    review.stop();
     for expected in 1..=3 {
         client.connect().await.unwrap(); // Idempotent connect must not spawn/reset a loop.
         elapse(5).await;

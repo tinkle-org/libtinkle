@@ -494,13 +494,21 @@ fn target_keys_and_parts() {
 
 #[test]
 fn connectivity_notification_round_trip() {
+    let envelope = |value: Vec<u8>| {
+        prost_types::Any {
+            type_url: "type.googleapis.com/tinkle.v1.ConnectivityChanged".into(),
+            value,
+        }
+        .encode_to_vec()
+    };
     let seen = ConnectivityChanged {
         user_id: 42,
         online: true,
         known: true,
         revision: 9_007_199_254_740_993,
     };
-    let back = validate_connectivity_notification(&seen.encode_to_vec()).expect("decodes");
+    let back =
+        validate_connectivity_notification(&envelope(seen.encode_to_vec())).expect("decodes");
     assert_eq!(back, seen);
 
     // Retraction: unknown never proves offline.
@@ -510,10 +518,72 @@ fn connectivity_notification_round_trip() {
         known: false,
         revision: 7,
     };
-    let back = validate_connectivity_notification(&unknown.encode_to_vec()).expect("decodes");
+    let back =
+        validate_connectivity_notification(&envelope(unknown.encode_to_vec())).expect("decodes");
     assert!(!back.known);
     assert!(!back.online);
     assert_eq!(back.revision, 7);
 
     assert!(validate_connectivity_notification(b"\xff\xff\xff\xff\xff\xff\xff").is_err());
+}
+
+#[test]
+/// Type URLs, not compatible protobuf field numbers, select notification behavior.
+fn notification_dispatch_never_guesses_session_or_connectivity_payloads() {
+    use tinkle_schema::{
+        proto::SessionChanged,
+        sync::{notification, Notification},
+    };
+    let session = SessionChanged {
+        session_id: "78e5c289-656b-4428-a091-2dddf6828465".into(),
+    };
+    let any = |url: &str, value: Vec<u8>| {
+        prost_types::Any {
+            type_url: url.into(),
+            value,
+        }
+        .encode_to_vec()
+    };
+    let url = "type.googleapis.com/tinkle.v1.SessionChanged";
+    assert!(matches!(
+        notification(&any(url, session.encode_to_vec())).unwrap(),
+        Notification::SessionChanged(_)
+    ));
+    for value in [
+        vec![],
+        vec![255],
+        SessionChanged {
+            session_id: "not-a-session".into(),
+        }
+        .encode_to_vec(),
+    ] {
+        assert!(notification(&any(url, value)).is_err());
+    }
+    assert!(matches!(
+        notification(&any(
+            "other/tinkle.v1.SessionChanged",
+            session.encode_to_vec()
+        ))
+        .unwrap(),
+        Notification::Hint
+    ));
+    assert!(matches!(
+        notification(&session.encode_to_vec()).unwrap(),
+        Notification::Hint
+    ));
+    assert!(validate_connectivity_notification(&session.encode_to_vec()).is_err());
+    // A response wrapper is not the agreed bare connectivity payload.
+    let wrapper = tinkle_schema::proto::ObserveConnectivityResponse {
+        update: Some(ConnectivityChanged {
+            user_id: 42,
+            online: true,
+            known: true,
+            revision: 1,
+        }),
+    };
+    assert!(notification(&any(
+        "type.googleapis.com/tinkle.v1.ConnectivityChanged",
+        wrapper.encode_to_vec()
+    ))
+    .is_err());
 }
