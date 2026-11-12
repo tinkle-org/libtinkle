@@ -15,13 +15,14 @@
 //! `next_event` → `suspend`/`resume`/`reconnect` → `shutdown`/`stop`.
 //! `start` establishes the session and owns automatic reconciliation from
 //! there on. Reconciliation is per-target: notification hints and
-//! reconnects drive `GetTargetChanges` journal pages per conversation,
+//! reconnects drive `ListMessageChanges` journal pages per conversation,
 //! `accept_seq` dedupes, and `GetMessages` hydrates bodies. There are no
 //! replay cursors to acknowledge and no checkpoints to advance by hand:
 //! progress is queryable via `target_cursor`/`target_status`/
 //! `tracked_targets`, and `reconcile_now` triggers a reconciliation pass
 //! on demand.
 
+use prost::Message as _;
 use std::sync::Arc;
 
 use crate::{ClientConfigFfi, FfiCursorStore, FfiError};
@@ -145,11 +146,17 @@ pub enum FfiSyncEvent {
         accept_seq: i64,
         error: String,
     },
+    /// Validated ephemeral `tinkle.v1.MessageChanged` protobuf, including original effect expiry.
+    /// Check that deadline again at display time. Never hydrate, persist or replay from this event.
+    ReactionEffect { payload: Vec<u8> },
 }
 
 impl From<libtinkle::SyncEvent> for FfiSyncEvent {
     fn from(e: libtinkle::SyncEvent) -> Self {
         match e {
+            libtinkle::SyncEvent::ReactionEffect(effect) => Self::ReactionEffect {
+                payload: effect.notification.encode_to_vec(),
+            },
             libtinkle::SyncEvent::ConversationChanged {
                 target_key,
                 applied_accept_seq,
@@ -344,37 +351,36 @@ impl TinkleClient {
     /// Returns the server-assigned message id.
     ///
     /// `target_id` must be positive; `target_kind` is `"user"` for direct
-    /// messages, `"room"`/`"chat"` for groups. `random_id` must be nonzero
-    /// (and fit in `i64` — the application operation key for idempotent
-    /// retry). The server response must carry a message with a positive id;
+    /// messages, `"room"`/`"chat"` for groups. `idempotency_key` must be nonzero
+    /// (a signed 64-bit application key for idempotent retry).
+    /// The server response must carry a message with a positive id;
     /// a missing or non-positive id is a codec error, never zero.
     pub async fn send_message(
         &self,
         target_kind: String,
         target_id: i64,
         text: String,
-        random_id: u64,
+        idempotency_key: i64,
     ) -> Result<u64, FfiError> {
         use tinkle_schema::proto::SendMessageRequest;
 
         let target = tinkle_schema::sync::target_from_parts(&target_kind, target_id)
             .map_err(|e| FfiError::Codec(e.to_string()))?;
-        if random_id == 0 {
-            return Err(FfiError::Codec("random_id must be nonzero".to_string()));
-        }
-        let random_id = i64::try_from(random_id)
-            .map_err(|_| FfiError::Codec("random_id out of i64 range".to_string()))?;
-        if random_id <= 0 {
-            return Err(FfiError::Codec("random_id must be nonzero".to_string()));
+        if idempotency_key == 0 {
+            return Err(FfiError::Codec(
+                "idempotency_key must be nonzero".to_string(),
+            ));
         }
         let req = SendMessageRequest {
             target: Some(target),
             message: text,
-            random_id,
+            idempotency_key,
             reply_to: None,
             silent: None,
-            no_forward: None,
+            forwarding_restricted: None,
             clear_draft: None,
+            clear_draft_dialog_id: None,
+            clear_draft_revision: None,
             entities: Vec::new(),
             schedule_date: None,
         };
@@ -544,7 +550,7 @@ impl TinkleClient {
     }
 
     /// List retained conversation mutations strictly after one accept
-    /// position (`GetTargetChanges`).
+    /// position (`ListMessageChanges`).
     ///
     /// `after_accept_seq` is the exclusive lower bound (zero requests
     /// everything retained); `limit` bounds one page (`0` selects the
@@ -555,9 +561,9 @@ impl TinkleClient {
     /// next page from `last_accept_seq`; `Some(false)` confirms caught up;
     /// absent is unknown, never caught up.
     ///
-    /// Returns the encoded `GetTargetChangesResponse` protobuf bytes; hosts
+    /// Returns the encoded `ListMessageChangesResponse` protobuf bytes; hosts
     /// decode with their own generated bindings.
-    pub async fn get_target_changes(
+    pub async fn list_message_changes(
         &self,
         target_kind: String,
         target_id: i64,
@@ -578,7 +584,7 @@ impl TinkleClient {
         }
         let resp = self
             .inner
-            .get_target_changes(target, after_accept_seq, limit)
+            .list_message_changes(target, after_accept_seq, limit)
             .await
             .map_err(FfiError::from)?;
         Ok(resp.encode_to_vec())
@@ -695,7 +701,6 @@ impl TinkleClient {
         file_name: Option<String>,
         mime_type: Option<String>,
         sha256: Option<Vec<u8>>,
-        encrypted: bool,
     ) -> Result<Vec<u8>, FfiError> {
         use prost::Message as _;
         if idempotency_key.is_empty() {
@@ -713,7 +718,6 @@ impl TinkleClient {
             file_name,
             mime_type,
             sha256,
-            encrypted,
         };
         let file = self
             .inner
@@ -786,7 +790,7 @@ impl TinkleClient {
     /// Number of outstanding RPCs on the live connection (zero offline).
     /// Send-state query: a nonzero value after reconnect means results
     /// reported `UNAVAILABLE` with unknown outcome — retry only with the
-    /// same `random_id` and fresh correlation.
+    /// same `idempotency_key` and fresh correlation.
     pub async fn pending_len(&self) -> u64 {
         self.inner.pending_len().await as u64
     }

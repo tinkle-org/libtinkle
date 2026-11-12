@@ -17,8 +17,8 @@ use syntra_runtime::{
 };
 use tinkle_schema::proto::{
     target, ConfirmSessionRequest, ConfirmSessionResponse, GetHistoryRequest, GetHistoryResponse,
-    GetSessionsResponse, GetTargetChangesRequest, GetTargetChangesResponse, KeepAliveRequest,
-    KeepAliveResponse, RevokeSessionRequest, RevokeSessionResponse, Session, TargetChange,
+    GetSessionsResponse, KeepAliveRequest, KeepAliveResponse, ListMessageChangesRequest,
+    ListMessageChangesResponse, RevokeSessionRequest, RevokeSessionResponse, Session, TargetChange,
     TargetChangeKind,
 };
 use tokio::{
@@ -31,6 +31,8 @@ struct Gateway {
     task: tokio::task::JoinHandle<anyhow::Result<()>>,
     stop: CancellationToken,
     log: Arc<Mutex<Value>>,
+    /// Weak transport owners for opt-in presentation delivery; never prolong a closed connection.
+    hosts: Arc<Mutex<Vec<std::sync::Weak<syntra_runtime::Host>>>>,
 }
 
 /// Fixed synthetic key matching the Swift ACTIVE vector, not an account authority store.
@@ -156,6 +158,8 @@ async fn serve_control(control: TcpListener) -> anyhow::Result<()> {
                     json!({"requests": [], "history": [], "admissions": [], "confirmations": [], "revocations": [], "revocation_mutations": 0}),
                 ));
                 let task_log = log.clone();
+                let hosts = Arc::new(Mutex::new(Vec::new()));
+                let task_hosts = hosts.clone();
                 let deletions = request["deletions"].as_array().cloned().unwrap_or_default();
                 let stop = CancellationToken::new();
                 let task_stop = stop.clone();
@@ -181,6 +185,7 @@ async fn serve_control(control: TcpListener) -> anyhow::Result<()> {
                         let deletions = deletions.clone();
                         let sessions = sessions.clone();
                         let stop = task_stop.clone();
+                        let hosts = task_hosts.clone();
                         let security = ServerConfig {
                             mode: if session_review {
                                 Mode::Returning
@@ -280,8 +285,8 @@ async fn serve_control(control: TcpListener) -> anyhow::Result<()> {
                                             };
                                             HandlerOutcome::Payload(KeepAliveResponse { sequence: req.sequence }.encode_to_vec())
                                         }
-                                        "/tinkle.v1.MessagesService/GetTargetChanges" => {
-                                            let Ok(req) = GetTargetChangesRequest::decode(&*payload) else { return HandlerOutcome::error(syntra_core::ErrorCode::InvalidArgument, "bad fixture request") };
+                                        "/tinkle.v1.MessagesService/ListMessageChanges" => {
+                                            let Ok(req) = ListMessageChangesRequest::decode(&*payload) else { return HandlerOutcome::error(syntra_core::ErrorCode::InvalidArgument, "bad fixture request") };
                                             let target_key = key(&req.target);
                                             let (kind, id) = match req.target.and_then(|t| t.kind) {
                                                 Some(target::Kind::UserId(id)) => ("user", id),
@@ -290,8 +295,8 @@ async fn serve_control(control: TcpListener) -> anyhow::Result<()> {
                                             };
                                             log.lock().unwrap()["requests"].as_array_mut().unwrap().push(json!({"target_kind":kind,"target_id":id,"after_accept_seq":req.after_accept_seq}));
                                             let deletion = req.after_accept_seq == 0 && deletions.iter().any(|d| d.as_str() == Some(&target_key));
-                                            HandlerOutcome::Payload(GetTargetChangesResponse {
-                                                changes: if deletion { vec![TargetChange { message_id:101, kind: TargetChangeKind::Deleted as i32, message:None, accept_seq:1 }] } else { vec![] },
+                                            HandlerOutcome::Payload(ListMessageChangesResponse {
+                                                changes: if deletion { vec![TargetChange { message_id:101, kind: TargetChangeKind::Deleted as i32, message:None, accept_seq:1, ..Default::default() }] } else { vec![] },
                                                 more_available: Some(false), last_accept_seq: if deletion {1} else {req.after_accept_seq},
                                             }.encode_to_vec())
                                         }
@@ -316,6 +321,12 @@ async fn serve_control(control: TcpListener) -> anyhow::Result<()> {
                                 accepted = syntra_net::tcp::accept_stream(socket, &security, factory, Arc::new(handler), ConnectionConfig::default(), Default::default()) => accepted,
                             };
                             if let Ok(mut handle) = accepted {
+                                {
+                                    let mut hosts=hosts.lock().unwrap();
+                                    hosts.retain(|h: &std::sync::Weak<syntra_runtime::Host>|h.strong_count()>0);
+                                    // The control hook is a bounded test observation, not server admission.
+                                    if hosts.len()<16 {hosts.push(Arc::downgrade(&handle.host));}
+                                }
                                 while !handle.is_closed() {
                                     tokio::select! {
                                         _ = stop.cancelled() => break,
@@ -343,9 +354,68 @@ async fn serve_control(control: TcpListener) -> anyhow::Result<()> {
                     result
                 });
                 next_id += 1;
-                gateways.insert(next_id, Gateway { task, stop, log });
+                gateways.insert(
+                    next_id,
+                    Gateway {
+                        task,
+                        stop,
+                        log,
+                        hosts,
+                    },
+                );
                 created = Some(next_id);
                 json!({"id": next_id, "port": port, "pin": public})
+            }
+            Some("reaction_effect") => {
+                let Some(gateway) = gateways.get(&request["id"].as_u64().unwrap_or(0)) else {
+                    continue;
+                };
+                let hosts: Vec<_> = gateway
+                    .hosts
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter_map(std::sync::Weak::upgrade)
+                    .collect();
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_secs() as i64;
+                let hint = tinkle_schema::proto::MessageChanged {
+                    target: Some(tinkle_schema::proto::Target {
+                        kind: Some(target::Kind::UserId(7)),
+                    }),
+                    message_id: 11,
+                    body_revision: 3,
+                    change_kind: TargetChangeKind::Reaction as i32,
+                    reaction_effect: Some(tinkle_schema::proto::ReactionEffect {
+                        actor_id: 42,
+                        operation_id: "33333333-3333-4333-8333-333333333333".into(),
+                        expires_at: Some(prost_types::Timestamp {
+                            seconds: now + 4,
+                            nanos: 0,
+                        }),
+                        reactions: vec![tinkle_schema::proto::Reaction {
+                            emoticon: "x".into(),
+                            custom_emoji_id: 77,
+                            asset_version: Some(4),
+                        }],
+                    }),
+                    ..Default::default()
+                };
+                let bytes = prost_types::Any {
+                    type_url: "type.googleapis.com/tinkle.v1.MessageChanged".into(),
+                    value: hint.encode_to_vec(),
+                }
+                .encode_to_vec();
+                let mut notified = 0;
+                for host in hosts {
+                    for _ in 0..2 {
+                        if host.notify(bytes.clone()).await.is_ok() {
+                            notified += 1;
+                        }
+                    }
+                }
+                json!({"notified":notified})
             }
             Some("requests") => gateways
                 .get(&request["id"].as_u64().unwrap_or(0))
@@ -644,6 +714,7 @@ mod tests {
                 task,
                 stop,
                 log: Default::default(),
+                hosts: Default::default(),
             },
         )]);
         let (mut writer, reader) = tokio::io::duplex(1);

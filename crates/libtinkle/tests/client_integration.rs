@@ -1,6 +1,6 @@
 //! Live-gateway integration for the reconciliation contract: handshake,
 //! concurrent RPCs, cancellation, opaque-hint interleaving, reconnect,
-//! journal paging (`GetTargetChanges` + `PageMore` tri-state), `accept_seq`
+//! journal paging (`ListMessageChanges` + `PageMore` tri-state), `accept_seq`
 //! dedup, chunked `GetMessages`, `GetHistory.more_available`, and storage v3
 //! migration. Spins an encrypted native TCP gateway using the published SDK.
 
@@ -20,7 +20,7 @@ use syntra_core::proto::{
 };
 use tinkle_schema::proto::{
     target, ConnectivityChanged, GetHistoryRequest, GetHistoryResponse, GetMessagesRequest,
-    GetMessagesResponse, GetTargetChangesRequest, GetTargetChangesResponse,
+    GetMessagesResponse, ListMessageChangesRequest, ListMessageChangesResponse,
     Message as TinkleMessage, ObserveConnectivityRequest, ObserveConnectivityResponse,
     SendMessageRequest, SendMessageResponse, Target, TargetChange, TargetChangeKind,
 };
@@ -94,6 +94,7 @@ fn journal_message(
         pinned: false,
         ttl_period: 0,
         accept_seq: token,
+        ..Default::default()
     }
 }
 
@@ -105,6 +106,7 @@ fn room7_changes() -> Vec<TargetChange> {
             kind: TargetChangeKind::Edited as i32,
             message: Some(journal_message(10, "m10v1", Some(1), None)),
             accept_seq: 1,
+            ..Default::default()
         },
         TargetChange {
             message_id: 11,
@@ -116,6 +118,7 @@ fn room7_changes() -> Vec<TargetChange> {
                 ..journal_message(11, "m11v1", Some(2), None)
             }),
             accept_seq: 2,
+            ..Default::default()
         },
         // Stable token (1) with fresher edit_date wins over seq 1.
         TargetChange {
@@ -123,18 +126,21 @@ fn room7_changes() -> Vec<TargetChange> {
             kind: TargetChangeKind::Edited as i32,
             message: Some(journal_message(10, "m10v2", Some(1), Some(20))),
             accept_seq: 3,
+            ..Default::default()
         },
         TargetChange {
             message_id: 11,
             kind: TargetChangeKind::Deleted as i32,
             message: None,
             accept_seq: 4,
+            ..Default::default()
         },
         TargetChange {
             message_id: 12,
             kind: TargetChangeKind::Revoked as i32,
             message: None,
             accept_seq: 5,
+            ..Default::default()
         },
     ]
 }
@@ -244,11 +250,13 @@ async fn handle_mock_request(id: u64, req: RpcRequest, log: &MockLog) -> Frame {
             let r = SendMessageRequest::decode(&*req.payload).unwrap_or(SendMessageRequest {
                 target: None,
                 message: String::new(),
-                random_id: 0,
+                idempotency_key: 0,
                 reply_to: None,
                 silent: None,
-                no_forward: None,
+                forwarding_restricted: None,
                 clear_draft: None,
+                clear_draft_dialog_id: None,
+                clear_draft_revision: None,
                 entities: vec![],
                 schedule_date: None,
             });
@@ -267,6 +275,7 @@ async fn handle_mock_request(id: u64, req: RpcRequest, log: &MockLog) -> Frame {
                 pinned: false,
                 ttl_period: 0,
                 accept_seq: Some(100),
+                ..Default::default()
             };
             let resp = SendMessageResponse {
                 message: Some(msg),
@@ -301,13 +310,14 @@ async fn handle_mock_request(id: u64, req: RpcRequest, log: &MockLog) -> Frame {
                 outcome: Some(Outcome::Payload(b)),
             }
         }
-        "/tinkle.v1.MessagesService/GetTargetChanges" => {
-            let r =
-                GetTargetChangesRequest::decode(&*req.payload).unwrap_or(GetTargetChangesRequest {
+        "/tinkle.v1.MessagesService/ListMessageChanges" => {
+            let r = ListMessageChangesRequest::decode(&*req.payload).unwrap_or(
+                ListMessageChangesRequest {
                     target: None,
                     after_accept_seq: 0,
                     limit: 0,
-                });
+                },
+            );
             let key = target_key_of(&r.target);
             log.target_changes
                 .lock()
@@ -391,7 +401,7 @@ async fn handle_mock_request(id: u64, req: RpcRequest, log: &MockLog) -> Frame {
     }
 }
 
-fn mock_target_changes(key: &str, after: i64, limit: i32) -> GetTargetChangesResponse {
+fn mock_target_changes(key: &str, after: i64, limit: i32) -> ListMessageChangesResponse {
     if key == "target:room:7" {
         let all = room7_changes();
         let mut out = Vec::new();
@@ -410,7 +420,7 @@ fn mock_target_changes(key: &str, after: i64, limit: i32) -> GetTargetChangesRes
         } else {
             Some(false)
         };
-        return GetTargetChangesResponse {
+        return ListMessageChangesResponse {
             changes: out,
             more_available: more,
             last_accept_seq: last,
@@ -419,13 +429,13 @@ fn mock_target_changes(key: &str, after: i64, limit: i32) -> GetTargetChangesRes
     if key == "target:room:8" {
         // Unknown continuation: one change, no report.
         if after >= 1 {
-            return GetTargetChangesResponse {
+            return ListMessageChangesResponse {
                 changes: vec![],
                 more_available: None,
                 last_accept_seq: after,
             };
         }
-        return GetTargetChangesResponse {
+        return ListMessageChangesResponse {
             changes: vec![TargetChange {
                 message_id: 20,
                 kind: TargetChangeKind::Edited as i32,
@@ -440,6 +450,7 @@ fn mock_target_changes(key: &str, after: i64, limit: i32) -> GetTargetChangesRes
                     ..Default::default()
                 }),
                 accept_seq: 1,
+                ..Default::default()
             }],
             more_available: None,
             last_accept_seq: 1,
@@ -448,13 +459,13 @@ fn mock_target_changes(key: &str, after: i64, limit: i32) -> GetTargetChangesRes
     if key == "target:room:9" {
         // Retention skip: journal starts at 10, caller at 0 must heal via history.
         if after >= 10 {
-            return GetTargetChangesResponse {
+            return ListMessageChangesResponse {
                 changes: vec![],
                 more_available: Some(false),
                 last_accept_seq: after,
             };
         }
-        return GetTargetChangesResponse {
+        return ListMessageChangesResponse {
             changes: vec![TargetChange {
                 message_id: 30,
                 kind: TargetChangeKind::Edited as i32,
@@ -469,6 +480,7 @@ fn mock_target_changes(key: &str, after: i64, limit: i32) -> GetTargetChangesRes
                     ..Default::default()
                 }),
                 accept_seq: 10,
+                ..Default::default()
             }],
             more_available: Some(false),
             last_accept_seq: 10,
@@ -478,7 +490,7 @@ fn mock_target_changes(key: &str, after: i64, limit: i32) -> GetTargetChangesRes
         // New-message room: journal is empty (edits/removals only, no new
         // messages disclosed here). Catch-up must discover bodies via
         // history + GetMessages.
-        return GetTargetChangesResponse {
+        return ListMessageChangesResponse {
             changes: vec![],
             more_available: Some(false),
             last_accept_seq: after,
@@ -489,18 +501,19 @@ fn mock_target_changes(key: &str, after: i64, limit: i32) -> GetTargetChangesRes
         // returns 50 (stale snapshot race). Catch-up must not resurrect it
         // even though GetMessages (race) returns the body.
         if after >= 1 {
-            return GetTargetChangesResponse {
+            return ListMessageChangesResponse {
                 changes: vec![],
                 more_available: Some(false),
                 last_accept_seq: after,
             };
         }
-        return GetTargetChangesResponse {
+        return ListMessageChangesResponse {
             changes: vec![TargetChange {
                 message_id: 50,
                 kind: TargetChangeKind::Deleted as i32,
                 message: None,
                 accept_seq: 1,
+                ..Default::default()
             }],
             more_available: Some(false),
             last_accept_seq: 1,
@@ -509,7 +522,7 @@ fn mock_target_changes(key: &str, after: i64, limit: i32) -> GetTargetChangesRes
     if key == "target:room:12" {
         // Omission gate: history returns 60, but GetMessages omits it
         // (deleted/invisible). Catch-up must not ingest omitted ids.
-        return GetTargetChangesResponse {
+        return ListMessageChangesResponse {
             changes: vec![],
             more_available: Some(false),
             last_accept_seq: after,
@@ -527,13 +540,13 @@ fn mock_target_changes(key: &str, after: i64, limit: i32) -> GetTargetChangesRes
         // Paged catch-up rooms: journal discloses edits/removals only, so
         // the journal here is empty (cursor 0, no changes). The run
         // proceeds to history catch-up.
-        return GetTargetChangesResponse {
+        return ListMessageChangesResponse {
             changes: vec![],
             more_available: Some(false),
             last_accept_seq: after,
         };
     }
-    GetTargetChangesResponse {
+    ListMessageChangesResponse {
         changes: vec![],
         more_available: Some(false),
         last_accept_seq: after,
@@ -1278,11 +1291,13 @@ async fn handshake_and_send_message() {
             kind: Some(target::Kind::UserId(7)),
         }),
         message: "hello tinkle".into(),
-        random_id: 12345,
+        idempotency_key: 12345,
         reply_to: None,
         silent: None,
-        no_forward: None,
+        forwarding_restricted: None,
         clear_draft: None,
+        clear_draft_dialog_id: None,
+        clear_draft_revision: None,
         entities: vec![],
         schedule_date: None,
     };
@@ -1469,7 +1484,7 @@ async fn subscribe_tracks_and_reconciles_journal() {
     }
     assert!(saw_conv, "ConversationChanged to 5 must surface");
     assert!(saw_msgs, "MessagesChanged must surface");
-    // Paging went through GetTargetChanges from the journal cursor.
+    // Paging went through ListMessageChanges from the journal cursor.
     let reads = log.target_changes.lock().unwrap().clone();
     assert!(!reads.is_empty());
     assert_eq!(reads[0].0, "target:room:7");
@@ -1492,23 +1507,23 @@ async fn journal_paging_follows_yes_until_no() {
         .collect();
     assert!(
         !room_reads.is_empty(),
-        "expected GetTargetChanges pages, got {reads:?}"
+        "expected ListMessageChanges pages, got {reads:?}"
     );
     // First page starts at the journal cursor with limit 500.
     assert_eq!(room_reads[0].1, 0);
     assert_eq!(room_reads[0].2, 500);
     // A small limit splits the 5-change journal into Yes,Yes,No pages.
-    let p1 = c.get_target_changes(room_target(7), 0, 2).await.unwrap();
+    let p1 = c.list_message_changes(room_target(7), 0, 2).await.unwrap();
     assert_eq!(p1.changes.len(), 2);
     assert_eq!(p1.more_available, Some(true));
     let p2 = c
-        .get_target_changes(room_target(7), p1.last_accept_seq, 2)
+        .list_message_changes(room_target(7), p1.last_accept_seq, 2)
         .await
         .unwrap();
     assert_eq!(p2.changes.len(), 2);
     assert_eq!(p2.more_available, Some(true));
     let p3 = c
-        .get_target_changes(room_target(7), p2.last_accept_seq, 2)
+        .list_message_changes(room_target(7), p2.last_accept_seq, 2)
         .await
         .unwrap();
     assert_eq!(p3.changes.len(), 1);
@@ -1521,7 +1536,7 @@ async fn journal_paging_follows_yes_until_no() {
             .filter(|(k, _, _)| k == "target:room:7")
             .count()
             >= 3,
-        "expected ≥3 GetTargetChanges calls, got {room_reads:?}"
+        "expected ≥3 ListMessageChanges calls, got {room_reads:?}"
     );
     c.close().await;
 }
@@ -1609,11 +1624,14 @@ async fn get_messages_chunks_to_100() {
 }
 
 #[tokio::test]
-async fn get_target_changes_validates_pages() {
+async fn list_message_changes_validates_pages() {
     let addr = start_mock().await;
     let c = test_client(addr);
     c.connect().await.unwrap();
-    let resp = c.get_target_changes(room_target(7), 0, 500).await.unwrap();
+    let resp = c
+        .list_message_changes(room_target(7), 0, 500)
+        .await
+        .unwrap();
     let page = tinkle_schema::sync::validate_changes_page(0, &resp).unwrap();
     assert_eq!(page.changes.len(), 5);
     assert_eq!(page.last_accept_seq, 5);

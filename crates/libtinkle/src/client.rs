@@ -12,7 +12,7 @@
 //! The SDK serializes the public request protobuf, constructs the Syntra
 //! `RpcRequest`, allocates a nonzero `request_id`, sends through the
 //! active connection, awaits the matching `RpcResult`, decodes the typed
-//! response, and returns typed errors. Journal paging (`GetTargetChanges`)
+//! response, and returns typed errors. Journal paging (`ListMessageChanges`)
 //! and body fetches (`GetMessages`) run over the same encrypted TCP connection;
 //! ongoing delivery
 //! is opaque `Notification` hints that kick per-target reconciliation.
@@ -40,7 +40,7 @@ use crate::cursor::CursorStore;
 use crate::errors::{RecoveryDecision, TinkleError};
 use crate::liveness::{AbortTask, ClientOwner, LiveGeneration, LivenessTask};
 use crate::reconnect::should_retry;
-use crate::services::{Account, Auth, Files, Messages, Updates};
+use crate::services::{Account, Auth, Files, Messages, Stickers, Updates, Users};
 use crate::sync::{ReconcileStatus, RecoverySignal, SyncEvent, SyncManager, UNKNOWN_PRINCIPAL};
 
 struct Live {
@@ -252,6 +252,28 @@ pub(crate) struct IngestBatch<'a> {
     pub exclude: &'a HashSet<i64>,
 }
 
+/// Original application and durable cache scope of a read. Never recapture after receiving data.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct MessageIngestFence {
+    cache: tinkle_storage::MessageCacheFence,
+    authority: crate::authorization::EnrollmentEpoch,
+    epoch: u64,
+    source_revision: u64,
+}
+#[cfg(not(target_arch = "wasm32"))]
+impl MessageIngestFence {
+    /// Check account/source ABA fences independently of the storage transaction's scope proof.
+    fn check(&self, client: &Client) -> Result<(), TinkleError> {
+        self.authority.check(client)?;
+        if self.epoch != client.reconcile_epoch()
+            || self.source_revision != client.retirement.revision()
+        {
+            return Err(TinkleError::Sync("message request scope changed".into()));
+        }
+        Ok(())
+    }
+}
+
 /// Grouped scope inputs for one fenced catch-up commit (clippy
 /// `too_many_arguments`: fence fields travel together).
 #[cfg(not(target_arch = "wasm32"))]
@@ -263,12 +285,142 @@ struct CatchupCommitCtx<'a> {
     epoch: u64,
 }
 
+#[cfg(test)]
+mod sending_scope_capture_regressions {
+    use super::*;
+    use crate::ClientInfo;
+
+    /// Pause A->B after its epoch bump while A is still readable. Freeze each public sending
+    /// capture at trust lookup, then finish B. No result or artifact may use that mixed snapshot.
+    #[tokio::test]
+    async fn half_switched_sending_capture_rejects_manifest_prepare_and_adoption() {
+        let info = ClientInfo::new(
+            "fixture".into(),
+            "test".into(),
+            "1".into(),
+            "1".into(),
+            "1".into(),
+            Default::default(),
+        )
+        .unwrap();
+        let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
+        let client = Client::new_sqlite(
+            ClientConfig::new("127.0.0.1", info),
+            TrustSource::Bootstrap(crate::ServerTrust {
+                server_public_key: [7; 32],
+                server_key_id: 7,
+                scope: "scope-capture-test".into(),
+            }),
+            storage.clone(),
+        );
+        client.set_principal_user_id(1).await;
+        let source = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(source.path(), b"owned inert artifact").unwrap();
+        let initial = client
+            .sending()
+            .prepare_attachment(
+                "existing".into(),
+                source.path(),
+                crate::media::MediaKind::Document,
+                None,
+            )
+            .await;
+        assert!(initial.is_err());
+        assert!(client
+            .sending()
+            .attachment_manifest("existing".into())
+            .await
+            .unwrap()
+            .is_some());
+        // Adoption must fail on scope before these inert test facts could authorize publication.
+        let main =
+            crate::media::prepare_path(source.path(), crate::media::MediaKind::Document, None)
+                .await
+                .unwrap();
+        let artifact = crate::media::NativePreparedMedia {
+            main,
+            kind: crate::media::NativeMediaKind::Image,
+            output: crate::media::NativeMediaOutput {
+                width: 1,
+                height: 1,
+                frame_count: 1,
+                duration_ms: 0,
+                audio_channels: 0,
+                audio_sample_rate: 0,
+                audio_samples: 0,
+                waveform: vec![],
+            },
+        };
+        let pause = client.catchup_pending.lock().await;
+        let trust = client.trust_source.write().await;
+        let old_epoch = client.reconcile_epoch();
+        let switcher = client.clone();
+        let switch = tokio::spawn(async move {
+            switcher.set_principal_user_id(2).await;
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while client.reconcile_epoch() == old_epoch {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(client.principal().await, "user:1");
+        let sending = client.sending();
+        let read = sending.attachment_manifest("existing".into());
+        let prepare = sending.prepare_attachment(
+            "existing".into(),
+            source.path(),
+            crate::media::MediaKind::Document,
+            None,
+        );
+        let adopt = sending.adopt_native_attachment("new".into(), source.path(), artifact, None);
+        tokio::pin!(read, prepare, adopt);
+        assert!(futures_util::poll!(&mut read).is_pending());
+        assert!(futures_util::poll!(&mut prepare).is_pending());
+        assert!(futures_util::poll!(&mut adopt).is_pending());
+        drop(pause);
+        switch.await.unwrap();
+        assert_eq!(client.principal().await, "user:2");
+        drop(trust);
+        let read = read.await;
+        let prepare = prepare.await;
+        let adopt = adopt.await;
+        assert!(
+            matches!(read, Err(crate::SendError::ScopeChanged)),
+            "A manifest leaked: {read:?}"
+        );
+        assert!(
+            matches!(prepare, Err(crate::SendError::ScopeChanged)),
+            "{prepare:?}"
+        );
+        assert!(
+            matches!(adopt, Err(crate::SendError::ScopeChanged)),
+            "{adopt:?}"
+        );
+        assert_eq!(
+            storage.list_file_transfers("user:1", None).unwrap().len(),
+            1
+        );
+        assert!(storage
+            .list_file_transfers("user:2", None)
+            .unwrap()
+            .is_empty());
+        assert!(!client.is_connected().await);
+        client.close().await;
+        storage.clear_principal("user:1").unwrap();
+    }
+}
+
 /// Typed Tinkle client over encrypted native Syntra TCP.
 ///
 /// Cheap to clone (shares connection + cursors). The same logical runtime
 /// is reusable across native iOS/Android via thin platform adapters.
 #[derive(Clone)]
 pub struct Client {
+    /// Bounded expiring backend-pinned Search continuations, shared only by this Client's clones.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) search_continuations: Arc<std::sync::Mutex<crate::cache_search::Continuations>>,
     /// Serialized, retained account projection shared by every producer and client clone.
     pub(crate) session_state: Arc<crate::session::SessionCoordinator>,
     pub(crate) authorization: Arc<crate::authorization::Authorization>,
@@ -290,12 +442,32 @@ pub struct Client {
     lifetime: CancelToken,
     /// Heartbeats and reconnect restoration address only their captured generation.
     call_generation: Option<Arc<LiveGeneration>>,
+    /// Optional application-operation fence; reconnect cannot move a prepared send to a new source.
+    #[cfg(not(target_arch = "wasm32"))]
+    application_fence: Option<(u64, u64)>,
+    /// Host-owned native video decoder; operations snapshot the Arc without holding this lock.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) video_decoder:
+        Arc<std::sync::RwLock<Option<Arc<dyn crate::media::PlatformVideoDecoder>>>>,
+    /// Host encoder without a client back-reference; each invocation retains its selected owner.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) media_preparer:
+        Arc<std::sync::RwLock<Option<Arc<dyn crate::media::PlatformMediaPreparer>>>>,
+    /// Ephemeral actor/operation dedup shared across same-account reconnects, never persisted.
+    #[cfg(not(target_arch = "wasm32"))]
+    reaction_effects: Arc<std::sync::Mutex<crate::effects::ReactionEffects>>,
     config: ClientConfig,
     pub(crate) trust_source: Arc<RwLock<TrustSource>>,
     pub(crate) enrollment_lock: Arc<tokio::sync::Mutex<()>>,
     store: Arc<dyn CursorStore>,
     #[cfg(not(target_arch = "wasm32"))]
     sqlite: Option<Arc<tinkle_storage::Storage>>,
+    /// Retain the terminal download group without a Client-to-manager ownership cycle.
+    #[cfg(not(target_arch = "wasm32"))]
+    downloads: Arc<std::sync::Mutex<Option<crate::DownloadManager>>>,
+    /// Single-flight job admission across clones; durable CAS additionally fences other processes.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) outgoing_active: Arc<std::sync::Mutex<HashSet<String>>>,
     live: Arc<RwLock<Option<Live>>>,
     /// Retain task owners across cancellation of an in-progress teardown, so a
     /// later stop/reconnect can still join every retired liveness task.
@@ -326,7 +498,7 @@ pub struct Client {
     /// drain the gate before wiping/changing scope, including when no live
     /// manager remains to fence pending work.
     #[cfg(not(target_arch = "wasm32"))]
-    checkpoint_save: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) checkpoint_save: Arc<tokio::sync::Mutex<()>>,
     /// Client-level reconcile epoch, shared by every `SyncManager`
     /// instance (a fresh one is built per connection). Bumped on logout
     /// and principal change; commits capture it at run start and re-check
@@ -569,6 +741,21 @@ impl Client {
     pub(crate) fn begin_signed_out(&self, reason: crate::SessionSignOutReason) {
         self.close_provisioning_admission();
         self.authorization.sign_out(reason);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let decoder = self
+                .video_decoder
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
+            drop(decoder);
+            let preparer = self
+                .media_preparer
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
+            drop(preparer);
+        }
         self.suspended.store(true, Ordering::SeqCst);
         #[cfg(not(target_arch = "wasm32"))]
         self.reconcile_epoch.fetch_add(1, Ordering::SeqCst);
@@ -658,6 +845,29 @@ impl Client {
         caller
     }
 
+    /// Preserve the originating principal/source through nested transfer callers.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn for_application_scope(&self, epoch: u64, revision: u64) -> Self {
+        let mut caller = self.background_clone();
+        caller.application_fence = Some((epoch, revision));
+        caller
+    }
+
+    /// Capture the inherited operation fence, never refresh it after a principal/source switch.
+    /// Transfer capture/commit must call this before any durable write; later calls revalidate it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn transfer_application_fence(&self) -> Result<(u64, u64), TinkleError> {
+        self.authorization.generation()?;
+        let current = (self.reconcile_epoch(), self.retirement.revision());
+        let expected = self.application_fence.unwrap_or(current);
+        if expected != current {
+            return Err(TinkleError::Sync(
+                "application operation scope changed".into(),
+            ));
+        }
+        Ok(expected)
+    }
+
     /// Capture exactly the active Returning generation for single-attempt account mutations.
     pub(crate) fn session_generation(&self) -> Result<Arc<LiveGeneration>, TinkleError> {
         self.authorization.generation()?;
@@ -735,6 +945,8 @@ impl Client {
         let owner = Arc::new(ClientOwner::default());
         let lifetime = owner.gone.clone();
         Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            search_continuations: Default::default(),
             session_state: session_state.clone(),
             authorization,
             #[cfg(not(target_arch = "wasm32"))]
@@ -747,12 +959,22 @@ impl Client {
             owner,
             lifetime,
             call_generation: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            application_fence: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            video_decoder: Arc::new(std::sync::RwLock::new(None)),
+            media_preparer: Arc::new(std::sync::RwLock::new(None)),
+            reaction_effects: Default::default(),
             config,
             trust_source: Arc::new(RwLock::new(trust_source)),
             enrollment_lock: Arc::new(tokio::sync::Mutex::new(())),
             store,
             #[cfg(not(target_arch = "wasm32"))]
             sqlite: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            downloads: Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(not(target_arch = "wasm32"))]
+            outgoing_active: Arc::new(std::sync::Mutex::new(HashSet::new())),
             live: Arc::new(RwLock::new(None)),
             retiring: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             principal: Arc::new(RwLock::new(UNKNOWN_PRINCIPAL.to_string())),
@@ -794,6 +1016,7 @@ impl Client {
         let owner = Arc::new(ClientOwner::default());
         let lifetime = owner.gone.clone();
         Self {
+            search_continuations: Default::default(),
             session_state: session_state.clone(),
             authorization,
             logout_cleanup: Arc::new(crate::logout::LogoutCleanup::default()),
@@ -804,11 +1027,17 @@ impl Client {
             owner,
             lifetime,
             call_generation: None,
+            application_fence: None,
+            video_decoder: Arc::new(std::sync::RwLock::new(None)),
+            media_preparer: Arc::new(std::sync::RwLock::new(None)),
+            reaction_effects: Default::default(),
             config,
             trust_source: Arc::new(RwLock::new(trust_source)),
             enrollment_lock: Arc::new(tokio::sync::Mutex::new(())),
             store,
             sqlite: Some(storage),
+            downloads: Arc::new(std::sync::Mutex::new(None)),
+            outgoing_active: Arc::new(std::sync::Mutex::new(HashSet::new())),
             live: Arc::new(RwLock::new(None)),
             retiring: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             principal: Arc::new(RwLock::new(UNKNOWN_PRINCIPAL.to_string())),
@@ -924,11 +1153,10 @@ impl Client {
         // reading the current principal — and `changed` is computed under
         // it, so the check cannot race another principal writer and no
         // ingest can slip between the check and the epoch invalidation.
-        // From here through both principal writes, an in-flight ingest
-        // either completes before the switch or fails the epoch check: it
-        // can never observe the new epoch with the old principal. The
-        // guard releases after `self.principal` and `set_principal` have
-        // both landed. Epoch bump and demand clear stay changed-only.
+        // A capture outside this exclusion can observe the new epoch before the awaited
+        // principal write. Commit/read workers must compare the actual principal under
+        // this guard as well as retaining epoch/ABA checks. The guard releases only after
+        // both principal writes land. Epoch bump and demand clear stay changed-only.
         #[cfg(not(target_arch = "wasm32"))]
         let _client_guard = self.checkpoint_save.lock().await;
         if self.authorization.is_signed_out() {
@@ -1042,6 +1270,8 @@ impl Client {
     /// cleanup nor after it.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) async fn reset_session_for_logout(&self) {
+        // Protected-store invalidation precedes this disk-worker join; no dial gate is held.
+        self.download_manager().shutdown().await;
         let _connection = self.connect_lock.lock().await;
         self.sup_state.lock().await.reconnect_blocked = true;
         self.teardown_connection().await;
@@ -1080,6 +1310,7 @@ impl Client {
     /// called from the push module's `logout` instead of wiping inline.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) async fn logout_wipe_and_reset(&self, principal: &str) -> Result<(), TinkleError> {
+        self.download_manager().shutdown().await;
         let _connection = self.connect_lock.lock().await;
         self.sup_state.lock().await.reconnect_blocked = true;
         self.teardown_connection().await;
@@ -1146,6 +1377,8 @@ impl Client {
         authorization: &crate::authorization::EnrollmentEpoch,
     ) -> Result<(), TinkleError> {
         self.check_provisioning_context()?;
+        #[cfg(not(target_arch = "wasm32"))]
+        self.transfer_application_fence()?;
         self.check_provisioning_admission()?;
         if self.active_provisioning_child() {
             return Err(TinkleError::NotConnected(
@@ -1241,7 +1474,7 @@ impl Client {
         let generation = LiveGeneration::new(returning, self.retirement.revision());
 
         let principal = self.principal.read().await.clone();
-        let sync_mgr = SyncManager::new(principal);
+        let sync_mgr = SyncManager::new(principal.clone());
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(sqlite) = self.sqlite.clone() {
             sync_mgr.set_sqlite_storage(sqlite).await;
@@ -1265,9 +1498,47 @@ impl Client {
         let pump_ok = self.transport_ok.clone();
         let pump_generation = generation.clone();
         let pump_state = self.session_state.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        let effects = self.reaction_effects.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        let effect_epoch = self.reconcile_epoch();
+        #[cfg(not(target_arch = "wasm32"))]
+        let current_epoch = self.reconcile_epoch.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        let effect_retirement = self.retirement.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        let effect_authority = self.authorization.clone();
         let pump = AbortTask::new(tokio::spawn(async move {
             while let Some(payload) = pump_conn.next_notification().await {
                 match tinkle_schema::sync::notification(&payload) {
+                    Ok(tinkle_schema::sync::Notification::MessageChanged(notification)) => {
+                        // Reconciliation is independent of effect validity, expiry, dedup or queue pressure.
+                        pump_mgr.handle_hint(&payload).await;
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if pump_generation.returning && principal != UNKNOWN_PRINCIPAL {
+                            let event = {
+                                let mut cache = effects.lock().unwrap_or_else(|e| e.into_inner());
+                                if current_epoch.load(Ordering::SeqCst) == effect_epoch
+                                    && effect_retirement.revision()
+                                        == pump_generation.source_revision
+                                    && pump_generation.open.load(Ordering::SeqCst)
+                                    && !effect_authority.is_signed_out()
+                                {
+                                    cache.admit(
+                                        notification,
+                                        &principal,
+                                        effect_epoch,
+                                        pump_generation.source_revision,
+                                    )
+                                } else {
+                                    None
+                                }
+                            };
+                            if let Some(event) = event {
+                                pump_mgr.emit_event(SyncEvent::ReactionEffect(event)).await;
+                            }
+                        }
+                    }
                     Ok(tinkle_schema::sync::Notification::Connectivity(obs)) => {
                         pump_mgr.emit_connectivity(obs).await;
                     }
@@ -1556,6 +1827,27 @@ impl Client {
         self.check_call_admission_progress(method, None)
     }
 
+    /// Cache fallback cannot bypass restoration, provisioning, trust or account admission.
+    /// Check the actual principal as well as epochs: a principal writer can already have
+    /// bumped its epoch before yielding on retained work and finally replacing the value.
+    pub(crate) fn search_admission(&self, principal: &str) -> Result<(), TinkleError> {
+        self.check_call_admission(tinkle_schema::methods::messagesservice::SEARCH)?;
+        self.config.validate()?;
+        let current = self
+            .principal
+            .try_read()
+            .map_err(|_| TinkleError::Sync("search principal is changing".into()))?;
+        if current.as_str() != principal {
+            return Err(TinkleError::Sync("search principal changed".into()));
+        }
+        let source = self
+            .trust_source
+            .try_read()
+            .map_err(|_| TinkleError::Sync("search source is changing".into()))?;
+        source.security()?;
+        Ok(())
+    }
+
     /// Mark restoration-only deferral separately from trust, sign-out, and transport failures.
     fn check_call_admission_progress(
         &self,
@@ -1563,6 +1855,14 @@ impl Client {
         progress: Option<&CallProgress>,
     ) -> Result<(), TinkleError> {
         self.check_provisioning_context()?;
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.application_fence.is_some_and(|(epoch, revision)| {
+            epoch != self.reconcile_epoch() || revision != self.retirement.revision()
+        }) {
+            return Err(TinkleError::Sync(
+                "application operation scope changed".into(),
+            ));
+        }
         self.check_provisioning_admission()?;
         if self.endpoint_rejected.load(Ordering::SeqCst) {
             return Err(TinkleError::TrustRejected);
@@ -1854,6 +2154,22 @@ impl Client {
         Messages::new(self)
     }
 
+    /// Privacy-filtered batch and complete profile reads; no implicit cache overwrite.
+    pub fn users(&self) -> Users<'_> {
+        Users::new(self)
+    }
+
+    /// Sticker/custom-emoji catalog and owner authoring through this client's channel.
+    pub fn stickers(&self) -> Stickers<'_> {
+        Stickers::new(self)
+    }
+
+    /// Durable keyed sending; requires the native SQLite store at enqueue/dispatch time.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn sending(&self) -> crate::sending::Sending<'_> {
+        crate::sending::Sending::new(self)
+    }
+
     /// Bind enrollment operations to this client's protected-store coordinator.
     pub fn auth(&self) -> Auth<'_> {
         Auth::new(self)
@@ -1897,6 +2213,20 @@ impl Client {
     /// Rust-owned download manager (`GetFileInfo` → `DownloadPart` ranges
     /// with size + SHA-256 verify and atomic publish).
     pub fn download_manager(&self) -> crate::files::DownloadManager {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut slot = self.downloads.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(manager) = slot.as_ref() {
+                return manager.clone();
+            }
+            let mut caller = self.clone();
+            // The retained manager may share all lifecycle state except this owning slot.
+            caller.downloads = Arc::new(std::sync::Mutex::new(None));
+            let manager = crate::files::DownloadManager::new(caller);
+            *slot = Some(manager.clone());
+            manager
+        }
+        #[cfg(target_arch = "wasm32")]
         crate::files::DownloadManager::new(self.clone())
     }
 
@@ -1977,12 +2307,12 @@ impl Client {
 
     /// List retained mutations strictly after one accept position.
     /// Uses the active Syntra connection.
-    pub async fn get_target_changes(
+    pub async fn list_message_changes(
         &self,
         target: tinkle_schema::proto::Target,
         after_accept_seq: i64,
         limit: i32,
-    ) -> Result<tinkle_schema::proto::GetTargetChangesResponse, TinkleError> {
+    ) -> Result<tinkle_schema::proto::ListMessageChangesResponse, TinkleError> {
         if target.kind.is_none() {
             return Err(TinkleError::Codec("target kind missing".into()));
         }
@@ -1996,12 +2326,12 @@ impl Client {
         } else {
             limit.clamp(1, tinkle_schema::sync::MAX_TARGET_CHANGES_LIMIT)
         };
-        let req = tinkle_schema::proto::GetTargetChangesRequest {
+        let req = tinkle_schema::proto::ListMessageChangesRequest {
             target: Some(target),
             after_accept_seq,
             limit,
         };
-        self.messages().get_target_changes(req).await
+        self.messages().list_message_changes(req).await
     }
 
     /// Begin an upload over the active Syntra connection. Input validation
@@ -2061,7 +2391,7 @@ impl Client {
         self.files().download_part(req).await
     }
 
-    /// Reconcile one conversation: page `GetTargetChanges` from its journal
+    /// Reconcile one conversation: page `ListMessageChanges` from its journal
     /// cursor, validate each page, hydrate edited bodies via chunked
     /// `GetMessages`, project via `cache_projector`, and atomically commit
     /// via `apply_journal_page_fenced`. Returns the applied-change count.
@@ -2130,6 +2460,15 @@ impl Client {
         target: tinkle_schema::proto::Target,
     ) -> Result<u64, TinkleError> {
         let run_epoch = self.reconcile_epoch();
+        #[cfg(not(target_arch = "wasm32"))]
+        let cache_scope = if self.sqlite.is_some() {
+            Some(
+                self.capture_message_scope(fence_principal, target_key)
+                    .await?,
+            )
+        } else {
+            None
+        };
         let mut after: i64 = self
             .store
             .load_journal(fence_principal, target_key)
@@ -2150,7 +2489,7 @@ impl Client {
             let mut attempt = 0u32;
             let resp = loop {
                 match self
-                    .get_target_changes(
+                    .list_message_changes(
                         target,
                         after,
                         tinkle_schema::sync::MAX_TARGET_CHANGES_LIMIT,
@@ -2173,7 +2512,7 @@ impl Client {
             };
             let page = tinkle_schema::sync::validate_changes_page(after, &resp)
                 .map_err(TinkleError::SyncError)?;
-            if page.changes.is_empty() {
+            if page.changes.is_empty() && page.last_accept_seq == after {
                 match page.more {
                     tinkle_schema::sync::PageMore::No => break,
                     tinkle_schema::sync::PageMore::Unknown if !unknown_repage_done => {
@@ -2234,13 +2573,20 @@ impl Client {
             let new_cursor = page.last_accept_seq;
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(sqlite) = mgr.sqlite_clone().await {
-                let shards: Vec<&[tinkle_schema::proto::TargetChange]> =
-                    page.changes.chunks(JOURNAL_COMMIT_CHANGE_BUDGET).collect();
-                for chunk in shards {
-                    let Some(last) = chunk.last() else {
-                        continue;
+                let shards: Vec<&[tinkle_schema::proto::TargetChange]> = if page.changes.is_empty()
+                {
+                    vec![&[]]
+                } else {
+                    page.changes.chunks(JOURNAL_COMMIT_CHANGE_BUDGET).collect()
+                };
+                for (index, chunk) in shards.iter().enumerate() {
+                    // Only the final shard owns the server's processed horizon,
+                    // including settled positions hidden by privacy/retention.
+                    let shard_cursor = if index + 1 == shards.len() {
+                        new_cursor
+                    } else {
+                        chunk.last().map_or(after, |last| last.accept_seq)
                     };
-                    let shard_cursor = last.accept_seq;
                     let sub_page = tinkle_schema::sync::ValidatedChangesPage {
                         changes: chunk.to_vec(),
                         last_accept_seq: shard_cursor,
@@ -2264,32 +2610,25 @@ impl Client {
                             "reconcile epoch changed for {target_key}; dropping stale pages"
                         )));
                     }
-                    let gen = {
-                        let sqlite_task = sqlite.clone();
-                        let p = fence_principal.to_string();
-                        let t = target_key.to_string();
-                        tokio::task::spawn_blocking(move || sqlite_task.stream_state(&p, &t))
-                            .await
-                            .map_err(|e| {
-                                TinkleError::CursorStore(format!("stream_state task failed: {e}"))
-                            })?
-                            .map_err(|e| TinkleError::CursorStore(e.to_string()))?
-                            .generation
-                    };
+                    let scope = cache_scope
+                        .as_ref()
+                        .ok_or_else(|| TinkleError::Sync("journal cache scope missing".into()))?;
+                    scope.check(self)?;
                     let apply = {
                         let sqlite_task = sqlite.clone();
                         let p = fence_principal.to_string();
                         let t = target_key.to_string();
                         let ops_task = ops;
                         let commit_guard = _commit_guard.clone();
+                        let cache_fence = scope.cache.clone();
                         tokio::task::spawn_blocking(move || {
                             let _guard = commit_guard;
-                            sqlite_task.apply_journal_page_fenced(
+                            sqlite_task.apply_journal_page_with_scope(
                                 &p,
                                 &t,
                                 &ops_task,
                                 shard_cursor,
-                                gen,
+                                &cache_fence,
                             )
                         })
                         .await
@@ -2300,7 +2639,9 @@ impl Client {
                     if let Err(e) = apply {
                         use tinkle_storage::StorageError as SE;
                         match &e {
-                            SE::GenerationMismatch { .. } | SE::ScopeMismatch { .. } => {
+                            SE::GenerationMismatch { .. }
+                            | SE::ScopeMismatch { .. }
+                            | SE::CacheScopeChanged => {
                                 return Err(TinkleError::Sync(e.to_string()));
                             }
                             _ => {
@@ -2443,21 +2784,9 @@ impl Client {
         Ok(applied)
     }
 
-    /// Shared message ingest: project bodies via `cache_projector` and
-    /// commit without moving the journal cursor (same-cursor commit).
-    ///
-    /// Used by the history HydrateCache path (`load_history`), the
-    /// new-message catch-up (`reconcile_new_messages`), and the future push
-    /// path. Freshness (`accept_seq` / `edit_date`) travels on the row and
-    /// is enforced by storage dedup; users/chats commit with scoped
-    /// provenance in the same fenced transaction. Message ids in `exclude`
-    /// (deletions from the same run) are never ingested, and existence is
-    /// re-checked against the cache immediately before commit so a delayed
-    /// fetch cannot resurrect a deleted row.
-    ///
-    /// Native commits via `apply_journal_page_fenced` at the current cursor;
-    /// wasm has no SQLite cache and only ensures the journal row exists.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Test-only local cache seeding. Production network reads must capture their
+    /// proof before the request and call `ingest_messages_fenced` instead.
+    #[cfg(all(not(target_arch = "wasm32"), test))]
     pub(crate) async fn ingest_messages(
         &self,
         principal: &str,
@@ -2465,6 +2794,61 @@ impl Client {
         batch: IngestBatch<'_>,
         run_epoch: u64,
     ) -> Result<Vec<i64>, TinkleError> {
+        if self.sqlite.is_none() {
+            return Ok(Vec::new());
+        }
+        let fence = self.capture_message_scope(principal, target_key).await?;
+        self.ingest_messages_fenced(principal, target_key, batch, run_epoch, &fence)
+            .await
+    }
+
+    /// Capture the original target generation and durable principal incarnation before network I/O.
+    /// The blocking read owns its transaction through cancellation; no database lock spans an await.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) async fn capture_message_scope(
+        &self,
+        principal: &str,
+        target_key: &str,
+    ) -> Result<MessageIngestFence, TinkleError> {
+        let authority = self.authorization.generation()?;
+        let epoch = self.reconcile_epoch();
+        let source_revision = self.retirement.revision();
+        let storage = self
+            .sqlite_storage()
+            .ok_or_else(|| TinkleError::CursorStore("native cache required".into()))?;
+        let p = principal.to_string();
+        let t = target_key.to_string();
+        let cache = tokio::task::spawn_blocking(move || storage.capture_message_scope(&p, &t))
+            .await
+            .map_err(|_| TinkleError::CursorStore("cache scope worker failed".into()))?
+            .map_err(|_| TinkleError::CursorStore("cache scope capture failed".into()))?;
+        let fence = MessageIngestFence {
+            cache,
+            authority,
+            epoch,
+            source_revision,
+        };
+        if self.principal().await != principal {
+            return Err(TinkleError::Sync(
+                "message request principal changed".into(),
+            ));
+        }
+        fence.check(self)?;
+        Ok(fence)
+    }
+
+    /// Commit fetched bodies only with their pre-request proof. Per-message tombstones, not
+    /// acceptance/checkpoint arithmetic, mask removed IDs in the same SQLite transaction.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) async fn ingest_messages_fenced(
+        &self,
+        principal: &str,
+        target_key: &str,
+        batch: IngestBatch<'_>,
+        run_epoch: u64,
+        fence: &MessageIngestFence,
+    ) -> Result<Vec<i64>, TinkleError> {
+        fence.check(self)?;
         let IngestBatch {
             messages,
             users,
@@ -2502,12 +2886,8 @@ impl Client {
         {
             return Ok(Vec::new());
         }
-        // Re-check before commit: drop any message id that is now excluded
-        // or that a concurrent removal already deleted. The cache has no
-        // tombstones, so the run-removal set is authoritative; the
-        // pre-commit id diff below is the second gate.
-        let want_ids: Vec<i64> = ops.messages.iter().map(|m| m.message_id).collect();
-        if want_ids.is_empty() && ops.users.is_empty() && ops.chats.is_empty() {
+        // Run-local exclusions complement durable per-message removal evidence.
+        if ops.messages.is_empty() && ops.users.is_empty() && ops.chats.is_empty() {
             return Ok(Vec::new());
         }
         // Client-level commit gate: serialize ingests process-wide and
@@ -2519,52 +2899,42 @@ impl Client {
                 "reconcile epoch changed; dropping stale ingest".into(),
             ));
         }
-        let current: i64 = self
-            .store
-            .load_journal(principal, target_key)
-            .await
-            .map_err(|e| TinkleError::CursorStore(e.to_string()))?
-            .unwrap_or(0);
-        let gen: u64 = {
-            let sqlite_task = storage.clone();
-            let p = principal.to_string();
-            let t = target_key.to_string();
-            match tokio::task::spawn_blocking(move || sqlite_task.stream_state(&p, &t)).await {
-                Ok(Ok(st)) => st.generation,
-                Ok(Err(e)) => return Err(TinkleError::CursorStore(e.to_string())),
-                Err(e) => {
-                    return Err(TinkleError::CursorStore(format!(
-                        "stream_state task failed: {e}"
-                    )));
-                }
-            }
-        };
-        // Second gate before commit: re-apply the exclusion set in case
-        // it grew after projection (concurrent removal in the same run).
-        // Existence itself is re-checked by callers via GetMessages omission
-        // (omitted ids are never passed here); the cache keeps no
-        // tombstones, so the run-removal set is authoritative.
-        ops.messages.retain(|m| !exclude.contains(&m.message_id));
+        fence.check(self)?;
+        if self.principal().await != principal {
+            return Err(TinkleError::Sync(
+                "message request principal changed".into(),
+            ));
+        }
         if ops.messages.is_empty() && ops.users.is_empty() && ops.chats.is_empty() {
             return Ok(Vec::new());
         }
         let tk = target_key.to_string();
         let pr = principal.to_string();
         let commit_guard = _commit_guard.clone();
+        let cache_fence = fence.cache.clone();
         let result = tokio::task::spawn_blocking(move || {
             let _guard = commit_guard;
-            storage.apply_journal_page_fenced(&pr, &tk, &ops, current, gen)
+            storage.hydrate_messages_fenced(&pr, &tk, &ops, &cache_fence)
         })
         .await;
+        // Account/source retirement dominates even a concurrent storage failure;
+        // a stale waiter must not misclassify sign-out as a retryable cache error.
+        fence.check(self)?;
         match result {
-            Ok(Ok(())) => Ok(want_ids
-                .into_iter()
-                .filter(|id| !exclude.contains(id))
-                .collect()),
-            Ok(Err(e)) => {
-                tracing::debug!(error = %e, "ingest_messages commit failed");
-                Err(TinkleError::CursorStore(e.to_string()))
-            }
+            Ok(Ok(ids)) => Ok(ids),
+            Ok(Err(e)) => match e {
+                tinkle_storage::StorageError::GenerationMismatch { .. }
+                | tinkle_storage::StorageError::CacheScopeChanged => {
+                    Err(TinkleError::Sync("message cache scope changed".into()))
+                }
+                // Invalid authoritative input is permanent, unlike a failed local write.
+                tinkle_storage::StorageError::InvalidInput(_) => {
+                    Err(TinkleError::Codec("invalid message cache input".into()))
+                }
+                _ => Err(TinkleError::CursorStore(
+                    "message cache commit failed".into(),
+                )),
+            },
             Err(e) => Err(TinkleError::CursorStore(format!(
                 "ingest commit task failed: {e}"
             ))),
@@ -2626,8 +2996,20 @@ impl Client {
             .changes
             .iter()
             .filter(|c| {
+                if c.body_invalidated {
+                    return false;
+                }
                 tinkle_schema::proto::TargetChangeKind::try_from(c.kind)
-                    .map(|k| k == tinkle_schema::proto::TargetChangeKind::Edited)
+                    .map(|k| {
+                        matches!(
+                            k,
+                            tinkle_schema::proto::TargetChangeKind::Edited
+                                | tinkle_schema::proto::TargetChangeKind::Pin
+                                | tinkle_schema::proto::TargetChangeKind::Reaction
+                                | tinkle_schema::proto::TargetChangeKind::Poll
+                                | tinkle_schema::proto::TargetChangeKind::Ack
+                        )
+                    })
                     .unwrap_or(false)
             })
             .map(|c| c.message_id)
@@ -2652,7 +3034,7 @@ impl Client {
                 }
                 Err(e) => {
                     // Hydration is best-effort: fall back to journal bodies.
-                    tracing::debug!(error = %e, "edited hydration failed, using journal bodies");
+                    tracing::debug!(code = ?e.code(), "edited hydration failed, using journal bodies");
                 }
             }
         }
@@ -2665,19 +3047,37 @@ impl Client {
                     TinkleError::Sync(format!("unknown target change kind {}", change.kind))
                 })?;
             match kind {
-                tinkle_schema::proto::TargetChangeKind::Edited => {
+                tinkle_schema::proto::TargetChangeKind::Edited
+                | tinkle_schema::proto::TargetChangeKind::Pin
+                | tinkle_schema::proto::TargetChangeKind::Reaction
+                | tinkle_schema::proto::TargetChangeKind::Poll
+                | tinkle_schema::proto::TargetChangeKind::Ack => {
                     if run_removals.contains(&change.message_id) {
                         continue;
                     }
-                    let body = fetched
-                        .get(&change.message_id)
-                        .or(change.message.as_ref())
-                        .ok_or_else(|| {
-                            TinkleError::Sync(format!(
-                                "edited change for message {} must carry a body",
-                                change.message_id
-                            ))
-                        })?;
+                    if change.body_invalidated {
+                        let extra =
+                            crate::cache_projector::project_change_to_ops(target_key, change)
+                                .map_err(TinkleError::Sync)?;
+                        crate::cache_projector::merge_ops(&mut ops, extra);
+                        continue;
+                    }
+                    let fetched_body = fetched.get(&change.message_id);
+                    let journal_body = change.message.as_ref();
+                    let body = match (journal_body, fetched_body) {
+                        (Some(a), Some(b)) => Some(if tinkle_schema::sync::fresher_body(a, b) {
+                            b
+                        } else {
+                            a
+                        }),
+                        (a, b) => a.or(b),
+                    }
+                    .ok_or_else(|| {
+                        TinkleError::Sync(format!(
+                            "edited change for message {} must carry a body",
+                            change.message_id
+                        ))
+                    })?;
                     let extra = crate::cache_projector::project_message_to_ops(target_key, body)
                         .map_err(TinkleError::Sync)?;
                     crate::cache_projector::merge_ops(&mut ops, extra);
@@ -2710,7 +3110,7 @@ impl Client {
     /// New-message catch-up for one target, paged to the server-confirmed
     /// boundary.
     ///
-    /// `GetTargetChanges` discloses edits/removals only, never new
+    /// `ListMessageChanges` discloses edits/removals only, never new
     /// messages. After journal paging, page `GetHistory` windows backward
     /// (newest first) to the server-confirmed end, diff each window's ids
     /// against the offline cache, re-check the missing ids via
@@ -2796,6 +3196,9 @@ impl Client {
             Some(s) => s,
             None => return Ok(0),
         };
+        let cache_fence = self
+            .capture_message_scope(fence_principal, target_key)
+            .await?;
         // Resume state from an earlier bounded/failed run: the `GetHistory`
         // offset the next run continues from plus the top of the contiguous
         // range covered so far. Consulted here so both the supervisor sweep
@@ -2876,7 +3279,7 @@ impl Client {
             let history = match self.messages().get_history(history_req).await {
                 Ok(r) => r,
                 Err(e) => {
-                    tracing::debug!(target_key, error = %e, "new-message catch-up history failed");
+                    tracing::debug!(code = ?e.code(), "new-message catch-up history failed");
                     self.persist_catchup_demand(&ctx, offset_id, run_top, covering_new, chain_top)
                         .await;
                     return Ok(total);
@@ -2908,6 +3311,7 @@ impl Client {
                             &history.users,
                             &history.chats,
                             &no_exclude,
+                            &cache_fence,
                         )
                         .await
                     {
@@ -2947,7 +3351,7 @@ impl Client {
                     let rechecked = match self.get_messages(*target, missing.clone()).await {
                         Ok(r) => r,
                         Err(e) => {
-                            tracing::debug!(target_key, error = %e, "new-message catch-up fetch failed");
+                            tracing::debug!(code = ?e.code(), "new-message catch-up fetch failed");
                             self.persist_catchup_demand(
                                 &ctx,
                                 offset_id,
@@ -2988,7 +3392,14 @@ impl Client {
                         let mut chats = history.chats;
                         chats.extend(rechecked.chats);
                         match self
-                            .ingest_catchup_window(&ctx, &bodies, &users, &chats, run_removals)
+                            .ingest_catchup_window(
+                                &ctx,
+                                &bodies,
+                                &users,
+                                &chats,
+                                run_removals,
+                                &cache_fence,
+                            )
                             .await
                         {
                             Ok(ids) => {
@@ -3150,6 +3561,7 @@ impl Client {
         users: &[tinkle_schema::proto::User],
         chats: &[tinkle_schema::proto::Chat],
         exclude: &HashSet<i64>,
+        cache_fence: &MessageIngestFence,
     ) -> Result<Vec<i64>, CatchupCommitError> {
         let _guard = ctx.mgr.checkpoint_save_lock().await;
         if !ctx
@@ -3159,7 +3571,7 @@ impl Client {
         {
             return Err(CatchupCommitError::FenceLost);
         }
-        self.ingest_messages(
+        self.ingest_messages_fenced(
             ctx.fence_principal,
             ctx.target_key,
             IngestBatch {
@@ -3169,9 +3581,13 @@ impl Client {
                 exclude,
             },
             ctx.epoch,
+            cache_fence,
         )
         .await
-        .map_err(CatchupCommitError::Failed)
+        .map_err(|error| match error {
+            TinkleError::Sync(_) | TinkleError::SignedOut => CatchupCommitError::FenceLost,
+            other => CatchupCommitError::Failed(other),
+        })
     }
 
     /// Persist an unfinished catch-up: durable `background_sync_jobs` row
@@ -3493,6 +3909,18 @@ impl Client {
             max_id: None,
             min_id: None,
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        let cache_fence = if self.sqlite.is_some() {
+            match self
+                .capture_message_scope(fence_principal, target_key)
+                .await
+            {
+                Ok(fence) => Some(fence),
+                Err(_) => return,
+            }
+        } else {
+            None
+        };
         match self.messages().get_history(req).await {
             Ok(resp) => {
                 #[cfg(not(target_arch = "wasm32"))]
@@ -3506,9 +3934,12 @@ impl Client {
                     if mgr.check_fence(fence_principal, fence_generation).await
                         && self.reconcile_epoch() == run_epoch
                     {
+                        let Some(cache_fence) = cache_fence.as_ref() else {
+                            return;
+                        };
                         let empty = HashSet::new();
                         let _ = self
-                            .ingest_messages(
+                            .ingest_messages_fenced(
                                 fence_principal,
                                 target_key,
                                 IngestBatch {
@@ -3518,6 +3949,7 @@ impl Client {
                                     exclude: &empty,
                                 },
                                 run_epoch,
+                                cache_fence,
                             )
                             .await;
                     } else {
@@ -3531,7 +3963,7 @@ impl Client {
                 );
             }
             Err(e) => {
-                tracing::debug!(target_key, error = %e, "history heal failed");
+                tracing::debug!(code = ?e.code(), "history heal failed");
             }
         }
     }
@@ -3676,6 +4108,10 @@ impl Client {
                 let i = 0;
                 while i < retained.len() {
                     if let Some(evt) = retained[i].try_next_event().await {
+                        // Ephemeral presentation is never replayed from a retired manager.
+                        if matches!(evt, SyncEvent::ReactionEffect(_)) {
+                            continue;
+                        }
                         return Some(evt);
                     }
                     retained.remove(i);
@@ -3686,12 +4122,20 @@ impl Client {
                 Err(_) => return None,
             };
             if let Some(evt) = mgr.try_next_event().await {
-                return Some(evt);
+                if self.effect_event_current(&evt, &mgr).await {
+                    return Some(evt);
+                }
+                continue;
             }
             match tokio::time::timeout(std::time::Duration::from_millis(200), mgr.next_event())
                 .await
             {
-                Ok(evt) => return evt,
+                Ok(Some(evt)) => {
+                    if self.effect_event_current(&evt, &mgr).await {
+                        return Some(evt);
+                    }
+                }
+                Ok(None) => return None,
                 Err(_) => {
                     let current = self.live_mgr().await.ok();
                     let rotated = match current {
@@ -3704,6 +4148,26 @@ impl Client {
                 }
             }
         }
+    }
+
+    /// An event may wait in a bounded queue past expiry, sign-out, account/source replacement or
+    /// disconnect. Recheck at actual app delivery, not only when the notification was received.
+    async fn effect_event_current(&self, event: &SyncEvent, manager: &Arc<SyncManager>) -> bool {
+        let SyncEvent::ReactionEffect(effect) = event else {
+            return true;
+        };
+        let principal = self.principal().await;
+        let live = self.live.read().await;
+        !self.authorization.is_signed_out()
+            && principal == effect.principal
+            && effect.unexpired()
+            && self.reconcile_epoch() == effect.epoch
+            && self.retirement.revision() == effect.source_revision
+            && live.as_ref().is_some_and(|l| {
+                Arc::ptr_eq(manager, &l.sync_mgr)
+                    && l.generation.returning
+                    && l.generation.open.load(Ordering::SeqCst)
+            })
     }
 
     /// Keep at most two distinct retired event sources available for subsequent draining.
@@ -3784,6 +4248,10 @@ impl Client {
                 self.release_closed_provisioning();
             }
         }
+        // Download publication takes connect_lock. Joining under that gate deadlocks.
+        // This is terminal for downloads; suspend intentionally leaves the group reusable.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.download_manager().shutdown().await;
         // Explicit stop may drain writes, but must not hold up logout's
         // transport retirement/protected-store invalidation via connect_lock.
         #[cfg(not(target_arch = "wasm32"))]
@@ -4421,21 +4889,34 @@ impl Client {
     /// `Some(false)` means done, `None` falls back to the legacy
     /// window-edge heuristic (continue while the window came back full,
     /// advancing `offset_id` to the window edge; `count` stays
-    /// informational). Ingestion upserts authoritative users/chats plus
+    /// informational). Ingestion inserts unversioned users/chats conservatively plus
     /// history message bodies (same-cursor journal commit, never advancing
-    /// the journal cursor). Best-effort: storage failures are logged and the
-    /// fetched pages are still returned as one combined response.
+    /// the journal cursor). Scope changes reject stale responses; known removals mask
+    /// their IDs. Storage failure fails closed: an unfiltered page could expose removed IDs.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn load_history(
         &self,
         req: tinkle_schema::proto::GetHistoryRequest,
     ) -> Result<tinkle_schema::proto::GetHistoryResponse, TinkleError> {
         let run_epoch = self.reconcile_epoch();
+        let source_revision = self.retirement.revision();
         if req.target.is_none() {
             return Err(TinkleError::Codec(
                 "GetHistoryRequest.target missing".into(),
             ));
         }
+        let target_key = target_key_of(
+            req.target
+                .as_ref()
+                .ok_or_else(|| TinkleError::Codec("history target required".into()))?,
+        )?;
+        let principal = self.principal().await;
+        let cache_fence = if self.sqlite.is_some() && principal != UNKNOWN_PRINCIPAL {
+            Some(self.capture_message_scope(&principal, &target_key).await?)
+        } else {
+            None
+        };
+        let caller = self.for_application_scope(run_epoch, source_revision);
         let limit = if req.limit <= 0 {
             20
         } else {
@@ -4447,7 +4928,7 @@ impl Client {
         let mut all_users = Vec::new();
         let mut all_chats = Vec::new();
         for _ in 0..10 {
-            let resp = self.messages().get_history(cur).await?;
+            let resp = caller.messages().get_history(cur).await?;
             let more = resp.more_available;
             let offset = resp.offset_id_offset;
             all_users.extend(resp.users);
@@ -4507,26 +4988,33 @@ impl Client {
         // HydrateCache via the shared ingest helper (same-cursor commit,
         // never moves the journal cursor). Single call covers messages +
         // entities, replacing the old split ingest paths.
-        if let Some(t) = req.target.as_ref() {
-            if let Ok(key) = target_key_of(t) {
-                let principal = self.principal().await;
-                if principal != UNKNOWN_PRINCIPAL {
-                    let empty = HashSet::new();
-                    let _ = self
-                        .ingest_messages(
-                            &principal,
-                            &key,
-                            IngestBatch {
-                                messages: &all_messages,
-                                users: &all_users,
-                                chats: &all_chats,
-                                exclude: &empty,
-                            },
-                            run_epoch,
-                        )
-                        .await;
+        if let Some(fence) = cache_fence.as_ref() {
+            let empty = HashSet::new();
+            match self
+                .ingest_messages_fenced(
+                    &principal,
+                    &target_key,
+                    IngestBatch {
+                        messages: &all_messages,
+                        users: &all_users,
+                        chats: &all_chats,
+                        exclude: &empty,
+                    },
+                    run_epoch,
+                    fence,
+                )
+                .await
+            {
+                Ok(visible) => {
+                    let visible: HashSet<_> = visible.into_iter().collect();
+                    all_messages.retain(|m| visible.contains(&m.message_id));
                 }
+                Err(error) => return Err(error),
             }
+        }
+        self.authorization.generation()?;
+        if self.reconcile_epoch() != run_epoch || self.retirement.revision() != source_revision {
+            return Err(TinkleError::Sync("history request scope changed".into()));
         }
         Ok(tinkle_schema::proto::GetHistoryResponse {
             messages: all_messages,
@@ -4603,19 +5091,117 @@ impl Client {
         })
     }
 
-    /// Fetch dialogs AND hydrate the offline cache (native only).
+    /// Fetch a dialog snapshot with a pre-request principal/cache proof. Visibility checks and
+    /// hydration fail closed together; removed heads never become guessed heads/unread counts.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn load_dialogs(
         &self,
         req: tinkle_schema::proto::GetDialogsRequest,
     ) -> Result<tinkle_schema::proto::GetDialogsResponse, TinkleError> {
         let epoch = self.reconcile_epoch();
+        let source_revision = self.retirement.revision();
+        let authority = Arc::new(self.authorization.generation()?);
         let principal = self.principal().await;
-        let resp = self.messages().get_dialogs(req).await?;
-        self.ingest_snapshot_entities(&principal, epoch, &resp.users, &resp.chats)
+        let cache = if let Some(storage) = self
+            .sqlite
+            .clone()
+            .filter(|_| principal != UNKNOWN_PRINCIPAL)
+        {
+            let owner = principal.clone();
+            let db = storage.clone();
+            let proof = tokio::task::spawn_blocking(move || db.capture_dialog_scope(&owner))
+                .await
+                .map_err(|_| TinkleError::CursorStore("dialog scope worker failed".into()))?
+                .map_err(|_| TinkleError::CursorStore("dialog scope capture failed".into()))?;
+            Some((storage, proof))
+        } else {
+            None
+        };
+        let check = || -> Result<(), TinkleError> {
+            authority.check(self)?;
+            if epoch != self.reconcile_epoch() || source_revision != self.retirement.revision() {
+                return Err(TinkleError::Sync("dialog request scope changed".into()));
+            }
+            Ok(())
+        };
+        check()?;
+        let resp = self
+            .for_application_scope(epoch, source_revision)
+            .messages()
+            .get_dialogs(req)
+            .await?;
+        check()?;
+        if let Some((storage, proof)) = cache {
+            use prost::Message as _;
+            if resp.dialogs.len() > 256 || resp.messages.len() > 512 {
+                return Err(TinkleError::Codec("dialog snapshot too large".into()));
+            }
+            let mut rows = Vec::with_capacity(resp.dialogs.len());
+            for d in &resp.dialogs {
+                crate::services::validate_target(d.target.as_ref())?;
+                let (peer_kind, peer_id) = match d.target.as_ref().and_then(|t| t.kind.as_ref()) {
+                    Some(tinkle_schema::proto::target::Kind::UserId(id)) => ("user", *id),
+                    Some(tinkle_schema::proto::target::Kind::ChatId(id)) => ("room", *id),
+                    None => return Err(TinkleError::Codec("dialog target missing".into())),
+                };
+                rows.push(tinkle_storage::DialogRow {
+                    peer_kind: peer_kind.into(),
+                    peer_id,
+                    top_message: d.top_message,
+                    unread_count: d.unread_count,
+                    read_inbox_max_id: d.read_inbox_max_id,
+                    read_outbox_max_id: d.read_outbox_max_id.unwrap_or(0),
+                    pinned: d.pinned,
+                    proto: d.encode_to_vec(),
+                    origin_stream: String::new(),
+                    read_state_pending: d.read_outbox_max_id.is_none(),
+                });
+            }
+            let bodies = resp
+                .messages
+                .iter()
+                .map(|m| {
+                    crate::services::validate_target(m.target.as_ref())?;
+                    Ok((
+                        target_key_of(m.target.as_ref().ok_or_else(|| {
+                            TinkleError::Codec("dialog body target missing".into())
+                        })?)?,
+                        m.message_id,
+                    ))
+                })
+                .collect::<Result<Vec<_>, TinkleError>>()?;
+            let ops = crate::cache_projector::project_entities_to_ops(&resp.users, &resp.chats);
+            let commit = self.checkpoint_save.clone().lock_owned().await;
+            check()?;
+            let client = self.background_clone();
+            let worker_authority = authority.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let _guard = commit;
+                worker_authority.check(&client)?;
+                if epoch != client.reconcile_epoch()
+                    || source_revision != client.retirement.revision()
+                    || !client.principal.try_read().is_ok_and(|p| *p == principal)
+                {
+                    return Err(TinkleError::Sync("dialog request scope changed".into()));
+                }
+                storage
+                    .hydrate_dialog_snapshot_fenced(&principal, &rows, &bodies, &ops, &proof)
+                    .map_err(|error| match error {
+                        tinkle_storage::StorageError::CacheScopeChanged => {
+                            TinkleError::Sync("dialog cache scope changed".into())
+                        }
+                        tinkle_storage::StorageError::InvalidInput(_) => {
+                            TinkleError::Codec("invalid dialog snapshot".into())
+                        }
+                        _ => TinkleError::CursorStore("dialog snapshot hydration failed".into()),
+                    })
+            })
             .await;
-        self.ingest_snapshot_dialogs(&principal, epoch, &resp.dialogs)
-            .await;
+            check()?;
+            result
+                .map_err(|_| TinkleError::CursorStore("dialog snapshot worker failed".into()))??;
+        }
+        check()?;
         Ok(resp)
     }
 
@@ -4631,7 +5217,7 @@ impl Client {
     /// Dialog-list entity hydration (global pins). Shares entity encoding
     /// with the message ingest path via `cache_projector`; dialogs
     /// themselves stay global (no single target_key to scope to).
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), test))]
     async fn ingest_snapshot_entities(
         &self,
         principal: &str,
@@ -4667,45 +5253,8 @@ impl Client {
             if current_epoch.load(Ordering::SeqCst) != epoch || authorization.is_signed_out() {
                 return;
             }
-            for row in &ops.users {
-                if let Err(e) = storage.upsert_user(&principal, row) {
-                    tracing::debug!(error = %e, "history user ingest failed");
-                }
-            }
-            for row in &ops.chats {
-                if let Err(e) = storage.upsert_chat(&principal, row) {
-                    tracing::debug!(error = %e, "history chat ingest failed");
-                }
-            }
-            // Global-pin file metadata + entity refs (avatars). First-wins
-            // metadata, replace-per-entity refs — same shared-record path as
-            // journal (stale avatar refs are collected, not leaked).
-            for row in &ops.files {
-                if let Err(e) = storage.upsert_file(&principal, row) {
-                    tracing::debug!(error = %e, "history file ingest failed");
-                }
-            }
-            {
-                use std::collections::HashMap;
-                let mut by_entity: HashMap<(&str, i64), Vec<&tinkle_storage::EntityFileRef>> =
-                    HashMap::new();
-                for r in &ops.entity_files {
-                    by_entity
-                        .entry((r.kind.as_str(), r.entity_id))
-                        .or_default()
-                        .push(r);
-                }
-                for (kind, entity_id) in &ops.replace_entity_files {
-                    let refs: Vec<tinkle_storage::EntityFileRef> = by_entity
-                        .get(&(kind.as_str(), *entity_id))
-                        .map(|v| v.iter().map(|r| (*r).clone()).collect())
-                        .unwrap_or_default();
-                    if let Err(e) =
-                        storage.replace_entity_file_refs(&principal, kind, *entity_id, &refs)
-                    {
-                        tracing::debug!(error = %e, "history entity-file ingest failed");
-                    }
-                }
+            if storage.hydrate_entity_snapshot(&principal, &ops).is_err() {
+                tracing::debug!("dialog entity snapshot ingest failed");
             }
         })
         .await;
@@ -4715,7 +5264,7 @@ impl Client {
     }
 
     /// Globally pin dialog rows only while the captured epoch remains valid at the blocking write.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), test))]
     async fn ingest_snapshot_dialogs(
         &self,
         principal: &str,
@@ -4755,11 +5304,11 @@ impl Client {
                 top_message: d.top_message,
                 unread_count: d.unread_count,
                 read_inbox_max_id: d.read_inbox_max_id,
-                read_outbox_max_id: d.read_outbox_max_id,
+                read_outbox_max_id: d.read_outbox_max_id.unwrap_or(0),
                 pinned: d.pinned,
                 proto,
                 origin_stream: origin,
-                read_state_pending: false,
+                read_state_pending: d.read_outbox_max_id.is_none(),
             });
         }
         if rows.is_empty() {
@@ -5024,6 +5573,22 @@ mod lifecycle_review_tests;
 #[cfg(test)]
 mod tests {
     use super::TargetDemand;
+
+    /// A final search check must inspect the real principal even if its epoch already advanced.
+    #[tokio::test]
+    async fn search_admission_rechecks_actual_principal_and_pending_writers() {
+        let mut client = crate::enrollment::review_tests::client(false);
+        client.config.primary_port = 1;
+        client.set_principal_user_id(1).await;
+        assert!(client.search_admission("user:1").is_ok());
+        {
+            let mut principal = client.principal.write().await;
+            assert!(client.search_admission("user:1").is_err());
+            *principal = "user:2".into();
+        }
+        assert!(client.search_admission("user:1").is_err());
+        assert!(client.search_admission("user:2").is_ok());
+    }
 
     /// Observe actual SDK-admitted budgets, without the legacy wire fixture adapter.
     #[derive(Default)]
@@ -5635,7 +6200,13 @@ mod tests {
                     } else {
                         client
                             .messages()
-                            .get_history(Default::default())
+                            .get_history(tinkle_schema::proto::GetHistoryRequest {
+                                target: Some(tinkle_schema::proto::Target {
+                                    kind: Some(tinkle_schema::proto::target::Kind::ChatId(7)),
+                                }),
+                                limit: 20,
+                                ..Default::default()
+                            })
                             .await
                             .map(|_| vec![])
                     };

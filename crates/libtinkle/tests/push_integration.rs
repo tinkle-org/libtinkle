@@ -1,7 +1,7 @@
 //! Push-wake integration: envelope → durable SQLite message.
 //!
 //! Spins a minimal in-process Syntra mock gateway (handshake +
-//! `GetTargetChanges` / `GetMessages` / `GetHistory` / push-token RPCs)
+//! `ListMessageChanges` / `GetMessages` / `GetHistory` / push-token RPCs)
 //! and drives `libtinkle::PushManager` through the required scenarios:
 //! duplicate idempotent, cold-start persist, app/extension race fenced,
 //! logout fencing, deadline expiry → deferred, and the KEY test (a
@@ -17,7 +17,7 @@ use tokio::net::TcpListener;
 use syntra_core::proto::{frame::Body, rpc_result::Outcome, Frame, RpcRequest, RpcResult};
 use tinkle_schema::proto::{
     target, GetHistoryRequest, GetHistoryResponse, GetMessagesRequest, GetMessagesResponse,
-    GetTargetChangesRequest, GetTargetChangesResponse, LogoutResponse, RegisterPushResponse,
+    ListMessageChangesRequest, ListMessageChangesResponse, LogoutResponse, RegisterPushResponse,
     Target, UnregisterPushResponse,
 };
 
@@ -33,15 +33,16 @@ fn target_key_of(t: &Option<Target>) -> String {
 
 async fn handle_mock_request(id: u64, req: RpcRequest) -> Frame {
     let result = match req.method.as_str() {
-        "/tinkle.v1.MessagesService/GetTargetChanges" => {
+        "/tinkle.v1.MessagesService/ListMessageChanges" => {
             // EMPTY mutation journal for every target: the KEY scenario.
-            let r =
-                GetTargetChangesRequest::decode(&*req.payload).unwrap_or(GetTargetChangesRequest {
+            let r = ListMessageChangesRequest::decode(&*req.payload).unwrap_or(
+                ListMessageChangesRequest {
                     target: None,
                     after_accept_seq: 0,
                     limit: 0,
-                });
-            let resp = GetTargetChangesResponse {
+                },
+            );
+            let resp = ListMessageChangesResponse {
                 changes: vec![],
                 more_available: Some(false),
                 last_accept_seq: r.after_accept_seq,
@@ -75,7 +76,8 @@ async fn handle_mock_request(id: u64, req: RpcRequest) -> Frame {
                     target: r.target,
                     from_id: 42,
                     message: format!("push-body-{mid}"),
-                    accept_seq: Some(mid),
+                    // A synthetic invalid cache input exercises terminal job classification.
+                    accept_seq: Some(if mid == 9099 { 0 } else { mid }),
                     ..Default::default()
                 });
             }
@@ -239,6 +241,42 @@ async fn push_new_message_with_empty_journal_persists() {
     assert!(
         cursor.is_none() || cursor == Some(0),
         "push ingest must not move the journal cursor, got {cursor:?}"
+    );
+    c.close().await;
+}
+
+/// Invalid authoritative cache input fails durably, rather than retrying the same bad body.
+#[tokio::test]
+async fn push_invalid_cache_input_fails_job_without_partial_commit() {
+    let addr = start_mock().await;
+    let storage = Arc::new(tinkle_storage::Storage::open_in_memory().unwrap());
+    let c = push_client(addr, storage.clone());
+    c.connect().await.unwrap();
+    c.set_principal_user_id(42).await;
+    let mgr = libtinkle::PushManager::new(c.clone());
+    let env = push_envelope("evt-invalid-cache", vec![9099]);
+    let job_id = libtinkle::push_job_id(&env);
+    let outcome = mgr.process_push(env).await;
+    assert!(
+        matches!(outcome, libtinkle::PushOutcome::Failed { ref reason } if reason.starts_with("invalid:")),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        storage
+            .get_background_job("user:42", &job_id)
+            .unwrap()
+            .unwrap()
+            .state,
+        "failed"
+    );
+    assert!(storage
+        .get_messages("user:42", "target:room:10", 10, None)
+        .unwrap()
+        .is_empty());
+    assert!(storage.list_dialogs("user:42", 10).unwrap().is_empty());
+    assert_eq!(
+        storage.load_journal("user:42", "target:room:10").unwrap(),
+        None
     );
     c.close().await;
 }

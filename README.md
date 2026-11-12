@@ -129,7 +129,7 @@ provisioning caller; abandoned children are joined before replacement. See
 [connection ownership](docs/architecture.md#establishment).
 
 Typed/raw request interfaces, `load_history`, `load_dialogs`, `get_messages`,
-`get_target_changes`, file transfers and push-driven synchronization share the
+`list_message_changes`, file transfers and push-driven synchronization share the
 native channel. The application coordinator retains paged history continuation,
 per-target journals, cache/cursor atomic commits, scope fencing, deduplication
 and bounded catch-up. Consume `next_event()` and inspect `target_cursor`,
@@ -189,6 +189,36 @@ cargo check --locked -p libtinkle-web -p tinkle-schema --target wasm32-unknown-u
 
 `scripts/test-schema-candidate.sh` is optional tooling for future-schema
 development, not release qualification. See [public pinning](PROTO_PINNING.md).
+
+The public naming/field migration uses the published schema dependency
+`=0.5.0-20261112172535-6099d89af63f.2`, without a source override or candidate
+generation. Normal locked checks and binding parity qualify this baseline only
+for their executed lanes; production-server acceptance and Swift/Kotlin native
+consumer execution remain separate requirements.
+
+Public method names now include `SendAlbum`, `GetChatDetails`,
+`ListThreadMessages`, `BatchGetMessageReactions`, `ListMessageReactions`,
+`ListMessageChanges`, `MarkHistoryRead`, `StartBot`, `UpdateChatDescription` and
+`SetMessagePin`; Rust facades and mobile adapters use their corresponding names
+without aliases. Album requests carry `AlbumItem` under `items`. Send keys are
+signed nonzero `idempotency_key` values (including the mobile convenience method).
+File-upload options no longer expose unsupported file encryption. Pin scope
+omission is shared; explicit zero/unknown is invalid. Favorite true adds and false
+removes. Chat-photo file contexts retain exact positive chat/photo identities in
+authorization and cache keys. Existing durable jobs using the removed album
+method name are not auto-rewritten; callers must reconcile their
+outcome before replacing intent. DeleteHistory operation/progress fields are passed
+through only; this migration adds no automatic delete recovery.
+
+`Messages::get_scheduled_messages`, `cancel_scheduled_messages`, and
+`close_poll` have corresponding named mobile protobuf-byte adapters. Scheduled
+lookup requires a target and exactly one collection of 1–100 distinct positive
+message IDs or nonzero signed idempotency keys; it is explicit lookup, not list
+discovery. Job descriptors do not enter history or the durable sending queue.
+Cancellation selects explicit owned IDs; any album item selects its whole pending
+group. Only proven canceled states are returned, with no body, and errors may
+follow partial effects. Neither a timeout nor an empty canceled set proves rollback.
+These facades do not automatically replay cancellation or close mutations.
 
 Rust integration fixtures use the published SDK for encrypted native TCP,
 including trust failures and configurable primary/fallback ports. Swift/Kotlin

@@ -1,6 +1,326 @@
 import Darwin
-import TinkleSDK
+@testable import TinkleSDK
+import CryptoKit
 import XCTest
+
+/// Real AVFoundation decoding plus the actual Rust-to-Swift video callback bridge.
+final class AVFoundationVideoDecoderTests: XCTestCase {
+    /// Encoded streams stay byte-identical; measured sample count is not a header estimate.
+    func testActualDecodeOrientationColorAndBounds() async throws {
+        let input = try VideoFileFixture()
+        defer { input.remove() }
+        let original = try Data(contentsOf: input.url)
+        let result = try await AVFoundationVideoDecoder().decode(input: input, limits: videoLimits())
+        XCTAssertEqual(result.evidence, .nativeDecoded)
+        XCTAssertEqual(result.frameCount, 4)
+        XCTAssertEqual(result.durationMs, 400)
+        XCTAssertEqual(result.width, 32)
+        XCTAssertEqual(result.height, 64)
+        XCTAssertEqual(result.hasAlpha, false)
+        XCTAssertEqual(result.bitDepth, 8)
+        let thumbnail = try XCTUnwrap(result.thumbnail)
+        XCTAssertEqual(thumbnail.width, 8)
+        XCTAssertEqual(thumbnail.height, 16)
+        XCTAssertEqual(thumbnail.rgba.count, 8 * 16 * 4)
+        // The independent FFmpeg display matrix rotates the original red-left,
+        // blue-right image counterclockwise: blue on top, red on the bottom.
+        let top = 4 * (2 * 8 + 4)
+        let bottom = 4 * (13 * 8 + 4)
+        XCTAssertGreaterThan(thumbnail.rgba[top + 2], 220)
+        XCTAssertLessThan(thumbnail.rgba[top], 40)
+        XCTAssertGreaterThan(thumbnail.rgba[bottom], 220)
+        XCTAssertLessThan(thumbnail.rgba[bottom + 2], 40)
+        XCTAssertEqual(thumbnail.rgba[top + 3], 255)
+        XCTAssertEqual(try Data(contentsOf: input.url), original)
+    }
+
+    /// A full decode is mandatory: a frame or pixel budget cannot become qualified metadata.
+    func testBudgetAndCancellationAreTyped() async throws {
+        let input = try VideoFileFixture()
+        defer { input.remove() }
+        var frames = videoLimits()
+        frames.maxFrames = 3
+        var pixels = videoLimits()
+        pixels.maxPixels = 1
+        var bytes = videoLimits()
+        bytes.maxInputBytes = 1
+        var deadline = videoLimits()
+        deadline.deadlineMs = 0
+        for limits in [frames, pixels, bytes, deadline] {
+            do {
+                _ = try await AVFoundationVideoDecoder().decode(input: input, limits: limits)
+                XCTFail("Exceeded limits must not yield nativeDecoded")
+            } catch let error as FfiMediaError { XCTAssertEqual(error, .Budget) }
+        }
+        input.cancellation.cancel()
+        do {
+            _ = try await AVFoundationVideoDecoder().decode(input: input, limits: videoLimits())
+            XCTFail("Cancelled input must not decode")
+        } catch let error as FfiMediaError { XCTAssertEqual(error, .Cancelled) }
+    }
+
+    /// The native decoder never opens a caller-supplied remote URL or unsupported container.
+    func testUnsupportedInputFailsWithoutChangingSource() async throws {
+        let input = try VideoFileFixture(bytes: Data("not an MP4 video".utf8))
+        defer { input.remove() }
+        do {
+            _ = try await AVFoundationVideoDecoder().decode(input: input, limits: videoLimits())
+            XCTFail("Malformed input must not qualify")
+        } catch let error as FfiMediaError { XCTAssertEqual(error, .Unsupported) }
+        XCTAssertEqual(try Data(contentsOf: input.url), Data("not an MP4 video".utf8))
+    }
+
+    /// Declared HDR and high-depth H.264 profiles are not silently flattened to RGBA8.
+    func testUnsupportedColorAndProfileFailClosed() async throws {
+        let color = try XCTUnwrap(videoFixtureBytes.range(of: Data("nclx".utf8)))
+        var hdr = videoFixtureBytes
+        hdr[color.upperBound + 3] = 16 // SMPTE ST 2084 (PQ) transfer characteristic.
+        let avc = try XCTUnwrap(videoFixtureBytes.range(of: Data("avcC".utf8)))
+        var high10 = videoFixtureBytes
+        high10[avc.upperBound + 1] = 110 // H.264 High10, never an 8-bit qualification.
+        for bytes in [hdr, high10] {
+            let input = try VideoFileFixture(bytes: bytes)
+            defer { input.remove() }
+            do {
+                _ = try await AVFoundationVideoDecoder().decode(input: input, limits: videoLimits())
+                XCTFail("Unsupported color/precision must not qualify")
+            } catch let error as FfiMediaError { XCTAssertEqual(error, .Unsupported) }
+            XCTAssertEqual(try Data(contentsOf: input.url), bytes)
+        }
+    }
+
+    /// Container headers can remain valid while the encoded frames cannot decode.
+    func testDamagedEncodedPayloadCannotQualifyFromHeaders() async throws {
+        let mdat = try XCTUnwrap(videoFixtureBytes.range(of: Data("mdat".utf8)))
+        let moov = try XCTUnwrap(videoFixtureBytes.range(of: Data("moov".utf8)))
+        var bytes = videoFixtureBytes
+        bytes.replaceSubrange(mdat.upperBound..<(moov.lowerBound - 4),
+            with: repeatElement(UInt8(0), count: moov.lowerBound - 4 - mdat.upperBound))
+        let input = try VideoFileFixture(bytes: bytes)
+        defer { input.remove() }
+        do {
+            _ = try await AVFoundationVideoDecoder().decode(input: input, limits: videoLimits())
+            XCTFail("A header probe cannot establish nativeDecoded")
+        } catch let error as FfiMediaError { XCTAssertEqual(error, .Codec) }
+    }
+
+    /// Swift's cancellation flag is observed by the adapter without claiming protocol cancellation.
+    func testAlreadyCancelledSwiftTaskStopsNativeWork() async throws {
+        let input = try VideoFileFixture()
+        defer { input.remove() }
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await AVFoundationVideoDecoder().decode(input: input, limits: videoLimits())
+        }
+        do { _ = try await task.value; XCTFail("Cancelled Swift task must stop the adapter") }
+        catch let error as FfiMediaError { XCTAssertEqual(error, .Cancelled) }
+    }
+
+    /// Cancellation cannot free native-worker admission while a synchronous read is parked.
+    func testAdmissionRemainsHeldThroughActualWorkerCompletion() async throws {
+        let first = try ParkedVideoInput()
+        let second = try ParkedVideoInput()
+        defer { first.fixture.remove(); second.fixture.remove() }
+        let decoder = AVFoundationVideoDecoder()
+        let tasks = [first, second].map { input in
+            Task { try await decoder.decode(input: input, limits: videoLimits()) }
+        }
+        let firstEntered = await first.waitForEntry()
+        let secondEntered = await second.waitForEntry()
+        XCTAssertTrue(firstEntered && secondEntered, "Both native queue closures must own their admission")
+        for task in tasks { task.cancel() }
+        do {
+            _ = try await decoder.decode(input: first.fixture, limits: videoLimits())
+            XCTFail("Cancelled waiters must not release still-running native workers")
+        } catch let error as FfiMediaError { XCTAssertEqual(error, .Busy) }
+        first.resume.signal()
+        second.resume.signal()
+        for task in tasks {
+            do { _ = try await task.value; XCTFail("The worker must observe cancellation after unblocking") }
+            catch let error as FfiMediaError { XCTAssertEqual(error, .Cancelled) }
+        }
+        // Admission is reusable only after the two native closures really return.
+        let result = try await decoder.decode(input: first.fixture, limits: videoLimits())
+        XCTAssertEqual(result.frameCount, 4)
+    }
+
+    /// Real Rust creates a private lease, invokes Swift, and projects the typed callback
+    /// failure before upload. The recorder intentionally stops after the actual decode.
+    func testRustCallsActualDecoderWithFrozenSource() async throws {
+        let fixture = try VideoFileFixture()
+        defer { fixture.remove() }
+        let client = try await videoClient()
+        let recorder = VideoCallbackRecorder()
+        do {
+            try client.configureAVFoundationVideoDecoder()
+            try client.configureVideoDecoder(decoder: recorder)
+            do {
+                _ = try await client.sendingPrepareAttachment(key: "video-native-decode",
+                    path: fixture.url.path, kind: .video, control: TransferControl())
+                XCTFail("Recorder intentionally prevents any upload")
+            } catch FfiSendError.Media(let error) { XCTAssertEqual(error, .Unsupported) }
+            let recorded = await recorder.result
+            XCTAssertEqual(recorded?.frameCount, 4)
+            XCTAssertEqual(recorded?.evidence, .nativeDecoded)
+            XCTAssertNotNil(recorded?.thumbnail)
+            let path = await recorder.path
+            XCTAssertNotEqual(path, fixture.url.path)
+            let hash = await recorder.hash
+            XCTAssertEqual(hash, fixture.sourceSha256())
+            try client.clearVideoDecoder()
+        } catch {
+            await client.shutdown()
+            throw error
+        }
+        await client.shutdown()
+    }
+
+    /// Dropping Rust's foreign future cancels the Swift task, but a suspended callback
+    /// must retain its read lease until it resumes and finishes native teardown.
+    func testCancellationRetainsSuspendedCallbackLeaseUntilCompletion() async throws {
+        let fixture = try VideoFileFixture()
+        defer { fixture.remove() }
+        let client = try await videoClient()
+        let callback = SuspendedVideoCallback()
+        let control = TransferControl()
+        try client.configureVideoDecoder(decoder: callback)
+        let pending = Task {
+            try await client.sendingPrepareAttachment(key: "video-cancel-lease",
+                path: fixture.url.path, kind: .video, control: control)
+        }
+        // Bounded barrier, not a timing assumption about native callback entry.
+        for _ in 0..<500 {
+            if await callback.path != nil { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        guard let path = await callback.path else {
+            control.cancel()
+            await callback.resume()
+            await client.shutdown()
+            XCTFail("Rust did not invoke video callback")
+            return
+        }
+        control.cancel()
+        do { _ = try await pending.value; XCTFail("Cancellation must stop preparation") }
+        catch FfiSendError.Media(let error) { XCTAssertEqual(error, .Cancelled) }
+        // Remove configuration/client ownership while the invocation remains parked.
+        try client.clearVideoDecoder()
+        await client.shutdown()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path))
+        await callback.resume()
+        for _ in 0..<500 {
+            if await callback.finished { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let finished = await callback.finished
+        XCTAssertTrue(finished)
+        for _ in 0..<500 {
+            if !FileManager.default.fileExists(atPath: path) { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path))
+    }
+
+    /// A real offline SQLite client is sufficient; these tests never start a gateway.
+    private func videoClient() async throws -> TinkleClient {
+        let storage = try await SqliteStorage.openAsync(path: ":memory:")
+        let client = try TinkleClient.newSqlite(config: ClientConfigFfi(clientInfo: fixtureClientInfo(),
+            host: "127.0.0.1", primaryPort: 9, fallbackPort: nil),
+            trustSource: try TrustSourceFfi.bootstrap(trust: ServerTrustFfi(
+                serverPublicKey: Data(repeating: 1, count: 32), serverKeyId: 7, scope: "video-fixture")), storage: storage)
+        try await client.setPrincipalUserId(userId: 42)
+        return client
+    }
+}
+
+/// Smaller thumbnail budget exercises scaling as well as the independent rotation fixture.
+private func videoLimits() -> FfiVideoDecodeLimits {
+    FfiVideoDecodeLimits(maxInputBytes: 256 * 1024 * 1024, maxPixels: 16 * 1024 * 1024,
+        maxFrames: 18000, maxDurationMs: 600000, thumbnailEdge: 16, deadlineMs: 10000)
+}
+
+/// Immutable local input for focused native tests, never lowered across UniFFI.
+private final class VideoFileFixture: FfiVideoInputProtocol, Sendable {
+    let url: URL
+    let bytes: Data
+    let cancellation = Progress(totalUnitCount: 1)
+    init(bytes: Data = videoFixtureBytes) throws {
+        self.bytes = bytes
+        url = FileManager.default.temporaryDirectory.appendingPathComponent("video-\(UUID().uuidString)")
+        try bytes.write(to: url)
+    }
+    func sourcePath() -> String {
+        XCTAssertFalse(Thread.isMainThread, "Native file/codec work must not run on the UI thread")
+        return url.path
+    }
+    func sourceSha256() -> Data { Data(SHA256.hash(data: bytes)) }
+    func sizeBytes() -> UInt64 { UInt64(bytes.count) }
+    func isCancelled() -> Bool { cancellation.isCancelled }
+    func remove() { try? FileManager.default.removeItem(at: url) }
+}
+
+/// A synchronous native-input barrier; all mutable synchronization lives in system primitives.
+private final class ParkedVideoInput: FfiVideoInputProtocol, Sendable {
+    let fixture: VideoFileFixture
+    let entered = DispatchSemaphore(value: 0)
+    let resume = DispatchSemaphore(value: 0)
+    init() throws { fixture = try VideoFileFixture() }
+    func sourcePath() -> String {
+        entered.signal()
+        XCTAssertEqual(resume.wait(timeout: .now() + 10), .success)
+        return fixture.sourcePath()
+    }
+    func sourceSha256() -> Data { fixture.sourceSha256() }
+    func sizeBytes() -> UInt64 { fixture.sizeBytes() }
+    func isCancelled() -> Bool { fixture.isCancelled() }
+    /// Do not park a cooperative Swift executor waiting for the native queue barrier.
+    func waitForEntry() async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                continuation.resume(returning: self.entered.wait(timeout: .now() + 5) == .success)
+            }
+        }
+    }
+}
+
+/// Captures facts from the production decoder; the typed sentinel prevents network upload.
+private actor VideoCallbackRecorder: FfiPlatformVideoDecoder {
+    private(set) var result: FfiDecodedVideo?
+    private(set) var path: String?
+    private(set) var hash: Data?
+    func inspectAndDecode(input: FfiVideoInput, limits: FfiVideoDecodeLimits) async throws -> FfiDecodedVideo {
+        path = input.sourcePath()
+        hash = input.sourceSha256()
+        result = try await AVFoundationVideoDecoder().inspectAndDecode(input: input, limits: limits)
+        throw FfiMediaError.Unsupported
+    }
+}
+
+/// A barrier-controlled callback proves invocation ownership after cancellation and shutdown.
+private actor SuspendedVideoCallback: FfiPlatformVideoDecoder {
+    private(set) var path: String?
+    private(set) var finished = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+    func inspectAndDecode(input: FfiVideoInput, limits: FfiVideoDecodeLimits) async throws -> FfiDecodedVideo {
+        path = input.sourcePath()
+        if !released { await withCheckedContinuation { continuation = $0 } }
+        defer { finished = true }
+        return try await AVFoundationVideoDecoder().inspectAndDecode(input: input, limits: limits)
+    }
+    func resume() {
+        released = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+/// Host-generated FFmpeg/libx264 Baseline, 64x32, four 100ms frames, explicit BT.709,
+/// red left/blue right, MP4 display_rotation=90. No executable is needed on iOS.
+/// This tiny inline fixture travels through the package's existing source catalog.
+let videoFixtureBytes = Data(base64Encoded: """
+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
+""")!
 
 /// Tests the generated Swift API against the real Rust binary and a local gateway.
 final class TinkleSDKTests: XCTestCase {
@@ -45,6 +365,47 @@ final class TinkleSDKTests: XCTestCase {
         await client.shutdown()
         let ended = await waiting.value
         XCTAssertNil(ended)
+    }
+
+    /// Bounded presentation observation; shutdown, not foreign Task cancellation, joins the reader.
+    private actor EffectObservation {
+        private var first: Data?
+        private var count = 0
+        func record(_ data: Data) { if first == nil { first = data }; count = min(count + 1, 2) }
+        func snapshot() -> (Data?, Int) { (first, count) }
+    }
+
+    /// Current native enum/byte ownership delivers one validated Returning presentation hint to Swift.
+    /// This observes SDK events, not on-screen animation or production recipient authorization.
+    func testReactionEffectCrossesCurrentNativeEnumAsProtobuf() async throws {
+        let gateway=try LoopbackGateway(sessionReview:true)
+        defer {try? gateway.finish()}
+        let client=try await makeSessionReviewClient(gateway)
+        let observation=EffectObservation()
+        let reader=Task {
+            while let event=await client.nextEvent() {
+                if case .reactionEffect(let payload)=event {await observation.record(payload)}
+            }
+        }
+        do {
+            _ = try await client.start(targets:[TargetSub(targetKind:"user",targetId:7)],watch:[])
+            let before=try gateway.targetChangesRequests.count
+            try gateway.sendReactionEffectTwice()
+            let effectDeadline=Date().addingTimeInterval(2)
+            while await observation.snapshot().1 == 0 && Date()<effectDeadline {try await Task.sleep(nanoseconds:1_000_000)}
+            let snapshot=await observation.snapshot()
+            let data=try XCTUnwrap(snapshot.0)
+            XCTAssertNotNil(data.range(of:Data("33333333-3333-4333-8333-333333333333".utf8)))
+            try await Task.sleep(nanoseconds:200_000_000)
+            let count=await observation.snapshot().1
+            XCTAssertEqual(count,1,"the same actor/operation escaped twice at the SDK boundary")
+            let deadline=Date().addingTimeInterval(2)
+            while try gateway.targetChangesRequests.count <= before && Date()<deadline {try await Task.sleep(nanoseconds:1_000_000)}
+            XCTAssertGreaterThan(try gateway.targetChangesRequests.count,before)
+            XCTAssertEqual(try gateway.admittedModes,["returning"])
+        } catch {await client.shutdown();await reader.value;throw error}
+        await client.shutdown()
+        await reader.value
     }
 
     /// Synthetic encrypted Returning replies exercise native result projection, not production account authority.
@@ -385,13 +746,13 @@ final class TinkleSDKTests: XCTestCase {
             XCTAssertTrue(message.contains("TCP unavailable"))
         }
         do {
-            _ = try await client.sendMessage(targetKind: "room", targetId: 0, text: "", randomId: 1)
+            _ = try await client.sendMessage(targetKind: "room", targetId: 0, text: "", idempotencyKey: 1)
             XCTFail("A zero target ID must fail validation")
         } catch FfiError.Codec(let message) {
             XCTAssertTrue(message.contains("target id must be positive"))
         }
         do {
-            _ = try await client.sendMessage(targetKind: "room", targetId: 1, text: "offline", randomId: 1)
+            _ = try await client.sendMessage(targetKind: "room", targetId: 1, text: "offline", idempotencyKey: 1)
             XCTFail("A disconnected client must reject writes")
         } catch FfiError.NotConnected {
             // Typed Rust errors and async completion crossed the ABI.

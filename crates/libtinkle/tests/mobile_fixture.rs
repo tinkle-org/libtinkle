@@ -90,7 +90,7 @@ async fn mobile_fixture_serves_encrypted_journal_history_and_exact_i64_cursors()
     let room = Target {
         kind: Some(target::Kind::ChatId(7)),
     };
-    let page = client.get_target_changes(room, 0, 100).await.unwrap();
+    let page = client.list_message_changes(room, 0, 100).await.unwrap();
     assert_eq!(page.changes.len(), 1);
     assert_eq!(page.changes[0].message_id, 101);
     assert_eq!(page.last_accept_seq, 1);
@@ -107,7 +107,7 @@ async fn mobile_fixture_serves_encrypted_journal_history_and_exact_i64_cursors()
     assert_eq!(history.more_available, Some(false));
     let position = 1i64 << 40;
     let page = client
-        .get_target_changes(room, position, 100)
+        .list_message_changes(room, position, 100)
         .await
         .unwrap();
     assert!(page.changes.is_empty());

@@ -11,7 +11,7 @@
 //!   reconcile coordination, journal cursors, reconnect, and backoff.
 //!
 //! Reconciliation model: per-conversation mutation journals
-//! (`MessagesService/GetTargetChanges` pages validated by
+//! (`MessagesService/ListMessageChanges` pages validated by
 //! `tinkle-schema::sync`, bodies fetched by `GetMessages` in chunks of at
 //! most 100) commit atomically with their journal cursor via
 //! `tinkle-storage::Storage::apply_journal_page_fenced`. Notification frames
@@ -24,6 +24,8 @@
 pub(crate) mod authorization;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod cache_projector;
+#[cfg(not(target_arch = "wasm32"))]
+mod cache_search;
 pub(crate) mod client;
 pub(crate) mod client_info;
 pub(crate) mod config;
@@ -35,10 +37,14 @@ pub(crate) mod liveness;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod logout;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod media;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod push;
 pub(crate) mod reconnect;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod retirement;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sending;
 pub(crate) mod services;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod session;
@@ -73,7 +79,12 @@ pub use push::{
 pub use retirement::{
     EnrollmentObservation, RETIREMENT_OBSERVATION_BUDGET, RETIREMENT_OBSERVATION_INTERVAL,
 };
-pub use services::{Account, Auth, Files, Messages, Updates};
+#[cfg(not(target_arch = "wasm32"))]
+pub use sending::{
+    OutgoingJob, OutgoingJobSummary, OutgoingRequest, OutgoingState, PreparedAttachment, SendError,
+    SendRetry, Sending,
+};
+pub use services::{Account, Auth, Files, Messages, Stickers, Updates, Users};
 #[cfg(not(target_arch = "wasm32"))]
 pub use session::{
     SessionAuthorization, SessionCleanup, SessionNetwork, SessionSignOutReason, SessionState,
@@ -82,10 +93,14 @@ pub use session::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use sqlite_store::SqliteCursorStore;
 pub use sync::{ReconcileStatus, SyncEvent, SyncManager};
+mod effects;
+pub use effects::ReactionEffectEvent;
 /// Re-exported error code for [`TinkleError::code`].
 pub use syntra_core::error::ErrorCode;
 /// Re-exported cancellation token.
 pub use syntra_runtime::CancelToken;
+/// Exact application reference authorizing a file read; an empty context is never a fallback.
+pub use tinkle_schema::proto::FileAccessContext;
 /// Re-exported native storage so public signatures naming `Storage`
 /// resolve via `libtinkle` without adding a direct `tinkle-storage`
 /// dependency.

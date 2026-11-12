@@ -24,6 +24,7 @@ tracing.workspace = true
 rand.workspace = true
 zeroize.workspace = true
 async-trait.workspace = true
+sha2.workspace = true
 
 # Native keeps full tokio/tokio-util (unchanged behavior).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -31,6 +32,12 @@ serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tinkle-storage.workspace = true
+tempfile.workspace = true
+image.workspace = true
+flacenc.workspace = true
+libwebp-sys.workspace = true
+gif.workspace = true
+crc32fast.workspace = true
 
 # WASM: reduced tokio (no mio/net) + minimal tokio-util (CancellationToken
 # needs no features). Required so libtinkle (and libtinkle-web) compile for
@@ -48,3 +55,5 @@ anyhow = "1"
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 rusqlite.workspace = true
 tempfile.workspace = true
+claxon = "0.4.3"
+png = "=0.18.1"

@@ -62,11 +62,14 @@ another fix in this branch.
 ## Release chain
 
 Required Rust checks and native packaging use the same published BSR prost pin
-and committed `Cargo.lock`. Session review and confirmation are included in
-`0.5.0-20261109202628-d85fcc4fe592.2`; no schema checkout, registry patch, Buf
-installation or repository variable is required in these jobs. The optional
-schema-candidate helper is for future-contract integration only, not release
-qualification. See [public pinning](../../PROTO_PINNING.md).
+`=0.5.0-20261112172535-6099d89af63f.2` and committed `Cargo.lock`. This baseline
+includes session review and confirmation, the public naming/field migration,
+and scheduled-message/poll contracts. Fresh ordinary locked checks and binding
+parity run without overrides; candidate checks do not satisfy release
+qualification. Native packaging and Swift/Kotlin consumer execution, together
+with separate production-server acceptance, still require their own evidence.
+The release jobs consume published pins without a schema checkout or registry patch. See
+[public pinning](../../PROTO_PINNING.md).
 
 1. Release-plz retains the workspace's `publish = false` git-only policy. Its
    `releases` action output is a JSON array of `{package_name, tag, version, prs}`

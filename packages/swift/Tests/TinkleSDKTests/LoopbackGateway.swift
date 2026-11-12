@@ -90,6 +90,12 @@ final class LoopbackGateway: @unchecked Sendable {
             serverPublicKey: pin, serverKeyId: 7, scope: scope))
     }
 
+    /// Sends one fixed synthetic operation twice through the gateway's actual encrypted host.
+    func sendReactionEffectTwice() throws {
+        let response=try Self.control(["op":"reaction_effect","id":id])
+        guard (response["notified"] as? NSNumber)?.intValue == 2 else {throw FixtureError("effect fixture has no live host")}
+    }
+
     /// Idempotently stops the gateway and waits for its accepted transports to drain.
     func finish() throws {
         if !stopped {

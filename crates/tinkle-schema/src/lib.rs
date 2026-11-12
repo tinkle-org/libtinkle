@@ -14,6 +14,6 @@ pub use sync::{
     accept_seq_decision, chunk_message_ids, fresher_body, target_from_parts, target_key_for,
     validate_changes_page, validate_connectivity_notification, AcceptSeqDecision, PageMore,
     SyncError, ValidatedChangesPage, GET_HISTORY_METHOD, GET_MESSAGES_METHOD,
-    GET_TARGET_CHANGES_METHOD, MAX_MESSAGE_IDS_PER_REQUEST, MAX_TARGET_CHANGES_LIMIT,
+    LIST_MESSAGE_CHANGES_METHOD, MAX_MESSAGE_IDS_PER_REQUEST, MAX_TARGET_CHANGES_LIMIT,
     OBSERVE_METHOD,
 };

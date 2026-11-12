@@ -2,22 +2,22 @@
 //!
 //! The durable update feed retired from the public surface: `updates.proto`
 //! is connectivity-only (`ObserveConnectivity`), and reconciliation runs
-//! over unary `MessagesService/GetMessages` + `GetTargetChanges` pages.
+//! over unary `MessagesService/GetMessages` + `ListMessageChanges` pages.
 //! Covers descriptor/method inventory and prost shapes for
-//! `Target`/`GetMessages*`/`GetTargetChanges*`/`TargetChangeKind`, and the
+//! `Target`/`GetMessages*`/`ListMessageChanges*`/`TargetChangeKind`, and the
 //! `sync` validation helpers.
 
 use prost::Message as _;
 use tinkle_schema::methods::ALL_METHODS;
 use tinkle_schema::proto::{
     target, ConnectivityChanged, GetHistoryResponse, GetMessagesRequest, GetMessagesResponse,
-    GetTargetChangesRequest, GetTargetChangesResponse, Message, Target, TargetChange,
+    ListMessageChangesRequest, ListMessageChangesResponse, Message, Target, TargetChange,
     TargetChangeKind,
 };
 use tinkle_schema::sync::{
     accept_seq_decision, chunk_message_ids, fresher_body, target_from_parts, target_key_for,
     validate_changes_page, validate_connectivity_notification, AcceptSeqDecision, PageMore,
-    GET_HISTORY_METHOD, GET_MESSAGES_METHOD, GET_TARGET_CHANGES_METHOD,
+    GET_HISTORY_METHOD, GET_MESSAGES_METHOD, LIST_MESSAGE_CHANGES_METHOD,
     MAX_MESSAGE_IDS_PER_REQUEST, MAX_TARGET_CHANGES_LIMIT, OBSERVE_METHOD,
 };
 
@@ -45,7 +45,113 @@ fn change(
         kind: kind as i32,
         message,
         accept_seq,
+        ..Default::default()
     }
+}
+
+/// Explicit body-free invalidation is versioned and nonterminal, never inferred
+/// from an omitted hydration or accepted on a permanent removal marker.
+#[test]
+fn body_invalidations_require_explicit_nonterminal_revision() {
+    let valid = TargetChange {
+        message_id: 1,
+        kind: TargetChangeKind::Edited as i32,
+        accept_seq: 1,
+        message_revision: Some(2),
+        body_invalidated: true,
+        ..Default::default()
+    };
+    let response = |c| ListMessageChangesResponse {
+        changes: vec![c],
+        last_accept_seq: 1,
+        more_available: Some(false),
+    };
+    assert!(validate_changes_page(0, &response(valid.clone())).is_ok());
+    let mut missing = valid.clone();
+    missing.message_revision = None;
+    assert!(validate_changes_page(0, &response(missing)).is_err());
+    for kind in [TargetChangeKind::Deleted, TargetChangeKind::Revoked] {
+        let mut c = valid.clone();
+        c.kind = kind as i32;
+        assert!(validate_changes_page(0, &response(c)).is_err());
+    }
+    let mut body = valid;
+    body.message = Some(msg(1, None, Some(1)));
+    assert!(validate_changes_page(0, &response(body)).is_err());
+}
+
+/// Revisions rank full bodies independently of user edits; equal revisions cannot replace a copy.
+#[test]
+fn metadata_body_revisions_order_without_user_edit_dates() {
+    let old = Message {
+        body_revision: Some(3),
+        ..msg(1, None, Some(1))
+    };
+    let new = Message {
+        body_revision: Some(4),
+        ..old.clone()
+    };
+    assert!(fresher_body(&old, &new));
+    assert!(!fresher_body(&new, &old));
+    let equal = Message {
+        edit_date: Some(ts(999)),
+        ..old.clone()
+    };
+    assert!(!fresher_body(&old, &equal));
+    let unknown = Message {
+        body_revision: None,
+        edit_date: Some(ts(1)),
+        ..old.clone()
+    };
+    assert!(fresher_body(&old, &unknown));
+}
+
+/// Metadata kinds hydrate current bodies; an event revision never overwrites a newer body revision.
+#[test]
+fn metadata_markers_and_filtered_processed_horizons_validate() {
+    for kind in [
+        TargetChangeKind::Pin,
+        TargetChangeKind::Reaction,
+        TargetChangeKind::Poll,
+        TargetChangeKind::Ack,
+    ] {
+        let body = Message {
+            body_revision: Some(5),
+            ..msg(1, None, Some(1))
+        };
+        let marker = TargetChange {
+            message_revision: Some(4),
+            ..change(1, kind, Some(body), 7)
+        };
+        let mut response = ListMessageChangesResponse {
+            changes: vec![marker],
+            last_accept_seq: 10,
+            more_available: Some(false),
+        };
+        assert!(validate_changes_page(0, &response).is_ok());
+        response.changes[0].message_revision = Some(6);
+        assert!(validate_changes_page(0, &response).is_err());
+        response.changes[0].message = None;
+        assert!(validate_changes_page(0, &response).is_err());
+    }
+    assert!(validate_changes_page(
+        10,
+        &ListMessageChangesResponse {
+            changes: vec![],
+            last_accept_seq: 12,
+            more_available: Some(true)
+        }
+    )
+    .is_ok());
+    assert!(validate_changes_page(
+        10,
+        &ListMessageChangesResponse {
+            changes: vec![],
+            last_accept_seq: 10,
+            more_available: Some(true)
+        }
+    )
+    .is_err());
 }
 
 #[test]
@@ -59,8 +165,8 @@ fn method_constants_match_inventory() {
         "/tinkle.v1.MessagesService/GetMessages"
     );
     assert_eq!(
-        GET_TARGET_CHANGES_METHOD,
-        "/tinkle.v1.MessagesService/GetTargetChanges"
+        LIST_MESSAGE_CHANGES_METHOD,
+        "/tinkle.v1.MessagesService/ListMessageChanges"
     );
     assert_eq!(GET_HISTORY_METHOD, "/tinkle.v1.MessagesService/GetHistory");
     assert_eq!(MAX_MESSAGE_IDS_PER_REQUEST, 100);
@@ -104,9 +210,9 @@ fn updates_inventory_is_connectivity_only() {
         "GetMessagesResponse"
     )));
     assert!(ALL_METHODS.contains(&(
-        "/tinkle.v1.MessagesService/GetTargetChanges",
-        "GetTargetChangesRequest",
-        "GetTargetChangesResponse"
+        "/tinkle.v1.MessagesService/ListMessageChanges",
+        "ListMessageChangesRequest",
+        "ListMessageChangesResponse"
     )));
 }
 
@@ -177,7 +283,7 @@ fn updates_proto_surface_is_connectivity_only() {
                     .map(|m| m.name.as_deref().unwrap_or(""))
                     .collect();
                 assert!(names.contains(&"GetMessages"), "{names:?}");
-                assert!(names.contains(&"GetTargetChanges"), "{names:?}");
+                assert!(names.contains(&"ListMessageChanges"), "{names:?}");
                 found = true;
             }
         }
@@ -225,19 +331,19 @@ fn prost_get_messages_shape() {
 }
 
 #[test]
-fn prost_get_target_changes_shape() {
-    let req = GetTargetChangesRequest {
+fn prost_list_message_changes_shape() {
+    let req = ListMessageChangesRequest {
         target: Some(Target {
             kind: Some(target::Kind::ChatId(9)),
         }),
         after_accept_seq: 10,
         limit: 100,
     };
-    let back = GetTargetChangesRequest::decode(req.encode_to_vec().as_slice()).expect("decodes");
+    let back = ListMessageChangesRequest::decode(req.encode_to_vec().as_slice()).expect("decodes");
     assert_eq!(back.after_accept_seq, 10);
     assert_eq!(back.limit, 100);
 
-    let resp = GetTargetChangesResponse {
+    let resp = ListMessageChangesResponse {
         changes: vec![
             change(
                 1,
@@ -251,7 +357,8 @@ fn prost_get_target_changes_shape() {
         more_available: Some(true),
         last_accept_seq: 13,
     };
-    let back = GetTargetChangesResponse::decode(resp.encode_to_vec().as_slice()).expect("decodes");
+    let back =
+        ListMessageChangesResponse::decode(resp.encode_to_vec().as_slice()).expect("decodes");
     assert_eq!(back.changes.len(), 3);
     assert_eq!(back.more_available, Some(true));
     assert_eq!(back.last_accept_seq, 13);
@@ -294,7 +401,7 @@ fn edited(id: i64, at: i64) -> TargetChange {
 fn changes_page_accepts_ordered_pages() {
     // Caught-up empty page echoes the cursor.
     for more in [Some(false), None] {
-        let resp = GetTargetChangesResponse {
+        let resp = ListMessageChangesResponse {
             changes: vec![],
             more_available: more,
             last_accept_seq: 10,
@@ -312,7 +419,7 @@ fn changes_page_accepts_ordered_pages() {
         );
     }
     // Non-empty page: strictly ascending, cursor at the last change.
-    let resp = GetTargetChangesResponse {
+    let resp = ListMessageChangesResponse {
         changes: vec![
             edited(1, 11),
             change(2, TargetChangeKind::Deleted, None, 12),
@@ -326,7 +433,7 @@ fn changes_page_accepts_ordered_pages() {
     assert_eq!(page.last_accept_seq, 15);
     assert_eq!(page.more, PageMore::Yes);
 
-    let tail = GetTargetChangesResponse {
+    let tail = ListMessageChangesResponse {
         changes: vec![edited(4, 16)],
         more_available: Some(false),
         last_accept_seq: 16,
@@ -337,7 +444,7 @@ fn changes_page_accepts_ordered_pages() {
 
 #[test]
 fn changes_page_rejects_violations() {
-    let good = || GetTargetChangesResponse {
+    let good = || ListMessageChangesResponse {
         changes: vec![
             edited(1, 11),
             change(2, TargetChangeKind::Deleted, None, 12),
@@ -359,39 +466,39 @@ fn changes_page_rejects_violations() {
     bad.changes[0].accept_seq = 10;
     bad.last_accept_seq = 12;
     assert!(validate_changes_page(10, &bad).is_err());
-    // Cursor must equal the last change on a non-empty page.
+    // A processed horizon may cover filtered positions after the final marker.
     let mut bad = good();
     bad.last_accept_seq = 13;
-    assert!(validate_changes_page(10, &bad).is_err());
+    assert!(validate_changes_page(10, &bad).is_ok());
     let mut bad = good();
     bad.last_accept_seq = 11;
     assert!(validate_changes_page(10, &bad).is_err());
     // Cursor must never move backward.
     let bad = good();
     assert!(validate_changes_page(13, &bad).is_err());
-    // Empty page must echo the cursor exactly.
-    let bad = GetTargetChangesResponse {
+    // A filtered empty page can still advance the stable processed horizon.
+    let bad = ListMessageChangesResponse {
         changes: vec![],
         more_available: Some(false),
         last_accept_seq: 11,
     };
-    assert!(validate_changes_page(10, &bad).is_err());
+    assert!(validate_changes_page(10, &bad).is_ok());
     // Empty page claiming more is a protocol violation.
-    let bad = GetTargetChangesResponse {
+    let bad = ListMessageChangesResponse {
         changes: vec![],
         more_available: Some(true),
         last_accept_seq: 10,
     };
     assert!(validate_changes_page(10, &bad).is_err());
     // Edited changes must carry the body.
-    let bad = GetTargetChangesResponse {
+    let bad = ListMessageChangesResponse {
         changes: vec![change(1, TargetChangeKind::Edited, None, 11)],
         more_available: None,
         last_accept_seq: 11,
     };
     assert!(validate_changes_page(10, &bad).is_err());
     // Edited bodies must match the change's message id.
-    let bad = GetTargetChangesResponse {
+    let bad = ListMessageChangesResponse {
         changes: vec![change(
             1,
             TargetChangeKind::Edited,
@@ -404,7 +511,7 @@ fn changes_page_rejects_violations() {
     assert!(validate_changes_page(10, &bad).is_err());
     // Deleted/revoked changes must not carry a body.
     for kind in [TargetChangeKind::Deleted, TargetChangeKind::Revoked] {
-        let bad = GetTargetChangesResponse {
+        let bad = ListMessageChangesResponse {
             changes: vec![change(1, kind, Some(msg(1, None, None)), 11)],
             more_available: None,
             last_accept_seq: 11,
@@ -412,7 +519,7 @@ fn changes_page_rejects_violations() {
         assert!(validate_changes_page(10, &bad).is_err());
     }
     // Unspecified and unknown kinds are rejected.
-    let bad = GetTargetChangesResponse {
+    let bad = ListMessageChangesResponse {
         changes: vec![change(1, TargetChangeKind::Unspecified, None, 11)],
         more_available: None,
         last_accept_seq: 11,

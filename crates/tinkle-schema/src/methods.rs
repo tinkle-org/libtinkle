@@ -11,6 +11,106 @@
 /// `(method, request, response)`; descriptors for codegen.
 pub const ALL_METHODS: &[(&str, &str, &str)] = &[
     (
+        "/tinkle.v1.MessagesService/GetScheduledMessages",
+        "GetScheduledMessagesRequest",
+        "GetScheduledMessagesResponse",
+    ),
+    (
+        "/tinkle.v1.MessagesService/CancelScheduledMessages",
+        "CancelScheduledMessagesRequest",
+        "CancelScheduledMessagesResponse",
+    ),
+    (
+        "/tinkle.v1.MessagesService/ClosePoll",
+        "ClosePollRequest",
+        "ClosePollResponse",
+    ),
+    (
+        "/tinkle.v1.AccountService/SetProfilePhoto",
+        "SetProfilePhotoRequest",
+        "SetProfilePhotoResponse",
+    ),
+    (
+        "/tinkle.v1.AccountService/GetProfilePhotos",
+        "GetProfilePhotosRequest",
+        "GetProfilePhotosResponse",
+    ),
+    (
+        "/tinkle.v1.AccountService/SelectProfilePhoto",
+        "SelectProfilePhotoRequest",
+        "SelectProfilePhotoResponse",
+    ),
+    (
+        "/tinkle.v1.AccountService/DeleteProfilePhoto",
+        "DeleteProfilePhotoRequest",
+        "DeleteProfilePhotoResponse",
+    ),
+    (
+        "/tinkle.v1.StickersService/CreateStickerAsset",
+        "CreateStickerAssetRequest",
+        "CreateStickerAssetResponse",
+    ),
+    (
+        "/tinkle.v1.StickersService/UpdateStickerAsset",
+        "UpdateStickerAssetRequest",
+        "UpdateStickerAssetResponse",
+    ),
+    (
+        "/tinkle.v1.StickersService/DeleteStickerAsset",
+        "DeleteStickerAssetRequest",
+        "DeleteStickerAssetResponse",
+    ),
+    (
+        "/tinkle.v1.StickersService/GetStickerAssets",
+        "GetStickerAssetsRequest",
+        "GetStickerAssetsResponse",
+    ),
+    (
+        "/tinkle.v1.StickersService/GetOwnedPacks",
+        "GetOwnedPacksRequest",
+        "GetOwnedPacksResponse",
+    ),
+    (
+        "/tinkle.v1.StickersService/CreatePack",
+        "CreatePackRequest",
+        "CreatePackResponse",
+    ),
+    (
+        "/tinkle.v1.StickersService/UpdatePack",
+        "UpdatePackRequest",
+        "UpdatePackResponse",
+    ),
+    (
+        "/tinkle.v1.StickersService/DeletePack",
+        "DeletePackRequest",
+        "DeletePackResponse",
+    ),
+    (
+        "/tinkle.v1.StickersService/AddPackAsset",
+        "AddPackAssetRequest",
+        "AddPackAssetResponse",
+    ),
+    (
+        "/tinkle.v1.StickersService/RemovePackAsset",
+        "RemovePackAssetRequest",
+        "RemovePackAssetResponse",
+    ),
+    (
+        "/tinkle.v1.StickersService/ReorderPackAssets",
+        "ReorderPackAssetsRequest",
+        "ReorderPackAssetsResponse",
+    ),
+    (
+        "/tinkle.v1.StickersService/PublishPack",
+        "PublishPackRequest",
+        "PublishPackResponse",
+    ),
+    (
+        "/tinkle.v1.StickersService/UnpublishPack",
+        "UnpublishPackRequest",
+        "UnpublishPackResponse",
+    ),
+    (
         "/tinkle.v1.AccountService/ConfirmSession",
         "ConfirmSessionRequest",
         "ConfirmSessionResponse",
@@ -686,9 +786,9 @@ pub const ALL_METHODS: &[(&str, &str, &str)] = &[
         "DeleteMessagesResponse",
     ),
     (
-        "/tinkle.v1.MessagesService/EditChatAbout",
-        "EditChatAboutRequest",
-        "EditChatAboutResponse",
+        "/tinkle.v1.MessagesService/UpdateChatDescription",
+        "UpdateChatDescriptionRequest",
+        "UpdateChatDescriptionResponse",
     ),
     (
         "/tinkle.v1.MessagesService/EditChatAdmin",
@@ -716,9 +816,9 @@ pub const ALL_METHODS: &[(&str, &str, &str)] = &[
         "EditMessageResponse",
     ),
     (
-        "/tinkle.v1.MessagesService/GetChatComplete",
-        "GetChatCompleteRequest",
-        "GetChatCompleteResponse",
+        "/tinkle.v1.MessagesService/GetChatDetails",
+        "GetChatDetailsRequest",
+        "GetChatDetailsResponse",
     ),
     (
         "/tinkle.v1.MessagesService/GetChats",
@@ -736,9 +836,9 @@ pub const ALL_METHODS: &[(&str, &str, &str)] = &[
         "GetHistoryResponse",
     ),
     (
-        "/tinkle.v1.MessagesService/GetMessageReactionsList",
-        "GetMessageReactionsListRequest",
-        "GetMessageReactionsListResponse",
+        "/tinkle.v1.MessagesService/ListMessageReactions",
+        "ListMessageReactionsRequest",
+        "ListMessageReactionsResponse",
     ),
     (
         "/tinkle.v1.MessagesService/GetMessages",
@@ -746,9 +846,9 @@ pub const ALL_METHODS: &[(&str, &str, &str)] = &[
         "GetMessagesResponse",
     ),
     (
-        "/tinkle.v1.MessagesService/GetMessagesReactions",
-        "GetMessagesReactionsRequest",
-        "GetMessagesReactionsResponse",
+        "/tinkle.v1.MessagesService/BatchGetMessageReactions",
+        "BatchGetMessageReactionsRequest",
+        "BatchGetMessageReactionsResponse",
     ),
     (
         "/tinkle.v1.MessagesService/GetPollResults",
@@ -761,14 +861,14 @@ pub const ALL_METHODS: &[(&str, &str, &str)] = &[
         "GetPollVotesResponse",
     ),
     (
-        "/tinkle.v1.MessagesService/GetTargetChanges",
-        "GetTargetChangesRequest",
-        "GetTargetChangesResponse",
+        "/tinkle.v1.MessagesService/ListMessageChanges",
+        "ListMessageChangesRequest",
+        "ListMessageChangesResponse",
     ),
     (
-        "/tinkle.v1.MessagesService/GetThreadMessage",
-        "GetThreadMessageRequest",
-        "GetThreadMessageResponse",
+        "/tinkle.v1.MessagesService/ListThreadMessages",
+        "ListThreadMessagesRequest",
+        "ListThreadMessagesResponse",
     ),
     (
         "/tinkle.v1.MessagesService/GetUnreadMentions",
@@ -781,9 +881,9 @@ pub const ALL_METHODS: &[(&str, &str, &str)] = &[
         "GetUnreadReactionsResponse",
     ),
     (
-        "/tinkle.v1.MessagesService/ReadHistory",
-        "ReadHistoryRequest",
-        "ReadHistoryResponse",
+        "/tinkle.v1.MessagesService/MarkHistoryRead",
+        "MarkHistoryReadRequest",
+        "MarkHistoryReadResponse",
     ),
     (
         "/tinkle.v1.MessagesService/ReadMentions",
@@ -821,9 +921,9 @@ pub const ALL_METHODS: &[(&str, &str, &str)] = &[
         "SendMessageResponse",
     ),
     (
-        "/tinkle.v1.MessagesService/SendMultiMedia",
-        "SendMultiMediaRequest",
-        "SendMultiMediaResponse",
+        "/tinkle.v1.MessagesService/SendAlbum",
+        "SendAlbumRequest",
+        "SendAlbumResponse",
     ),
     (
         "/tinkle.v1.MessagesService/SendReaction",
@@ -831,9 +931,14 @@ pub const ALL_METHODS: &[(&str, &str, &str)] = &[
         "SendReactionResponse",
     ),
     (
-        "/tinkle.v1.MessagesService/SendStartBot",
-        "SendStartBotRequest",
-        "SendStartBotResponse",
+        "/tinkle.v1.MessagesService/GetRecentReactions",
+        "GetRecentReactionsRequest",
+        "GetRecentReactionsResponse",
+    ),
+    (
+        "/tinkle.v1.MessagesService/StartBot",
+        "StartBotRequest",
+        "StartBotResponse",
     ),
     (
         "/tinkle.v1.MessagesService/SendVote",
@@ -856,9 +961,9 @@ pub const ALL_METHODS: &[(&str, &str, &str)] = &[
         "UnpinAllMessagesResponse",
     ),
     (
-        "/tinkle.v1.MessagesService/UpdatePinnedMessage",
-        "UpdatePinnedMessageRequest",
-        "UpdatePinnedMessageResponse",
+        "/tinkle.v1.MessagesService/SetMessagePin",
+        "SetMessagePinRequest",
+        "SetMessagePinResponse",
     ),
     (
         "/tinkle.v1.StickersService/ClearRecentStickers",
@@ -952,6 +1057,14 @@ pub mod connectionservice {
 
 /// `AccountService` methods.
 pub mod accountservice {
+    /// Insert/select a validated completed-file photo at the expected gallery revision.
+    pub const SET_PROFILE_PHOTO: &str = "/tinkle.v1.AccountService/SetProfilePhoto";
+    /// Read the privacy-filtered gallery and explicit selection/revision.
+    pub const GET_PROFILE_PHOTOS: &str = "/tinkle.v1.AccountService/GetProfilePhotos";
+    /// Select one retained photo without reordering the gallery.
+    pub const SELECT_PROFILE_PHOTO: &str = "/tinkle.v1.AccountService/SelectProfilePhoto";
+    /// Delete one retained photo at the expected gallery revision.
+    pub const DELETE_PROFILE_PHOTO: &str = "/tinkle.v1.AccountService/DeleteProfilePhoto";
     /// Confirm another active login from a confirmed current session, once.
     pub const CONFIRM_SESSION: &str = "/tinkle.v1.AccountService/ConfirmSession";
     /// `/tinkle.v1.AccountService/ChangePhoneNumber`: `ChangePhoneNumberRequest` → `ChangePhoneNumberResponse`.
@@ -1248,6 +1361,13 @@ pub mod helpservice {
 
 /// `MessagesService` methods.
 pub mod messagesservice {
+    /// Explicit actor-owned scheduled-item lookup, not list discovery.
+    pub const GET_SCHEDULED_MESSAGES: &str = "/tinkle.v1.MessagesService/GetScheduledMessages";
+    /// Pending owned cancellation; any album item selects the whole group.
+    pub const CANCEL_SCHEDULED_MESSAGES: &str =
+        "/tinkle.v1.MessagesService/CancelScheduledMessages";
+    /// Permanently close an accepted sender-owned poll.
+    pub const CLOSE_POLL: &str = "/tinkle.v1.MessagesService/ClosePoll";
     /// `/tinkle.v1.MessagesService/AddChatParticipant`: `AddChatParticipantRequest` → `AddChatParticipantResponse`.
     pub const ADD_CHAT_PARTICIPANT: &str = "/tinkle.v1.MessagesService/AddChatParticipant";
     /// `/tinkle.v1.MessagesService/CreateChat`: `CreateChatRequest` → `CreateChatResponse`.
@@ -1256,8 +1376,8 @@ pub mod messagesservice {
     pub const DELETE_HISTORY: &str = "/tinkle.v1.MessagesService/DeleteHistory";
     /// `/tinkle.v1.MessagesService/DeleteMessages`: `DeleteMessagesRequest` → `DeleteMessagesResponse`.
     pub const DELETE_MESSAGES: &str = "/tinkle.v1.MessagesService/DeleteMessages";
-    /// `/tinkle.v1.MessagesService/EditChatAbout`: `EditChatAboutRequest` → `EditChatAboutResponse`.
-    pub const EDIT_CHAT_ABOUT: &str = "/tinkle.v1.MessagesService/EditChatAbout";
+    /// `/tinkle.v1.MessagesService/UpdateChatDescription`: `UpdateChatDescriptionRequest` → `UpdateChatDescriptionResponse`.
+    pub const UPDATE_CHAT_DESCRIPTION: &str = "/tinkle.v1.MessagesService/UpdateChatDescription";
     /// `/tinkle.v1.MessagesService/EditChatAdmin`: `EditChatAdminRequest` → `EditChatAdminResponse`.
     pub const EDIT_CHAT_ADMIN: &str = "/tinkle.v1.MessagesService/EditChatAdmin";
     /// `/tinkle.v1.MessagesService/EditChatPhoto`: `EditChatPhotoRequest` → `EditChatPhotoResponse`.
@@ -1269,35 +1389,35 @@ pub mod messagesservice {
     pub const EDIT_CHAT_TITLE: &str = "/tinkle.v1.MessagesService/EditChatTitle";
     /// `/tinkle.v1.MessagesService/EditMessage`: `EditMessageRequest` → `EditMessageResponse`.
     pub const EDIT_MESSAGE: &str = "/tinkle.v1.MessagesService/EditMessage";
-    /// `/tinkle.v1.MessagesService/GetChatComplete`: `GetChatCompleteRequest` → `GetChatCompleteResponse`.
-    pub const GET_CHAT_COMPLETE: &str = "/tinkle.v1.MessagesService/GetChatComplete";
+    /// `/tinkle.v1.MessagesService/GetChatDetails`: `GetChatDetailsRequest` → `GetChatDetailsResponse`.
+    pub const GET_CHAT_DETAILS: &str = "/tinkle.v1.MessagesService/GetChatDetails";
     /// `/tinkle.v1.MessagesService/GetChats`: `GetChatsRequest` → `GetChatsResponse`.
     pub const GET_CHATS: &str = "/tinkle.v1.MessagesService/GetChats";
     /// `/tinkle.v1.MessagesService/GetDialogs`: `GetDialogsRequest` → `GetDialogsResponse`.
     pub const GET_DIALOGS: &str = "/tinkle.v1.MessagesService/GetDialogs";
     /// `/tinkle.v1.MessagesService/GetHistory`: `GetHistoryRequest` → `GetHistoryResponse`.
     pub const GET_HISTORY: &str = "/tinkle.v1.MessagesService/GetHistory";
-    /// `/tinkle.v1.MessagesService/GetMessageReactionsList`: `GetMessageReactionsListRequest` → `GetMessageReactionsListResponse`.
-    pub const GET_MESSAGE_REACTIONS_LIST: &str =
-        "/tinkle.v1.MessagesService/GetMessageReactionsList";
+    /// `/tinkle.v1.MessagesService/ListMessageReactions`: `ListMessageReactionsRequest` → `ListMessageReactionsResponse`.
+    pub const LIST_MESSAGE_REACTIONS: &str = "/tinkle.v1.MessagesService/ListMessageReactions";
     /// `/tinkle.v1.MessagesService/GetMessages`: `GetMessagesRequest` → `GetMessagesResponse`.
     pub const GET_MESSAGES: &str = "/tinkle.v1.MessagesService/GetMessages";
-    /// `/tinkle.v1.MessagesService/GetMessagesReactions`: `GetMessagesReactionsRequest` → `GetMessagesReactionsResponse`.
-    pub const GET_MESSAGES_REACTIONS: &str = "/tinkle.v1.MessagesService/GetMessagesReactions";
+    /// `/tinkle.v1.MessagesService/BatchGetMessageReactions`: `BatchGetMessageReactionsRequest` → `BatchGetMessageReactionsResponse`.
+    pub const BATCH_GET_MESSAGE_REACTIONS: &str =
+        "/tinkle.v1.MessagesService/BatchGetMessageReactions";
     /// `/tinkle.v1.MessagesService/GetPollResults`: `GetPollResultsRequest` → `GetPollResultsResponse`.
     pub const GET_POLL_RESULTS: &str = "/tinkle.v1.MessagesService/GetPollResults";
     /// `/tinkle.v1.MessagesService/GetPollVotes`: `GetPollVotesRequest` → `GetPollVotesResponse`.
     pub const GET_POLL_VOTES: &str = "/tinkle.v1.MessagesService/GetPollVotes";
-    /// `/tinkle.v1.MessagesService/GetTargetChanges`: `GetTargetChangesRequest` → `GetTargetChangesResponse`.
-    pub const GET_TARGET_CHANGES: &str = "/tinkle.v1.MessagesService/GetTargetChanges";
-    /// `/tinkle.v1.MessagesService/GetThreadMessage`: `GetThreadMessageRequest` → `GetThreadMessageResponse`.
-    pub const GET_THREAD_MESSAGE: &str = "/tinkle.v1.MessagesService/GetThreadMessage";
+    /// `/tinkle.v1.MessagesService/ListMessageChanges`: `ListMessageChangesRequest` → `ListMessageChangesResponse`.
+    pub const LIST_MESSAGE_CHANGES: &str = "/tinkle.v1.MessagesService/ListMessageChanges";
+    /// `/tinkle.v1.MessagesService/ListThreadMessages`: `ListThreadMessagesRequest` → `ListThreadMessagesResponse`.
+    pub const LIST_THREAD_MESSAGES: &str = "/tinkle.v1.MessagesService/ListThreadMessages";
     /// `/tinkle.v1.MessagesService/GetUnreadMentions`: `GetUnreadMentionsRequest` → `GetUnreadMentionsResponse`.
     pub const GET_UNREAD_MENTIONS: &str = "/tinkle.v1.MessagesService/GetUnreadMentions";
     /// `/tinkle.v1.MessagesService/GetUnreadReactions`: `GetUnreadReactionsRequest` → `GetUnreadReactionsResponse`.
     pub const GET_UNREAD_REACTIONS: &str = "/tinkle.v1.MessagesService/GetUnreadReactions";
-    /// `/tinkle.v1.MessagesService/ReadHistory`: `ReadHistoryRequest` → `ReadHistoryResponse`.
-    pub const READ_HISTORY: &str = "/tinkle.v1.MessagesService/ReadHistory";
+    /// `/tinkle.v1.MessagesService/MarkHistoryRead`: `MarkHistoryReadRequest` → `MarkHistoryReadResponse`.
+    pub const MARK_HISTORY_READ: &str = "/tinkle.v1.MessagesService/MarkHistoryRead";
     /// `/tinkle.v1.MessagesService/ReadMentions`: `ReadMentionsRequest` → `ReadMentionsResponse`.
     pub const READ_MENTIONS: &str = "/tinkle.v1.MessagesService/ReadMentions";
     /// `/tinkle.v1.MessagesService/ReadReactions`: `ReadReactionsRequest` → `ReadReactionsResponse`.
@@ -1312,12 +1432,14 @@ pub mod messagesservice {
     pub const SEND_MEDIA: &str = "/tinkle.v1.MessagesService/SendMedia";
     /// `/tinkle.v1.MessagesService/SendMessage`: `SendMessageRequest` → `SendMessageResponse`.
     pub const SEND_MESSAGE: &str = "/tinkle.v1.MessagesService/SendMessage";
-    /// `/tinkle.v1.MessagesService/SendMultiMedia`: `SendMultiMediaRequest` → `SendMultiMediaResponse`.
-    pub const SEND_MULTI_MEDIA: &str = "/tinkle.v1.MessagesService/SendMultiMedia";
+    /// `/tinkle.v1.MessagesService/SendAlbum`: `SendAlbumRequest` → `SendAlbumResponse`.
+    pub const SEND_ALBUM: &str = "/tinkle.v1.MessagesService/SendAlbum";
     /// `/tinkle.v1.MessagesService/SendReaction`: `SendReactionRequest` → `SendReactionResponse`.
     pub const SEND_REACTION: &str = "/tinkle.v1.MessagesService/SendReaction";
-    /// `/tinkle.v1.MessagesService/SendStartBot`: `SendStartBotRequest` → `SendStartBotResponse`.
-    pub const SEND_START_BOT: &str = "/tinkle.v1.MessagesService/SendStartBot";
+    /// `/tinkle.v1.MessagesService/GetRecentReactions`: caller-owned exact-version collection.
+    pub const GET_RECENT_REACTIONS: &str = "/tinkle.v1.MessagesService/GetRecentReactions";
+    /// `/tinkle.v1.MessagesService/StartBot`: `StartBotRequest` → `StartBotResponse`.
+    pub const START_BOT: &str = "/tinkle.v1.MessagesService/StartBot";
     /// `/tinkle.v1.MessagesService/SendVote`: `SendVoteRequest` → `SendVoteResponse`.
     pub const SEND_VOTE: &str = "/tinkle.v1.MessagesService/SendVote";
     /// `/tinkle.v1.MessagesService/SetHistoryTTL`: `SetHistoryTtlRequest` → `SetHistoryTtlResponse`.
@@ -1326,12 +1448,38 @@ pub mod messagesservice {
     pub const SET_TYPING: &str = "/tinkle.v1.MessagesService/SetTyping";
     /// `/tinkle.v1.MessagesService/UnpinAllMessages`: `UnpinAllMessagesRequest` → `UnpinAllMessagesResponse`.
     pub const UNPIN_ALL_MESSAGES: &str = "/tinkle.v1.MessagesService/UnpinAllMessages";
-    /// `/tinkle.v1.MessagesService/UpdatePinnedMessage`: `UpdatePinnedMessageRequest` → `UpdatePinnedMessageResponse`.
-    pub const UPDATE_PINNED_MESSAGE: &str = "/tinkle.v1.MessagesService/UpdatePinnedMessage";
+    /// `/tinkle.v1.MessagesService/SetMessagePin`: `SetMessagePinRequest` → `SetMessagePinResponse`.
+    pub const SET_MESSAGE_PIN: &str = "/tinkle.v1.MessagesService/SetMessagePin";
 }
 
 /// `StickersService` methods.
 pub mod stickersservice {
+    /// Create a validated owner asset from completed files.
+    pub const CREATE_STICKER_ASSET: &str = "/tinkle.v1.StickersService/CreateStickerAsset";
+    /// Create an immutable version using the expected current asset version.
+    pub const UPDATE_STICKER_ASSET: &str = "/tinkle.v1.StickersService/UpdateStickerAsset";
+    /// Delete an owner asset at its expected current version.
+    pub const DELETE_STICKER_ASSET: &str = "/tinkle.v1.StickersService/DeleteStickerAsset";
+    /// Resolve known asset IDs or exact immutable versions under current visibility.
+    pub const GET_STICKER_ASSETS: &str = "/tinkle.v1.StickersService/GetStickerAssets";
+    /// List owner draft/published packs with their revisions.
+    pub const GET_OWNED_PACKS: &str = "/tinkle.v1.StickersService/GetOwnedPacks";
+    /// Create an empty owner pack.
+    pub const CREATE_PACK: &str = "/tinkle.v1.StickersService/CreatePack";
+    /// Edit pack metadata with revision CAS.
+    pub const UPDATE_PACK: &str = "/tinkle.v1.StickersService/UpdatePack";
+    /// Delete a pack with revision CAS, not its assets.
+    pub const DELETE_PACK: &str = "/tinkle.v1.StickersService/DeletePack";
+    /// Pin an exact asset version in a pack at its expected revision.
+    pub const ADD_PACK_ASSET: &str = "/tinkle.v1.StickersService/AddPackAsset";
+    /// Remove only membership at the expected pack revision.
+    pub const REMOVE_PACK_ASSET: &str = "/tinkle.v1.StickersService/RemovePackAsset";
+    /// Replace display order without resolving any asset to catalog head.
+    pub const REORDER_PACK_ASSETS: &str = "/tinkle.v1.StickersService/ReorderPackAssets";
+    /// Publish the exact validated pins at the expected pack revision.
+    pub const PUBLISH_PACK: &str = "/tinkle.v1.StickersService/PublishPack";
+    /// Withdraw the pack at the expected revision without deleting retained versions.
+    pub const UNPUBLISH_PACK: &str = "/tinkle.v1.StickersService/UnpublishPack";
     /// `/tinkle.v1.StickersService/ClearRecentStickers`: `ClearRecentStickersRequest` → `ClearRecentStickersResponse`.
     pub const CLEAR_RECENT_STICKERS: &str = "/tinkle.v1.StickersService/ClearRecentStickers";
     /// `/tinkle.v1.StickersService/GetArchivedPacks`: `GetArchivedPacksRequest` → `GetArchivedPacksResponse`.

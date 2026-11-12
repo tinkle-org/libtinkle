@@ -699,6 +699,12 @@ internal interface UniffiCallbackInterfaceFfiCursorStoreMethod2 : com.sun.jna.Ca
 internal interface UniffiCallbackInterfaceFfiCursorStoreMethod3 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`principal`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
+internal interface UniffiCallbackInterfaceFfiPlatformMediaPreparerMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`input`: Long,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
+}
+internal interface UniffiCallbackInterfaceFfiPlatformVideoDecoderMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`input`: Long,`limits`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
+}
 @Structure.FieldOrder("uniffiFree", "uniffiClone", "beginRestore", "endRestore", "namespaceSnapshot", "commitCurrent", "beginClear", "finishClear", "clear", "commit", "loadOperation", "loadActive")
 internal open class UniffiVTableCallbackInterfaceFfiSecureEnrollmentStore(
     @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
@@ -773,6 +779,44 @@ internal open class UniffiVTableCallbackInterfaceFfiCursorStore(
     }
 
 }
+@Structure.FieldOrder("uniffiFree", "uniffiClone", "prepare")
+internal open class UniffiVTableCallbackInterfaceFfiPlatformMediaPreparer(
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    @JvmField internal var `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+    @JvmField internal var `prepare`: UniffiCallbackInterfaceFfiPlatformMediaPreparerMethod0? = null,
+) : Structure() {
+    class UniffiByValue(
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+        `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+        `prepare`: UniffiCallbackInterfaceFfiPlatformMediaPreparerMethod0? = null,
+    ): UniffiVTableCallbackInterfaceFfiPlatformMediaPreparer(`uniffiFree`,`uniffiClone`,`prepare`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceFfiPlatformMediaPreparer) {
+        `uniffiFree` = other.`uniffiFree`
+        `uniffiClone` = other.`uniffiClone`
+        `prepare` = other.`prepare`
+    }
+
+}
+@Structure.FieldOrder("uniffiFree", "uniffiClone", "inspectAndDecode")
+internal open class UniffiVTableCallbackInterfaceFfiPlatformVideoDecoder(
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    @JvmField internal var `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+    @JvmField internal var `inspectAndDecode`: UniffiCallbackInterfaceFfiPlatformVideoDecoderMethod0? = null,
+) : Structure() {
+    class UniffiByValue(
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+        `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+        `inspectAndDecode`: UniffiCallbackInterfaceFfiPlatformVideoDecoderMethod0? = null,
+    ): UniffiVTableCallbackInterfaceFfiPlatformVideoDecoder(`uniffiFree`,`uniffiClone`,`inspectAndDecode`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceFfiPlatformVideoDecoder) {
+        `uniffiFree` = other.`uniffiFree`
+        `uniffiClone` = other.`uniffiClone`
+        `inspectAndDecode` = other.`inspectAndDecode`
+    }
+
+}
 
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
@@ -805,6 +849,12 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_tinkle_ffi_checksum_func_push_target_key(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_func_tinkle_ffi_init(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_func_media_image_dimensions(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_func_media_video_dimensions(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_func_prepare_native_media(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_accountstatesubscription_next(
     ): Int
@@ -844,13 +894,13 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_get_messages(
     ): Int
-    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_get_target_changes(
-    ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_is_connected(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_is_signed_out(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_is_suspended(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_list_message_changes(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_load_dialogs(
     ): Int
@@ -916,6 +966,202 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_unregister_push(
     ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_discard(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_enqueue_album(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_enqueue_media(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_enqueue_message(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_get_job(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_jobs(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_resume(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_account_delete_profile_photo(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_account_get_profile_photos(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_account_select_profile_photo(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_account_set_profile_photo(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_account_update_profile(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_account_update_username(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_account_validate_username(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_add_chat_participant(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_batch_get_message_reactions(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_cancel_scheduled_messages(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_close_poll(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_create_chat(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_delete_history(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_delete_messages(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_edit_chat_admin(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_edit_chat_photo(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_edit_chat_restricted_scopes(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_edit_chat_title(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_edit_message(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_chat_details(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_chats(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_dialogs(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_history(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_messages(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_poll_results(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_poll_votes(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_recent_reactions(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_scheduled_messages(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_unread_mentions(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_unread_reactions(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_list_message_changes(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_list_message_reactions(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_list_thread_messages(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_mark_history_read(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_read_mentions(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_read_reactions(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_read_thread(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_remove_chat_participant(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_search(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_send_album(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_send_media(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_send_message(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_send_reaction(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_send_vote(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_set_history_ttl(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_set_message_pin(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_set_typing(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_start_bot(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_unpin_all_messages(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_update_chat_description(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_add_pack_asset(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_clear_recent_stickers(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_create_pack(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_create_sticker_asset(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_delete_pack(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_delete_sticker_asset(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_archived_packs(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_favorite_stickers(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_installed_packs(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_owned_packs(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_pack(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_pack_by_short_name(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_recent_stickers(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_sticker_assets(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_install_pack(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_publish_pack(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_remove_pack_asset(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_reorder_pack_assets(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_reorder_packs(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_save_recent_sticker(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_search_packs(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_toggle_favorite_sticker(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_uninstall_pack(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_unpublish_pack(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_update_pack(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_update_sticker_asset(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_users_get_user_complete(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_users_get_users(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_clear_native_media_preparer(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_configure_native_media_preparer(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_files_download_bytes_with_context(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_files_download_to_path(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_files_download_to_path_with_context(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_files_transfer_checkpoint(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_files_upload_path(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_adopt_native_attachment(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_attachment_manifest(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_prepare_attachment(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_prepare_native_attachment(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_clear_video_decoder(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_tinkleclient_configure_video_decoder(
+    ): Int
     external fun uniffi_tinkle_ffi_checksum_method_enrollmentoperation_operation_id(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_ffisecureenrollmentstore_begin_restore(
@@ -966,6 +1212,54 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_fficursorstore_clear_principal(
     ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_transfercontrol_cancel(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_transfercontrol_progress(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffinativemediainput_deadline_ms(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffinativemediainput_is_cancelled(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffinativemediainput_kind(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffinativemediainput_max_duration_ms(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffinativemediainput_max_frames(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffinativemediainput_max_output_bytes(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffinativemediainput_output_path(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffinativemediainput_size_bytes(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffinativemediainput_source_path(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffiplatformmediapreparer_prepare(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffiplatformvideodecoder_inspect_and_decode(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_facts(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_mime_type(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_output_sha256(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_path(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_recipe(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_source_sha256(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_waveform(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffivideoinput_is_cancelled(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffivideoinput_size_bytes(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffivideoinput_source_path(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_method_ffivideoinput_source_sha256(
+    ): Int
     external fun uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new_sqlite(
@@ -981,6 +1275,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_tinkle_ffi_checksum_constructor_sqlitestorage_open_in_memory(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_constructor_inmemoryffistore_new(
+    ): Int
+    external fun uniffi_tinkle_ffi_checksum_constructor_transfercontrol_new(
     ): Int
     external fun ffi_tinkle_ffi_uniffi_contract_version(
     ): Int
@@ -999,6 +1295,8 @@ internal object UniffiLib {
     init {
         Native.register(UniffiLib::class.java, findLibraryName(componentName = "tinkle_ffi"))
         uniffiCallbackInterfaceFfiCursorStore.register(this)
+        uniffiCallbackInterfaceFfiPlatformMediaPreparer.register(this)
+        uniffiCallbackInterfaceFfiPlatformVideoDecoder.register(this)
         uniffiCallbackInterfaceFfiSecureEnrollmentStore.register(this)
 
     }
@@ -1048,19 +1346,19 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_get_upload_status(`ptr`: Long,`request`: RustBuffer.ByValue,
     ): Long
-    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_upload_bytes(`ptr`: Long,`idempotencyKey`: RustBuffer.ByValue,`data`: RustBuffer.ByValue,`fileName`: RustBuffer.ByValue,`mimeType`: RustBuffer.ByValue,`sha256`: RustBuffer.ByValue,`encrypted`: Byte,
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_upload_bytes(`ptr`: Long,`idempotencyKey`: RustBuffer.ByValue,`data`: RustBuffer.ByValue,`fileName`: RustBuffer.ByValue,`mimeType`: RustBuffer.ByValue,`sha256`: RustBuffer.ByValue,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_upload_part(`ptr`: Long,`request`: RustBuffer.ByValue,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_get_messages(`ptr`: Long,`targetKind`: RustBuffer.ByValue,`targetId`: Long,`messageIds`: RustBuffer.ByValue,
-    ): Long
-    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_get_target_changes(`ptr`: Long,`targetKind`: RustBuffer.ByValue,`targetId`: Long,`afterAcceptSeq`: Long,`limit`: Int,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_is_connected(`ptr`: Long,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_is_signed_out(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_is_suspended(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_list_message_changes(`ptr`: Long,`targetKind`: RustBuffer.ByValue,`targetId`: Long,`afterAcceptSeq`: Long,`limit`: Int,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_load_dialogs(`ptr`: Long,`request`: RustBuffer.ByValue,`policy`: RustBuffer.ByValue,
     ): Long
@@ -1078,7 +1376,7 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_resume(`ptr`: Long,
     ): Long
-    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_send_message(`ptr`: Long,`targetKind`: RustBuffer.ByValue,`targetId`: Long,`text`: RustBuffer.ByValue,`randomId`: Long,
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_send_message(`ptr`: Long,`targetKind`: RustBuffer.ByValue,`targetId`: Long,`text`: RustBuffer.ByValue,`idempotencyKey`: Long,
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_set_principal_user_id(`ptr`: Long,`userId`: Long,
     ): Long
@@ -1126,6 +1424,202 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_tinkle_ffi_fn_method_tinkleclient_unregister_push(`ptr`: Long,`token`: RustBuffer.ByValue,
     ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_sending_discard(`ptr`: Long,`jobId`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_sending_enqueue_album(`ptr`: Long,`jobId`: RustBuffer.ByValue,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_sending_enqueue_media(`ptr`: Long,`jobId`: RustBuffer.ByValue,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_sending_enqueue_message(`ptr`: Long,`jobId`: RustBuffer.ByValue,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_sending_get_job(`ptr`: Long,`jobId`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_sending_jobs(`ptr`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_sending_resume(`ptr`: Long,`jobId`: RustBuffer.ByValue,`retry`: RustBuffer.ByValue,`control`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_account_delete_profile_photo(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_account_get_profile_photos(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_account_select_profile_photo(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_account_set_profile_photo(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_account_update_profile(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_account_update_username(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_account_validate_username(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_add_chat_participant(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_batch_get_message_reactions(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_cancel_scheduled_messages(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_close_poll(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_create_chat(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_delete_history(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_delete_messages(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_edit_chat_admin(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_edit_chat_photo(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_edit_chat_restricted_scopes(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_edit_chat_title(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_edit_message(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_chat_details(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_chats(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_dialogs(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_history(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_messages(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_poll_results(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_poll_votes(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_recent_reactions(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_scheduled_messages(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_unread_mentions(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_unread_reactions(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_list_message_changes(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_list_message_reactions(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_list_thread_messages(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_mark_history_read(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_read_mentions(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_read_reactions(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_read_thread(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_remove_chat_participant(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_search(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_send_album(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_send_media(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_send_message(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_send_reaction(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_send_vote(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_set_history_ttl(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_set_message_pin(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_set_typing(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_start_bot(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_unpin_all_messages(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_messages_update_chat_description(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_add_pack_asset(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_clear_recent_stickers(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_create_pack(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_create_sticker_asset(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_delete_pack(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_delete_sticker_asset(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_archived_packs(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_favorite_stickers(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_installed_packs(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_owned_packs(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_pack(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_pack_by_short_name(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_recent_stickers(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_sticker_assets(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_install_pack(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_publish_pack(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_remove_pack_asset(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_reorder_pack_assets(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_reorder_packs(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_save_recent_sticker(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_search_packs(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_toggle_favorite_sticker(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_uninstall_pack(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_unpublish_pack(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_update_pack(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_update_sticker_asset(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_users_get_user_complete(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_users_get_users(`ptr`: Long,`request`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_clear_native_media_preparer(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_configure_native_media_preparer(`ptr`: Long,`preparer`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_download_bytes_with_context(`ptr`: Long,`fileId`: Long,`context`: RustBuffer.ByValue,`control`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_download_to_path(`ptr`: Long,`fileId`: Long,`path`: RustBuffer.ByValue,`cacheDirectory`: RustBuffer.ByValue,`control`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_download_to_path_with_context(`ptr`: Long,`fileId`: Long,`path`: RustBuffer.ByValue,`context`: RustBuffer.ByValue,`cacheDirectory`: RustBuffer.ByValue,`control`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_transfer_checkpoint(`ptr`: Long,`jobId`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_files_upload_path(`ptr`: Long,`path`: RustBuffer.ByValue,`options`: RustBuffer.ByValue,`control`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_sending_adopt_native_attachment(`ptr`: Long,`key`: RustBuffer.ByValue,`sourcePath`: RustBuffer.ByValue,`prepared`: Long,`control`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_sending_attachment_manifest(`ptr`: Long,`key`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_sending_prepare_attachment(`ptr`: Long,`key`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`control`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_sending_prepare_native_attachment(`ptr`: Long,`key`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`preparer`: Long,`control`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_clear_video_decoder(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_method_tinkleclient_configure_video_decoder(`ptr`: Long,`decoder`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
     external fun uniffi_tinkle_ffi_fn_clone_trustsourceffi(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Long
     external fun uniffi_tinkle_ffi_fn_free_trustsourceffi(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
@@ -1224,6 +1718,84 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_tinkle_ffi_fn_constructor_inmemoryffistore_new(uniffi_out_err: UniffiRustCallStatus,
     ): Long
+    external fun uniffi_tinkle_ffi_fn_clone_transfercontrol(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_free_transfercontrol(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_constructor_transfercontrol_new(uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_transfercontrol_cancel(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_method_transfercontrol_progress(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_tinkle_ffi_fn_clone_ffinativemediainput(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_free_ffinativemediainput(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_method_ffinativemediainput_deadline_ms(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Int
+    external fun uniffi_tinkle_ffi_fn_method_ffinativemediainput_is_cancelled(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    external fun uniffi_tinkle_ffi_fn_method_ffinativemediainput_kind(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_tinkle_ffi_fn_method_ffinativemediainput_max_duration_ms(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_ffinativemediainput_max_frames(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Int
+    external fun uniffi_tinkle_ffi_fn_method_ffinativemediainput_max_output_bytes(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_ffinativemediainput_output_path(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_tinkle_ffi_fn_method_ffinativemediainput_size_bytes(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_ffinativemediainput_source_path(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_tinkle_ffi_fn_clone_ffiplatformmediapreparer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_free_ffiplatformmediapreparer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_init_callback_vtable_ffiplatformmediapreparer(`vtable`: UniffiVTableCallbackInterfaceFfiPlatformMediaPreparer,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_method_ffiplatformmediapreparer_prepare(`ptr`: Long,`input`: Long,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_clone_ffiplatformvideodecoder(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_free_ffiplatformvideodecoder(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_init_callback_vtable_ffiplatformvideodecoder(`vtable`: UniffiVTableCallbackInterfaceFfiPlatformVideoDecoder,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_method_ffiplatformvideodecoder_inspect_and_decode(`ptr`: Long,`input`: Long,`limits`: RustBuffer.ByValue,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_clone_ffipreparednativemedia(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_free_ffipreparednativemedia(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_facts(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_mime_type(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_output_sha256(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_path(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_recipe(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_source_sha256(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_waveform(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_tinkle_ffi_fn_clone_ffivideoinput(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_free_ffivideoinput(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_tinkle_ffi_fn_method_ffivideoinput_is_cancelled(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    external fun uniffi_tinkle_ffi_fn_method_ffivideoinput_size_bytes(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_tinkle_ffi_fn_method_ffivideoinput_source_path(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_tinkle_ffi_fn_method_ffivideoinput_source_sha256(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
     external fun uniffi_tinkle_ffi_fn_func_parse_push_payload(`payload`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     external fun uniffi_tinkle_ffi_fn_func_push_recover_stale_jobs(`storage`: Long,`principal`: RustBuffer.ByValue,`leaseSecs`: Long,
@@ -1232,6 +1804,12 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_tinkle_ffi_fn_func_tinkle_ffi_init(uniffi_out_err: UniffiRustCallStatus,
     ): Unit
+    external fun uniffi_tinkle_ffi_fn_func_media_image_dimensions(`width`: Int,`height`: Int,`attempt`: Int,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_tinkle_ffi_fn_func_media_video_dimensions(`width`: Int,`height`: Int,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_tinkle_ffi_fn_func_prepare_native_media(`path`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`preparer`: Long,
+    ): Long
     external fun ffi_tinkle_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     external fun ffi_tinkle_ffi_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus,
@@ -1363,6 +1941,15 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_func_tinkle_ffi_init() and 0xFFFF) != 34048) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_tinkle_ffi_checksum_func_media_image_dimensions() and 0xFFFF) != 41501) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_func_media_video_dimensions() and 0xFFFF) != 36053) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_func_prepare_native_media() and 0xFFFF) != 532) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_tinkle_ffi_checksum_method_accountstatesubscription_next() and 0xFFFF) != 38373) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1411,16 +1998,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_get_upload_status() and 0xFFFF) != 6124) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_upload_bytes() and 0xFFFF) != 21989) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_upload_bytes() and 0xFFFF) != 11576) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_upload_part() and 0xFFFF) != 12340) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_get_messages() and 0xFFFF) != 21759) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_get_target_changes() and 0xFFFF) != 2168) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_is_connected() and 0xFFFF) != 22480) {
@@ -1432,6 +2016,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_is_suspended() and 0xFFFF) != 47511) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_list_message_changes() and 0xFFFF) != 20993) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_load_dialogs() and 0xFFFF) != 19225) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1441,7 +2028,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_next_event() and 0xFFFF) != 1749) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_pending_len() and 0xFFFF) != 35948) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_pending_len() and 0xFFFF) != 21707) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_reconcile_now() and 0xFFFF) != 51897) {
@@ -1456,7 +2043,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_resume() and 0xFFFF) != 27994) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_send_message() and 0xFFFF) != 49929) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_send_message() and 0xFFFF) != 18827) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_set_principal_user_id() and 0xFFFF) != 61488) {
@@ -1528,6 +2115,300 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_unregister_push() and 0xFFFF) != 33025) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_discard() and 0xFFFF) != 8498) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_enqueue_album() and 0xFFFF) != 35178) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_enqueue_media() and 0xFFFF) != 9621) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_enqueue_message() and 0xFFFF) != 8888) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_get_job() and 0xFFFF) != 57367) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_jobs() and 0xFFFF) != 1606) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_resume() and 0xFFFF) != 40372) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_account_delete_profile_photo() and 0xFFFF) != 27696) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_account_get_profile_photos() and 0xFFFF) != 47137) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_account_select_profile_photo() and 0xFFFF) != 16179) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_account_set_profile_photo() and 0xFFFF) != 12618) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_account_update_profile() and 0xFFFF) != 28862) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_account_update_username() and 0xFFFF) != 62502) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_account_validate_username() and 0xFFFF) != 15445) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_add_chat_participant() and 0xFFFF) != 8204) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_batch_get_message_reactions() and 0xFFFF) != 61640) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_cancel_scheduled_messages() and 0xFFFF) != 20172) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_close_poll() and 0xFFFF) != 10602) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_create_chat() and 0xFFFF) != 4618) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_delete_history() and 0xFFFF) != 51815) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_delete_messages() and 0xFFFF) != 23741) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_edit_chat_admin() and 0xFFFF) != 33862) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_edit_chat_photo() and 0xFFFF) != 19446) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_edit_chat_restricted_scopes() and 0xFFFF) != 12424) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_edit_chat_title() and 0xFFFF) != 15322) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_edit_message() and 0xFFFF) != 11941) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_chat_details() and 0xFFFF) != 984) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_chats() and 0xFFFF) != 18721) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_dialogs() and 0xFFFF) != 32675) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_history() and 0xFFFF) != 57059) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_messages() and 0xFFFF) != 41539) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_poll_results() and 0xFFFF) != 33627) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_poll_votes() and 0xFFFF) != 10085) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_recent_reactions() and 0xFFFF) != 49399) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_scheduled_messages() and 0xFFFF) != 28972) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_unread_mentions() and 0xFFFF) != 58965) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_unread_reactions() and 0xFFFF) != 11478) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_list_message_changes() and 0xFFFF) != 11990) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_list_message_reactions() and 0xFFFF) != 43274) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_list_thread_messages() and 0xFFFF) != 19993) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_mark_history_read() and 0xFFFF) != 14492) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_read_mentions() and 0xFFFF) != 50638) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_read_reactions() and 0xFFFF) != 39658) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_read_thread() and 0xFFFF) != 9439) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_remove_chat_participant() and 0xFFFF) != 55899) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_search() and 0xFFFF) != 3332) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_send_album() and 0xFFFF) != 52907) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_send_media() and 0xFFFF) != 35750) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_send_message() and 0xFFFF) != 58077) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_send_reaction() and 0xFFFF) != 54579) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_send_vote() and 0xFFFF) != 43938) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_set_history_ttl() and 0xFFFF) != 39643) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_set_message_pin() and 0xFFFF) != 21876) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_set_typing() and 0xFFFF) != 34149) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_start_bot() and 0xFFFF) != 5196) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_unpin_all_messages() and 0xFFFF) != 11815) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_update_chat_description() and 0xFFFF) != 27296) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_add_pack_asset() and 0xFFFF) != 5997) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_clear_recent_stickers() and 0xFFFF) != 23576) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_create_pack() and 0xFFFF) != 9252) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_create_sticker_asset() and 0xFFFF) != 40949) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_delete_pack() and 0xFFFF) != 65244) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_delete_sticker_asset() and 0xFFFF) != 18340) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_archived_packs() and 0xFFFF) != 37827) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_favorite_stickers() and 0xFFFF) != 1004) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_installed_packs() and 0xFFFF) != 11627) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_owned_packs() and 0xFFFF) != 54068) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_pack() and 0xFFFF) != 10131) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_pack_by_short_name() and 0xFFFF) != 35799) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_recent_stickers() and 0xFFFF) != 27257) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_sticker_assets() and 0xFFFF) != 42982) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_install_pack() and 0xFFFF) != 42366) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_publish_pack() and 0xFFFF) != 41683) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_remove_pack_asset() and 0xFFFF) != 14876) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_reorder_pack_assets() and 0xFFFF) != 60009) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_reorder_packs() and 0xFFFF) != 38447) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_save_recent_sticker() and 0xFFFF) != 64985) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_search_packs() and 0xFFFF) != 42297) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_toggle_favorite_sticker() and 0xFFFF) != 45579) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_uninstall_pack() and 0xFFFF) != 41676) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_unpublish_pack() and 0xFFFF) != 41333) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_update_pack() and 0xFFFF) != 7800) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_update_sticker_asset() and 0xFFFF) != 1825) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_users_get_user_complete() and 0xFFFF) != 60905) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_users_get_users() and 0xFFFF) != 33457) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_clear_native_media_preparer() and 0xFFFF) != 64304) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_configure_native_media_preparer() and 0xFFFF) != 59465) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_download_bytes_with_context() and 0xFFFF) != 53980) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_download_to_path() and 0xFFFF) != 57139) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_download_to_path_with_context() and 0xFFFF) != 20572) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_transfer_checkpoint() and 0xFFFF) != 37466) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_files_upload_path() and 0xFFFF) != 10377) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_adopt_native_attachment() and 0xFFFF) != 34209) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_attachment_manifest() and 0xFFFF) != 56914) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_prepare_attachment() and 0xFFFF) != 16702) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_prepare_native_attachment() and 0xFFFF) != 53044) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_clear_video_decoder() and 0xFFFF) != 50839) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_tinkleclient_configure_video_decoder() and 0xFFFF) != 3684) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_tinkle_ffi_checksum_method_enrollmentoperation_operation_id() and 0xFFFF) != 23696) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1582,7 +2463,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_list_dialogs() and 0xFFFF) != 28584) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_load_journal() and 0xFFFF) != 29543) {
+    if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_load_journal() and 0xFFFF) != 28195) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_sqlitestorage_save_chat_proto() and 0xFFFF) != 43737) {
@@ -1601,6 +2482,78 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_fficursorstore_clear_principal() and 0xFFFF) != 37263) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_transfercontrol_cancel() and 0xFFFF) != 25556) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_transfercontrol_progress() and 0xFFFF) != 27320) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffinativemediainput_deadline_ms() and 0xFFFF) != 64064) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffinativemediainput_is_cancelled() and 0xFFFF) != 20748) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffinativemediainput_kind() and 0xFFFF) != 46063) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffinativemediainput_max_duration_ms() and 0xFFFF) != 12387) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffinativemediainput_max_frames() and 0xFFFF) != 12522) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffinativemediainput_max_output_bytes() and 0xFFFF) != 38799) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffinativemediainput_output_path() and 0xFFFF) != 42252) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffinativemediainput_size_bytes() and 0xFFFF) != 16470) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffinativemediainput_source_path() and 0xFFFF) != 44609) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffiplatformmediapreparer_prepare() and 0xFFFF) != 23362) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffiplatformvideodecoder_inspect_and_decode() and 0xFFFF) != 48474) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_facts() and 0xFFFF) != 49518) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_mime_type() and 0xFFFF) != 21285) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_output_sha256() and 0xFFFF) != 820) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_path() and 0xFFFF) != 32189) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_recipe() and 0xFFFF) != 47637) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_source_sha256() and 0xFFFF) != 43401) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_waveform() and 0xFFFF) != 38586) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffivideoinput_is_cancelled() and 0xFFFF) != 5376) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffivideoinput_size_bytes() and 0xFFFF) != 45468) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffivideoinput_source_path() and 0xFFFF) != 49774) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_method_ffivideoinput_source_sha256() and 0xFFFF) != 63051) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new() and 0xFFFF) != 45429) {
@@ -1625,6 +2578,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_constructor_inmemoryffistore_new() and 0xFFFF) != 37004) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_constructor_transfercontrol_new() and 0xFFFF) != 47096) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1692,7 +2648,8 @@ internal inline fun<T> uniffiTraitInterfaceCallAsync(
     // Uniffi does its best to support structured concurrency across the FFI.
     // If the Rust future is dropped, `uniffiForeignFutureDroppedCallbackImpl` is called, which will cancel the Kotlin coroutine if it's still running.
     @OptIn(DelicateCoroutinesApi::class)
-    val job = GlobalScope.launch coroutineBlock@ {
+    // Lift owned arguments and enter callback cleanup even if cancelled before dispatch.
+    val job = GlobalScope.launch(start = kotlinx.coroutines.CoroutineStart.ATOMIC) coroutineBlock@ {
         // Note: it's important we call either `handleSuccess` or `handleError` exactly once.  Each
         // call consumes an Arc reference, which means there should be no possibility of a double
         // call.  The following code is structured so that will will never call both `handleSuccess`
@@ -1727,7 +2684,8 @@ internal inline fun<T, reified E: Throwable> uniffiTraitInterfaceCallAsyncWithEr
 ) {
     // See uniffiTraitInterfaceCallAsync for details on `DelicateCoroutinesApi`
     @OptIn(DelicateCoroutinesApi::class)
-    val job = GlobalScope.launch coroutineBlock@ {
+    // Lift owned arguments and enter callback cleanup even if cancelled before dispatch.
+    val job = GlobalScope.launch(start = kotlinx.coroutines.CoroutineStart.ATOMIC) coroutineBlock@ {
         // See the note in uniffiTraitInterfaceCallAsync for details on `handleSuccess` and
         // `handleError`.
         val callResult = try {
@@ -1942,6 +2900,33 @@ private class JavaLangRefCleanable(
     val cleanable: java.lang.ref.Cleaner.Cleanable
 ) : UniffiCleaner.Cleanable {
     override fun clean() = cleanable.clean()
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterUByte: FfiConverter<UByte, Byte> {
+    override fun lift(value: Byte): UByte {
+        return value.toUByte()
+    }
+
+    fun lift(value: Int): UByte {
+        return value.toUByte()
+    }
+
+    override fun read(buf: ByteBuffer): UByte {
+        return lift(buf.get())
+    }
+
+    override fun lower(value: UByte): Byte {
+        return value.toByte()
+    }
+
+    override fun allocationSize(value: UByte) = 1UL
+
+    override fun write(value: UByte, buf: ByteBuffer) {
+        buf.put(value.toByte())
+    }
 }
 
 /**
@@ -3378,6 +4363,1448 @@ public object FfiConverterTypeFfiCursorStore: FfiConverter<FfiCursorStore, Long>
 
 
 /**
+ * SDK-owned source/destination lease. Retain through encoder finalization AND teardown.
+ */
+public interface FfiNativeMediaInputInterface {
+
+    fun `deadlineMs`(): kotlin.UInt
+
+    fun `isCancelled`(): kotlin.Boolean
+
+    fun `kind`(): FfiNativeMediaKind
+
+    fun `maxDurationMs`(): kotlin.ULong
+
+    fun `maxFrames`(): kotlin.UInt
+
+    fun `maxOutputBytes`(): kotlin.ULong
+
+    fun `outputPath`(): kotlin.String
+
+    fun `sizeBytes`(): kotlin.ULong
+
+    fun `sourcePath`(): kotlin.String
+
+    companion object
+}
+
+/**
+ * SDK-owned source/destination lease. Retain through encoder finalization AND teardown.
+ */
+open class FfiNativeMediaInput: Disposable, AutoCloseable, FfiNativeMediaInputInterface
+{
+
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
+    }
+
+    /**
+     * @suppress
+     *
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
+    }
+
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the handle being freed concurrently.
+        try {
+            return block(this.uniffiCloneHandle())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
+        override fun run() {
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_tinkle_ffi_fn_free_ffinativemediainput(handle, status)
+            }
+        }
+    }
+
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
+        return uniffiRustCall() { status ->
+            UniffiLib.uniffi_tinkle_ffi_fn_clone_ffinativemediainput(handle, status)
+        }
+    }
+
+    override fun `deadlineMs`(): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffinativemediainput_deadline_ms(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+    override fun `isCancelled`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffinativemediainput_is_cancelled(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+    override fun `kind`(): FfiNativeMediaKind {
+            return FfiConverterTypeFfiNativeMediaKind.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffinativemediainput_kind(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+    override fun `maxDurationMs`(): kotlin.ULong {
+            return FfiConverterULong.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffinativemediainput_max_duration_ms(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+    override fun `maxFrames`(): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffinativemediainput_max_frames(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+    override fun `maxOutputBytes`(): kotlin.ULong {
+            return FfiConverterULong.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffinativemediainput_max_output_bytes(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+    override fun `outputPath`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffinativemediainput_output_path(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+    override fun `sizeBytes`(): kotlin.ULong {
+            return FfiConverterULong.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffinativemediainput_size_bytes(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+    override fun `sourcePath`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffinativemediainput_source_path(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+
+
+
+
+
+
+
+    /**
+     * @suppress
+     */
+    companion object
+
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiNativeMediaInput: FfiConverter<FfiNativeMediaInput, Long> {
+    override fun lower(value: FfiNativeMediaInput): Long {
+        return value.uniffiCloneHandle()
+    }
+
+    override fun lift(value: Long): FfiNativeMediaInput {
+        return FfiNativeMediaInput(UniffiWithHandle, value)
+    }
+
+    override fun read(buf: ByteBuffer): FfiNativeMediaInput {
+        return lift(buf.getLong())
+    }
+
+    override fun allocationSize(value: FfiNativeMediaInput) = 8UL
+
+    override fun write(value: FfiNativeMediaInput, buf: ByteBuffer) {
+        buf.putLong(lower(value))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a handle
+// to the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its handle should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the handle, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
+ * Real local encoder. Completion must join all native work, even after cooperative cancellation.
+ * Only the SDK destination may be written; decoder-only adapters cannot implement this contract.
+ */
+public interface FfiPlatformMediaPreparer {
+
+    suspend fun `prepare`(`input`: FfiNativeMediaInput): FfiNativeMediaOutput
+
+    companion object
+}
+
+/**
+ * Real local encoder. Completion must join all native work, even after cooperative cancellation.
+ * Only the SDK destination may be written; decoder-only adapters cannot implement this contract.
+ */
+open class FfiPlatformMediaPreparerImpl: Disposable, AutoCloseable, FfiPlatformMediaPreparer
+{
+
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
+    }
+
+    /**
+     * @suppress
+     *
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
+    }
+
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the handle being freed concurrently.
+        try {
+            return block(this.uniffiCloneHandle())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
+        override fun run() {
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_tinkle_ffi_fn_free_ffiplatformmediapreparer(handle, status)
+            }
+        }
+    }
+
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
+        return uniffiRustCall() { status ->
+            UniffiLib.uniffi_tinkle_ffi_fn_clone_ffiplatformmediapreparer(handle, status)
+        }
+    }
+
+
+    @Throws(FfiMediaException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `prepare`(`input`: FfiNativeMediaInput) : FfiNativeMediaOutput {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_ffiplatformmediapreparer_prepare(
+                uniffiHandle,
+
+        FfiConverterTypeFfiNativeMediaInput.lower(`input`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeFfiNativeMediaOutput.lift(it) },
+        // Error FFI converter
+        FfiMediaException.ErrorHandler,
+    )
+    }
+
+
+
+
+
+
+
+
+    /**
+     * @suppress
+     */
+    companion object
+
+}
+
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceFfiPlatformMediaPreparer {
+    internal object `prepare`: UniffiCallbackInterfaceFfiPlatformMediaPreparerMethod0 {
+        override fun callback(`uniffiHandle`: Long,`input`: Long,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
+            val uniffiObj = FfiConverterTypeFfiPlatformMediaPreparer.handleMap.get(uniffiHandle)
+            val makeCall = suspend { ->
+                uniffiObj.`prepare`(
+                    FfiConverterTypeFfiNativeMediaInput.lift(`input`),
+                )
+            }
+            val uniffiHandleSuccess = { returnValue: FfiNativeMediaOutput ->
+                val uniffiResult = UniffiForeignFutureResultRustBuffer.UniffiByValue(
+                    FfiConverterTypeFfiNativeMediaOutput.lower(returnValue),
+                    UniffiRustCallStatus.ByValue()
+                )
+                uniffiResult.write()
+                uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
+            }
+            val uniffiHandleError = { callStatus: UniffiRustCallStatus.ByValue ->
+                uniffiFutureCallback.callback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer.UniffiByValue(
+                        RustBuffer.ByValue(),
+                        callStatus,
+                    ),
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall,
+                uniffiHandleSuccess,
+                uniffiHandleError,
+                { e: FfiMediaException -> FfiConverterTypeFfiMediaError.lower(e) },
+                uniffiOutDroppedCallback
+            )
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeFfiPlatformMediaPreparer.handleMap.remove(handle)
+        }
+    }
+
+    internal object uniffiClone: UniffiCallbackInterfaceClone {
+        override fun callback(handle: Long): Long {
+            return FfiConverterTypeFfiPlatformMediaPreparer.handleMap.clone(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceFfiPlatformMediaPreparer.UniffiByValue(
+        uniffiFree,
+        uniffiClone,
+        `prepare`,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_tinkle_ffi_fn_init_callback_vtable_ffiplatformmediapreparer(vtable)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiPlatformMediaPreparer: FfiConverter<FfiPlatformMediaPreparer, Long> {
+    internal val handleMap = UniffiHandleMap<FfiPlatformMediaPreparer>()
+
+    override fun lower(value: FfiPlatformMediaPreparer): Long {
+        if (value is FfiPlatformMediaPreparerImpl) {
+             // Rust-implemented object.  Clone the handle and return it
+            return value.uniffiCloneHandle()
+         } else {
+            // Kotlin object, generate a new vtable handle and return that.
+            return handleMap.insert(value)
+         }
+    }
+
+    override fun lift(value: Long): FfiPlatformMediaPreparer {
+        if ((value and 1.toLong()) == 0.toLong()) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return FfiPlatformMediaPreparerImpl(UniffiWithHandle, value)
+        } else {
+            // Kotlin-generated handle, get the object from the handle map
+            return handleMap.remove(value)
+        }
+    }
+
+    override fun read(buf: ByteBuffer): FfiPlatformMediaPreparer {
+        return lift(buf.getLong())
+    }
+
+    override fun allocationSize(value: FfiPlatformMediaPreparer) = 8UL
+
+    override fun write(value: FfiPlatformMediaPreparer, buf: ByteBuffer) {
+        buf.putLong(lower(value))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a handle
+// to the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its handle should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the handle, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
+ * Implement with AVFoundation or MediaExtractor/MediaCodec on native-owned execution queues.
+ * Bound allocations/queues, observe cancellation/deadline, and retain input until actual native
+ * completion. Do not remux/re-encode the source or retain a TinkleClient cycle in this callback.
+ */
+public interface FfiPlatformVideoDecoder {
+
+    /**
+     * Decode/validate the frozen MP4 and optionally return one bounded, oriented thumbnail.
+     */
+    suspend fun `inspectAndDecode`(`input`: FfiVideoInput, `limits`: FfiVideoDecodeLimits): FfiDecodedVideo
+
+    companion object
+}
+
+/**
+ * Implement with AVFoundation or MediaExtractor/MediaCodec on native-owned execution queues.
+ * Bound allocations/queues, observe cancellation/deadline, and retain input until actual native
+ * completion. Do not remux/re-encode the source or retain a TinkleClient cycle in this callback.
+ */
+open class FfiPlatformVideoDecoderImpl: Disposable, AutoCloseable, FfiPlatformVideoDecoder
+{
+
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
+    }
+
+    /**
+     * @suppress
+     *
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
+    }
+
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the handle being freed concurrently.
+        try {
+            return block(this.uniffiCloneHandle())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
+        override fun run() {
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_tinkle_ffi_fn_free_ffiplatformvideodecoder(handle, status)
+            }
+        }
+    }
+
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
+        return uniffiRustCall() { status ->
+            UniffiLib.uniffi_tinkle_ffi_fn_clone_ffiplatformvideodecoder(handle, status)
+        }
+    }
+
+
+    /**
+     * Decode/validate the frozen MP4 and optionally return one bounded, oriented thumbnail.
+     */
+    @Throws(FfiMediaException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `inspectAndDecode`(`input`: FfiVideoInput, `limits`: FfiVideoDecodeLimits) : FfiDecodedVideo {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_ffiplatformvideodecoder_inspect_and_decode(
+                uniffiHandle,
+
+        FfiConverterTypeFfiVideoInput.lower(`input`),
+        FfiConverterTypeFfiVideoDecodeLimits.lower(`limits`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeFfiDecodedVideo.lift(it) },
+        // Error FFI converter
+        FfiMediaException.ErrorHandler,
+    )
+    }
+
+
+
+
+
+
+
+
+    /**
+     * @suppress
+     */
+    companion object
+
+}
+
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceFfiPlatformVideoDecoder {
+    internal object `inspectAndDecode`: UniffiCallbackInterfaceFfiPlatformVideoDecoderMethod0 {
+        override fun callback(`uniffiHandle`: Long,`input`: Long,`limits`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
+            val uniffiObj = FfiConverterTypeFfiPlatformVideoDecoder.handleMap.get(uniffiHandle)
+            val makeCall = suspend { ->
+                uniffiObj.`inspectAndDecode`(
+                    FfiConverterTypeFfiVideoInput.lift(`input`),
+                    FfiConverterTypeFfiVideoDecodeLimits.lift(`limits`),
+                )
+            }
+            val uniffiHandleSuccess = { returnValue: FfiDecodedVideo ->
+                val uniffiResult = UniffiForeignFutureResultRustBuffer.UniffiByValue(
+                    FfiConverterTypeFfiDecodedVideo.lower(returnValue),
+                    UniffiRustCallStatus.ByValue()
+                )
+                uniffiResult.write()
+                uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
+            }
+            val uniffiHandleError = { callStatus: UniffiRustCallStatus.ByValue ->
+                uniffiFutureCallback.callback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer.UniffiByValue(
+                        RustBuffer.ByValue(),
+                        callStatus,
+                    ),
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall,
+                uniffiHandleSuccess,
+                uniffiHandleError,
+                { e: FfiMediaException -> FfiConverterTypeFfiMediaError.lower(e) },
+                uniffiOutDroppedCallback
+            )
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeFfiPlatformVideoDecoder.handleMap.remove(handle)
+        }
+    }
+
+    internal object uniffiClone: UniffiCallbackInterfaceClone {
+        override fun callback(handle: Long): Long {
+            return FfiConverterTypeFfiPlatformVideoDecoder.handleMap.clone(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceFfiPlatformVideoDecoder.UniffiByValue(
+        uniffiFree,
+        uniffiClone,
+        `inspectAndDecode`,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_tinkle_ffi_fn_init_callback_vtable_ffiplatformvideodecoder(vtable)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiPlatformVideoDecoder: FfiConverter<FfiPlatformVideoDecoder, Long> {
+    internal val handleMap = UniffiHandleMap<FfiPlatformVideoDecoder>()
+
+    override fun lower(value: FfiPlatformVideoDecoder): Long {
+        if (value is FfiPlatformVideoDecoderImpl) {
+             // Rust-implemented object.  Clone the handle and return it
+            return value.uniffiCloneHandle()
+         } else {
+            // Kotlin object, generate a new vtable handle and return that.
+            return handleMap.insert(value)
+         }
+    }
+
+    override fun lift(value: Long): FfiPlatformVideoDecoder {
+        if ((value and 1.toLong()) == 0.toLong()) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return FfiPlatformVideoDecoderImpl(UniffiWithHandle, value)
+        } else {
+            // Kotlin-generated handle, get the object from the handle map
+            return handleMap.remove(value)
+        }
+    }
+
+    override fun read(buf: ByteBuffer): FfiPlatformVideoDecoder {
+        return lift(buf.getLong())
+    }
+
+    override fun allocationSize(value: FfiPlatformVideoDecoder) = 8UL
+
+    override fun write(value: FfiPlatformVideoDecoder, buf: ByteBuffer) {
+        buf.putLong(lower(value))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a handle
+// to the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its handle should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the handle, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
+ * Stable owned result. Path lifetime is this object; upload/adoption must retain it until copied.
+ */
+public interface FfiPreparedNativeMediaInterface {
+
+    fun `facts`(): FfiNativeMediaOutput
+
+    fun `mimeType`(): kotlin.String
+
+    fun `outputSha256`(): kotlin.ByteArray
+
+    fun `path`(): kotlin.String
+
+    fun `recipe`(): kotlin.String
+
+    fun `sourceSha256`(): kotlin.ByteArray
+
+    fun `waveform`(): kotlin.ByteArray
+
+    companion object
+}
+
+/**
+ * Stable owned result. Path lifetime is this object; upload/adoption must retain it until copied.
+ */
+open class FfiPreparedNativeMedia: Disposable, AutoCloseable, FfiPreparedNativeMediaInterface
+{
+
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
+    }
+
+    /**
+     * @suppress
+     *
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
+    }
+
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the handle being freed concurrently.
+        try {
+            return block(this.uniffiCloneHandle())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
+        override fun run() {
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_tinkle_ffi_fn_free_ffipreparednativemedia(handle, status)
+            }
+        }
+    }
+
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
+        return uniffiRustCall() { status ->
+            UniffiLib.uniffi_tinkle_ffi_fn_clone_ffipreparednativemedia(handle, status)
+        }
+    }
+
+    override fun `facts`(): FfiNativeMediaOutput {
+            return FfiConverterTypeFfiNativeMediaOutput.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_facts(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+    override fun `mimeType`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_mime_type(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+    override fun `outputSha256`(): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_output_sha256(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+    override fun `path`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_path(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+    override fun `recipe`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_recipe(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+    override fun `sourceSha256`(): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_source_sha256(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+    override fun `waveform`(): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_waveform(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+
+
+
+
+
+
+
+    /**
+     * @suppress
+     */
+    companion object
+
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiPreparedNativeMedia: FfiConverter<FfiPreparedNativeMedia, Long> {
+    override fun lower(value: FfiPreparedNativeMedia): Long {
+        return value.uniffiCloneHandle()
+    }
+
+    override fun lift(value: Long): FfiPreparedNativeMedia {
+        return FfiPreparedNativeMedia(UniffiWithHandle, value)
+    }
+
+    override fun read(buf: ByteBuffer): FfiPreparedNativeMedia {
+        return lift(buf.getLong())
+    }
+
+    override fun allocationSize(value: FfiPreparedNativeMedia) = 8UL
+
+    override fun write(value: FfiPreparedNativeMedia, buf: ByteBuffer) {
+        buf.putLong(lower(value))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a handle
+// to the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its handle should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the handle, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
  * Implement over confidential, durable platform storage. Returning success from
  * commit acknowledges durability, never an asynchronous enqueue. Operation is
  * create-only; Candidate replaces only its operation; Active atomically installs
@@ -4354,6 +6781,342 @@ public object FfiConverterTypeFfiSecureEnrollmentStore: FfiConverter<FfiSecureEn
 
 
 /**
+ * Opaque, invocation-owned read lease. Retain this object until native codec work actually
+ * completes, even after cancellation/timeout. Never modify, move or delete source_path().
+ * Retaining the pathname alone does not retain the source file or bounded worker admission.
+ */
+public interface FfiVideoInputInterface {
+
+    /**
+     * Cooperative cancellation, including timeout and dropped waiters. Stop/join native work,
+     * but keep this lease until that work really stops reading the source.
+     */
+    fun `isCancelled`(): kotlin.Boolean
+
+    /**
+     * Source length; no full-size video bytes cross this interface.
+     */
+    fun `sizeBytes`(): kotlin.ULong
+
+    /**
+     * Read-only frozen local input. This is not a caller path and is not a transfer destination.
+     */
+    fun `sourcePath`(): kotlin.String
+
+    /**
+     * SHA-256 of exactly the frozen source; common Rust verifies it again after the callback.
+     */
+    fun `sourceSha256`(): kotlin.ByteArray
+
+    companion object
+}
+
+/**
+ * Opaque, invocation-owned read lease. Retain this object until native codec work actually
+ * completes, even after cancellation/timeout. Never modify, move or delete source_path().
+ * Retaining the pathname alone does not retain the source file or bounded worker admission.
+ */
+open class FfiVideoInput: Disposable, AutoCloseable, FfiVideoInputInterface
+{
+
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
+    }
+
+    /**
+     * @suppress
+     *
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
+    }
+
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the handle being freed concurrently.
+        try {
+            return block(this.uniffiCloneHandle())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
+        override fun run() {
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_tinkle_ffi_fn_free_ffivideoinput(handle, status)
+            }
+        }
+    }
+
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
+        return uniffiRustCall() { status ->
+            UniffiLib.uniffi_tinkle_ffi_fn_clone_ffivideoinput(handle, status)
+        }
+    }
+
+
+    /**
+     * Cooperative cancellation, including timeout and dropped waiters. Stop/join native work,
+     * but keep this lease until that work really stops reading the source.
+     */override fun `isCancelled`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffivideoinput_is_cancelled(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+
+    /**
+     * Source length; no full-size video bytes cross this interface.
+     */override fun `sizeBytes`(): kotlin.ULong {
+            return FfiConverterULong.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffivideoinput_size_bytes(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+
+    /**
+     * Read-only frozen local input. This is not a caller path and is not a transfer destination.
+     */override fun `sourcePath`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffivideoinput_source_path(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+
+    /**
+     * SHA-256 of exactly the frozen source; common Rust verifies it again after the callback.
+     */override fun `sourceSha256`(): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_ffivideoinput_source_sha256(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+
+
+
+
+
+
+
+    /**
+     * @suppress
+     */
+    companion object
+
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiVideoInput: FfiConverter<FfiVideoInput, Long> {
+    override fun lower(value: FfiVideoInput): Long {
+        return value.uniffiCloneHandle()
+    }
+
+    override fun lift(value: Long): FfiVideoInput {
+        return FfiVideoInput(UniffiWithHandle, value)
+    }
+
+    override fun read(buf: ByteBuffer): FfiVideoInput {
+        return lift(buf.getLong())
+    }
+
+    override fun allocationSize(value: FfiVideoInput) = 8UL
+
+    override fun write(value: FfiVideoInput, buf: ByteBuffer) {
+        buf.putLong(lower(value))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a handle
+// to the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its handle should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the handle, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
  * In-memory store for tests and ephemeral sessions. Wraps
  * [`libtinkle::InMemoryCursorStore`]; production apps implement
  * [`FfiCursorStore`] over SQLite/Keychain/DataStore instead.
@@ -4925,7 +7688,7 @@ public interface SqliteStorageInterface {
 
     /**
      * Durable journal cursor for one conversation: the last applied
-     * `GetTargetChanges.last_accept_seq` (`None` when nothing applied yet).
+     * `ListMessageChanges.last_accept_seq` (`None` when nothing applied yet).
      * `target_key` is `target:user:<id>` / `target:room:<id>`.
      */
     suspend fun `loadJournal`(`principal`: kotlin.String, `targetKey`: kotlin.String): kotlin.Long?
@@ -5191,7 +7954,7 @@ open class SqliteStorage: Disposable, AutoCloseable, SqliteStorageInterface
 
     /**
      * Durable journal cursor for one conversation: the last applied
-     * `GetTargetChanges.last_accept_seq` (`None` when nothing applied yet).
+     * `ListMessageChanges.last_accept_seq` (`None` when nothing applied yet).
      * `target_key` is `target:user:<id>` / `target:room:<id>`.
      */
     @Throws(FfiException::class)
@@ -5846,7 +8609,7 @@ public interface TinkleClientInterface {
      * `None` preserves absence for idempotency. Returns the encoded
      * `FileInfo` protobuf bytes; hosts decode with their own bindings.
      */
-    suspend fun `filesUploadBytes`(`idempotencyKey`: kotlin.String, `data`: kotlin.ByteArray, `fileName`: kotlin.String?, `mimeType`: kotlin.String?, `sha256`: kotlin.ByteArray?, `encrypted`: kotlin.Boolean): kotlin.ByteArray
+    suspend fun `filesUploadBytes`(`idempotencyKey`: kotlin.String, `data`: kotlin.ByteArray, `fileName`: kotlin.String?, `mimeType`: kotlin.String?, `sha256`: kotlin.ByteArray?): kotlin.ByteArray
 
     /**
      * Files upload: `UploadPart` (Syntra primary, gRPC fallback).
@@ -5871,24 +8634,6 @@ public interface TinkleClientInterface {
     suspend fun `getMessages`(`targetKind`: kotlin.String, `targetId`: kotlin.Long, `messageIds`: List<kotlin.Long>): kotlin.ByteArray
 
     /**
-     * List retained conversation mutations strictly after one accept
-     * position (`GetTargetChanges`).
-     *
-     * `after_accept_seq` is the exclusive lower bound (zero requests
-     * everything retained); `limit` bounds one page (`0` selects the
-     * deployment default, `1..=500` otherwise). Changes ascend strictly by
-     * `accept_seq`; edited changes carry the current body while
-     * deleted/revoked changes carry identity and kind only.
-     * `more_available` reports continuation: `Some(true)` means request the
-     * next page from `last_accept_seq`; `Some(false)` confirms caught up;
-     * absent is unknown, never caught up.
-     *
-     * Returns the encoded `GetTargetChangesResponse` protobuf bytes; hosts
-     * decode with their own generated bindings.
-     */
-    suspend fun `getTargetChanges`(`targetKind`: kotlin.String, `targetId`: kotlin.Long, `afterAcceptSeq`: kotlin.Long, `limit`: kotlin.Int): kotlin.ByteArray
-
-    /**
      * True while the transport is live (connection exists and its
      * notification pump has not exited).
      */
@@ -5904,6 +8649,24 @@ public interface TinkleClientInterface {
      * True while [`Self::suspend`] is in effect.
      */
     suspend fun `isSuspended`(): kotlin.Boolean
+
+    /**
+     * List retained conversation mutations strictly after one accept
+     * position (`ListMessageChanges`).
+     *
+     * `after_accept_seq` is the exclusive lower bound (zero requests
+     * everything retained); `limit` bounds one page (`0` selects the
+     * deployment default, `1..=500` otherwise). Changes ascend strictly by
+     * `accept_seq`; edited changes carry the current body while
+     * deleted/revoked changes carry identity and kind only.
+     * `more_available` reports continuation: `Some(true)` means request the
+     * next page from `last_accept_seq`; `Some(false)` confirms caught up;
+     * absent is unknown, never caught up.
+     *
+     * Returns the encoded `ListMessageChangesResponse` protobuf bytes; hosts
+     * decode with their own generated bindings.
+     */
+    suspend fun `listMessageChanges`(`targetKind`: kotlin.String, `targetId`: kotlin.Long, `afterAcceptSeq`: kotlin.Long, `limit`: kotlin.Int): kotlin.ByteArray
 
     /**
      * Fetch dialogs. Like [`Self::load_history`], the fetch never touches
@@ -5946,7 +8709,7 @@ public interface TinkleClientInterface {
      * Number of outstanding RPCs on the live connection (zero offline).
      * Send-state query: a nonzero value after reconnect means results
      * reported `UNAVAILABLE` with unknown outcome — retry only with the
-     * same `random_id` and fresh correlation.
+     * same `idempotency_key` and fresh correlation.
      */
     suspend fun `pendingLen`(): kotlin.ULong
 
@@ -5995,12 +8758,12 @@ public interface TinkleClientInterface {
      * Returns the server-assigned message id.
      *
      * `target_id` must be positive; `target_kind` is `"user"` for direct
-     * messages, `"room"`/`"chat"` for groups. `random_id` must be nonzero
-     * (and fit in `i64` — the application operation key for idempotent
-     * retry). The server response must carry a message with a positive id;
+     * messages, `"room"`/`"chat"` for groups. `idempotency_key` must be nonzero
+     * (a signed 64-bit application key for idempotent retry).
+     * The server response must carry a message with a positive id;
      * a missing or non-positive id is a codec error, never zero.
      */
-    suspend fun `sendMessage`(`targetKind`: kotlin.String, `targetId`: kotlin.Long, `text`: kotlin.String, `randomId`: kotlin.ULong): kotlin.ULong
+    suspend fun `sendMessage`(`targetKind`: kotlin.String, `targetId`: kotlin.Long, `text`: kotlin.String, `idempotencyKey`: kotlin.Long): kotlin.ULong
 
     /**
      * Set the authenticated principal from a known user id.
@@ -6176,6 +8939,501 @@ public interface TinkleClientInterface {
      * Returns the server's `removed` flag. Call BEFORE `logout`.
      */
     suspend fun `unregisterPush`(`token`: kotlin.String): kotlin.Boolean
+
+    /**
+     * Remove only a settled/never-dispatched job. Uncertain jobs remain retained.
+     */
+    suspend fun `sendingDiscard`(`jobId`: kotlin.String): kotlin.Boolean
+
+    /**
+     * Persist one atomic SendAlbumRequest with distinct retained per-item keys.
+     */
+    suspend fun `sendingEnqueueAlbum`(`jobId`: kotlin.String, `request`: kotlin.ByteArray): FfiOutgoingJob
+
+    /**
+     * Persist a SendMediaRequest containing completed main/variant file IDs.
+     */
+    suspend fun `sendingEnqueueMedia`(`jobId`: kotlin.String, `request`: kotlin.ByteArray): FfiOutgoingJob
+
+    /**
+     * Persist a SendMessageRequest; zero idempotency_key asks Rust for a stable secure operation key.
+     */
+    suspend fun `sendingEnqueueMessage`(`jobId`: kotlin.String, `request`: kotlin.ByteArray): FfiOutgoingJob
+
+    /**
+     * Read one retained request/result offline, without replaying a mutation.
+     */
+    suspend fun `sendingGetJob`(`jobId`: kotlin.String): FfiOutgoingJob
+
+    /**
+     * Inspect all retained jobs without network activity; accepted results are not replayed.
+     */
+    suspend fun `sendingJobs`(): List<FfiOutgoingJobSummary>
+
+    /**
+     * Attempt/resume a retained job, with explicit permission for uncertain exact-key retries.
+     */
+    suspend fun `sendingResume`(`jobId`: kotlin.String, `retry`: FfiSendRetry, `control`: TransferControl): FfiOutgoingJob
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `accountDeleteProfilePhoto`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `accountGetProfilePhotos`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `accountSelectProfilePhoto`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `accountSetProfilePhoto`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `accountUpdateProfile`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `accountUpdateUsername`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `accountValidateUsername`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesAddChatParticipant`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesBatchGetMessageReactions`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesCancelScheduledMessages`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesClosePoll`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesCreateChat`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesDeleteHistory`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesDeleteMessages`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesEditChatAdmin`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesEditChatPhoto`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesEditChatRestrictedScopes`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesEditChatTitle`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesEditMessage`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesGetChatDetails`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesGetChats`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesGetDialogs`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesGetHistory`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesGetMessages`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesGetPollResults`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesGetPollVotes`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesGetRecentReactions`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesGetScheduledMessages`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesGetUnreadMentions`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesGetUnreadReactions`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesListMessageChanges`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesListMessageReactions`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesListThreadMessages`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesMarkHistoryRead`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesReadMentions`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesReadReactions`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesReadThread`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesRemoveChatParticipant`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesSearch`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesSendAlbum`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesSendMedia`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesSendMessage`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesSendReaction`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesSendVote`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesSetHistoryTtl`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesSetMessagePin`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesSetTyping`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesStartBot`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesUnpinAllMessages`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `messagesUpdateChatDescription`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersAddPackAsset`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersClearRecentStickers`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersCreatePack`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersCreateStickerAsset`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersDeletePack`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersDeleteStickerAsset`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersGetArchivedPacks`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersGetFavoriteStickers`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersGetInstalledPacks`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersGetOwnedPacks`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersGetPack`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersGetPackByShortName`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersGetRecentStickers`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersGetStickerAssets`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersInstallPack`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersPublishPack`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersRemovePackAsset`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersReorderPackAssets`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersReorderPacks`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersSaveRecentSticker`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersSearchPacks`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersToggleFavoriteSticker`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersUninstallPack`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersUnpublishPack`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersUpdatePack`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `stickersUpdateStickerAsset`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `usersGetUserComplete`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    suspend fun `usersGetUsers`(`request`: kotlin.ByteArray): kotlin.ByteArray
+
+    /**
+     * Release the configured callback. Retained manifests remain resumable without an encoder.
+     */
+    fun `clearNativeMediaPreparer`()
+
+    /**
+     * Install the real host encoder for normal attachment preparation; never capture this client
+     * inside the callback. Clearing it does not abort native work already retained by an invocation.
+     */
+    fun `configureNativeMediaPreparer`(`preparer`: FfiPlatformMediaPreparer)
+
+    /**
+     * Download at most the core's bounded byte-convenience limit using only this exact context.
+     */
+    suspend fun `filesDownloadBytesWithContext`(`fileId`: kotlin.Long, `context`: kotlin.ByteArray, `control`: TransferControl): kotlin.ByteArray
+
+    /**
+     * Verify a streamed download and atomically publish the destination. No file-sized FFI buffer.
+     */
+    suspend fun `filesDownloadToPath`(`fileId`: kotlin.Long, `path`: kotlin.String, `cacheDirectory`: kotlin.String?, `control`: TransferControl): kotlin.String
+
+    /**
+     * Stream to disk under exactly the encoded FileAccessContext; denial never retries as uploader.
+     */
+    suspend fun `filesDownloadToPathWithContext`(`fileId`: kotlin.Long, `path`: kotlin.String, `context`: kotlin.ByteArray, `cacheDirectory`: kotlin.String?, `control`: TransferControl): kotlin.String
+
+    /**
+     * Read one durable transfer observation on a blocking worker, fenced to this principal.
+     */
+    suspend fun `filesTransferCheckpoint`(`jobId`: kotlin.String): FfiTransferCheckpoint?
+
+    /**
+     * Stream a native path through the Rust snapshot/resume upload pipeline; returns FileInfo bytes.
+     */
+    suspend fun `filesUploadPath`(`path`: kotlin.String, `options`: FfiUploadOptions, `control`: TransferControl): kotlin.ByteArray
+
+    /**
+     * Adopt the exact retained native artifact, verifying its copied hash and persisting its
+     * recipe/facts under this account and trust before uploading. No codec callback is invoked.
+     */
+    suspend fun `sendingAdoptNativeAttachment`(`key`: kotlin.String, `sourcePath`: kotlin.String, `prepared`: FfiPreparedNativeMedia, `control`: TransferControl): FfiPreparedAttachment
+
+    /**
+     * Read retained preparation identity without starting a codec or network request.
+     */
+    suspend fun `sendingAttachmentManifest`(`key`: kotlin.String): FfiAttachmentManifest?
+
+    /**
+     * Prepare real native input and upload completed main/thumbnail files for a typed media send.
+     */
+    suspend fun `sendingPrepareAttachment`(`key`: kotlin.String, `path`: kotlin.String, `kind`: FfiMediaKind, `control`: TransferControl): FfiPreparedAttachment
+
+    /**
+     * Persist a real native encoder's main-only output before upload. Retries use the retained
+     * artifact without invoking the callback; no client-wide callback retention is needed.
+     */
+    suspend fun `sendingPrepareNativeAttachment`(`key`: kotlin.String, `path`: kotlin.String, `kind`: FfiNativeMediaKind, `preparer`: FfiPlatformMediaPreparer, `control`: TransferControl): FfiPreparedAttachment
+
+    /**
+     * Remove the configured decoder. Future video preparation returns typed Unsupported;
+     * existing native work keeps its captured callback/read lease until actual completion.
+     */
+    fun `clearVideoDecoder`()
+
+    /**
+     * Select the native decoder used by sending_prepare_attachment(Video); installation is real,
+     * not a capability flag. Each operation retains its selected callback through completion.
+     */
+    fun `configureVideoDecoder`(`decoder`: FfiPlatformVideoDecoder)
 
     companion object
 }
@@ -6685,7 +9943,7 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
      */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `filesUploadBytes`(`idempotencyKey`: kotlin.String, `data`: kotlin.ByteArray, `fileName`: kotlin.String?, `mimeType`: kotlin.String?, `sha256`: kotlin.ByteArray?, `encrypted`: kotlin.Boolean) : kotlin.ByteArray {
+    override suspend fun `filesUploadBytes`(`idempotencyKey`: kotlin.String, `data`: kotlin.ByteArray, `fileName`: kotlin.String?, `mimeType`: kotlin.String?, `sha256`: kotlin.ByteArray?) : kotlin.ByteArray {
         return uniffiRustCallAsync(
         callWithHandle { uniffiHandle ->
             UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_files_upload_bytes(
@@ -6696,7 +9954,6 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
         FfiConverterOptionalString.lower(`fileName`),
         FfiConverterOptionalString.lower(`mimeType`),
         FfiConverterOptionalByteArray.lower(`sha256`),
-        FfiConverterBoolean.lower(`encrypted`),
             )
         },
         { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
@@ -6775,47 +10032,6 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
 
 
     /**
-     * List retained conversation mutations strictly after one accept
-     * position (`GetTargetChanges`).
-     *
-     * `after_accept_seq` is the exclusive lower bound (zero requests
-     * everything retained); `limit` bounds one page (`0` selects the
-     * deployment default, `1..=500` otherwise). Changes ascend strictly by
-     * `accept_seq`; edited changes carry the current body while
-     * deleted/revoked changes carry identity and kind only.
-     * `more_available` reports continuation: `Some(true)` means request the
-     * next page from `last_accept_seq`; `Some(false)` confirms caught up;
-     * absent is unknown, never caught up.
-     *
-     * Returns the encoded `GetTargetChangesResponse` protobuf bytes; hosts
-     * decode with their own generated bindings.
-     */
-    @Throws(FfiException::class)
-    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `getTargetChanges`(`targetKind`: kotlin.String, `targetId`: kotlin.Long, `afterAcceptSeq`: kotlin.Long, `limit`: kotlin.Int) : kotlin.ByteArray {
-        return uniffiRustCallAsync(
-        callWithHandle { uniffiHandle ->
-            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_get_target_changes(
-                uniffiHandle,
-
-        FfiConverterString.lower(`targetKind`),
-        FfiConverterLong.lower(`targetId`),
-        FfiConverterLong.lower(`afterAcceptSeq`),
-        FfiConverterInt.lower(`limit`),
-            )
-        },
-        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
-        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
-        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
-        // lift function
-        { FfiConverterByteArray.lift(it) },
-        // Error FFI converter
-        FfiException.ErrorHandler,
-    )
-    }
-
-
-    /**
      * True while the transport is live (connection exists and its
      * notification pump has not exited).
      */
@@ -6875,6 +10091,47 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
         { FfiConverterBoolean.lift(it) },
         // Error FFI converter
         UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+
+    /**
+     * List retained conversation mutations strictly after one accept
+     * position (`ListMessageChanges`).
+     *
+     * `after_accept_seq` is the exclusive lower bound (zero requests
+     * everything retained); `limit` bounds one page (`0` selects the
+     * deployment default, `1..=500` otherwise). Changes ascend strictly by
+     * `accept_seq`; edited changes carry the current body while
+     * deleted/revoked changes carry identity and kind only.
+     * `more_available` reports continuation: `Some(true)` means request the
+     * next page from `last_accept_seq`; `Some(false)` confirms caught up;
+     * absent is unknown, never caught up.
+     *
+     * Returns the encoded `ListMessageChangesResponse` protobuf bytes; hosts
+     * decode with their own generated bindings.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `listMessageChanges`(`targetKind`: kotlin.String, `targetId`: kotlin.Long, `afterAcceptSeq`: kotlin.Long, `limit`: kotlin.Int) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_list_message_changes(
+                uniffiHandle,
+
+        FfiConverterString.lower(`targetKind`),
+        FfiConverterLong.lower(`targetId`),
+        FfiConverterLong.lower(`afterAcceptSeq`),
+        FfiConverterInt.lower(`limit`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
     )
     }
 
@@ -6980,7 +10237,7 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
      * Number of outstanding RPCs on the live connection (zero offline).
      * Send-state query: a nonzero value after reconnect means results
      * reported `UNAVAILABLE` with unknown outcome — retry only with the
-     * same `random_id` and fresh correlation.
+     * same `idempotency_key` and fresh correlation.
      */
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `pendingLen`() : kotlin.ULong {
@@ -7127,14 +10384,14 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
      * Returns the server-assigned message id.
      *
      * `target_id` must be positive; `target_kind` is `"user"` for direct
-     * messages, `"room"`/`"chat"` for groups. `random_id` must be nonzero
-     * (and fit in `i64` — the application operation key for idempotent
-     * retry). The server response must carry a message with a positive id;
+     * messages, `"room"`/`"chat"` for groups. `idempotency_key` must be nonzero
+     * (a signed 64-bit application key for idempotent retry).
+     * The server response must carry a message with a positive id;
      * a missing or non-positive id is a codec error, never zero.
      */
     @Throws(FfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `sendMessage`(`targetKind`: kotlin.String, `targetId`: kotlin.Long, `text`: kotlin.String, `randomId`: kotlin.ULong) : kotlin.ULong {
+    override suspend fun `sendMessage`(`targetKind`: kotlin.String, `targetId`: kotlin.Long, `text`: kotlin.String, `idempotencyKey`: kotlin.Long) : kotlin.ULong {
         return uniffiRustCallAsync(
         callWithHandle { uniffiHandle ->
             UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_send_message(
@@ -7143,7 +10400,7 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
         FfiConverterString.lower(`targetKind`),
         FfiConverterLong.lower(`targetId`),
         FfiConverterString.lower(`text`),
-        FfiConverterULong.lower(`randomId`),
+        FfiConverterLong.lower(`idempotencyKey`),
             )
         },
         { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_u64(future, callback, continuation) },
@@ -7797,6 +11054,2452 @@ open class TinkleClient: Disposable, AutoCloseable, TinkleClientInterface
     }
 
 
+    /**
+     * Remove only a settled/never-dispatched job. Uncertain jobs remain retained.
+     */
+    @Throws(FfiSendException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sendingDiscard`(`jobId`: kotlin.String) : kotlin.Boolean {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_sending_discard(
+                uniffiHandle,
+
+        FfiConverterString.lower(`jobId`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_i8(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_i8(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_i8(future) },
+        // lift function
+        { FfiConverterBoolean.lift(it) },
+        // Error FFI converter
+        FfiSendException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Persist one atomic SendAlbumRequest with distinct retained per-item keys.
+     */
+    @Throws(FfiSendException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sendingEnqueueAlbum`(`jobId`: kotlin.String, `request`: kotlin.ByteArray) : FfiOutgoingJob {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_sending_enqueue_album(
+                uniffiHandle,
+
+        FfiConverterString.lower(`jobId`),
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeFfiOutgoingJob.lift(it) },
+        // Error FFI converter
+        FfiSendException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Persist a SendMediaRequest containing completed main/variant file IDs.
+     */
+    @Throws(FfiSendException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sendingEnqueueMedia`(`jobId`: kotlin.String, `request`: kotlin.ByteArray) : FfiOutgoingJob {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_sending_enqueue_media(
+                uniffiHandle,
+
+        FfiConverterString.lower(`jobId`),
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeFfiOutgoingJob.lift(it) },
+        // Error FFI converter
+        FfiSendException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Persist a SendMessageRequest; zero idempotency_key asks Rust for a stable secure operation key.
+     */
+    @Throws(FfiSendException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sendingEnqueueMessage`(`jobId`: kotlin.String, `request`: kotlin.ByteArray) : FfiOutgoingJob {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_sending_enqueue_message(
+                uniffiHandle,
+
+        FfiConverterString.lower(`jobId`),
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeFfiOutgoingJob.lift(it) },
+        // Error FFI converter
+        FfiSendException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Read one retained request/result offline, without replaying a mutation.
+     */
+    @Throws(FfiSendException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sendingGetJob`(`jobId`: kotlin.String) : FfiOutgoingJob {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_sending_get_job(
+                uniffiHandle,
+
+        FfiConverterString.lower(`jobId`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeFfiOutgoingJob.lift(it) },
+        // Error FFI converter
+        FfiSendException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Inspect all retained jobs without network activity; accepted results are not replayed.
+     */
+    @Throws(FfiSendException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sendingJobs`() : List<FfiOutgoingJobSummary> {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_sending_jobs(
+                uniffiHandle,
+
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeFfiOutgoingJobSummary.lift(it) },
+        // Error FFI converter
+        FfiSendException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Attempt/resume a retained job, with explicit permission for uncertain exact-key retries.
+     */
+    @Throws(FfiSendException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sendingResume`(`jobId`: kotlin.String, `retry`: FfiSendRetry, `control`: TransferControl) : FfiOutgoingJob {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_sending_resume(
+                uniffiHandle,
+
+        FfiConverterString.lower(`jobId`),
+        FfiConverterTypeFfiSendRetry.lower(`retry`),
+        FfiConverterTypeTransferControl.lower(`control`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeFfiOutgoingJob.lift(it) },
+        // Error FFI converter
+        FfiSendException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `accountDeleteProfilePhoto`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_account_delete_profile_photo(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `accountGetProfilePhotos`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_account_get_profile_photos(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `accountSelectProfilePhoto`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_account_select_profile_photo(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `accountSetProfilePhoto`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_account_set_profile_photo(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `accountUpdateProfile`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_account_update_profile(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `accountUpdateUsername`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_account_update_username(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `accountValidateUsername`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_account_validate_username(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesAddChatParticipant`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_add_chat_participant(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesBatchGetMessageReactions`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_batch_get_message_reactions(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesCancelScheduledMessages`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_cancel_scheduled_messages(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesClosePoll`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_close_poll(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesCreateChat`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_create_chat(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesDeleteHistory`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_delete_history(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesDeleteMessages`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_delete_messages(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesEditChatAdmin`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_edit_chat_admin(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesEditChatPhoto`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_edit_chat_photo(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesEditChatRestrictedScopes`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_edit_chat_restricted_scopes(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesEditChatTitle`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_edit_chat_title(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesEditMessage`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_edit_message(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesGetChatDetails`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_chat_details(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesGetChats`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_chats(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesGetDialogs`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_dialogs(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesGetHistory`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_history(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesGetMessages`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_messages(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesGetPollResults`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_poll_results(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesGetPollVotes`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_poll_votes(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesGetRecentReactions`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_recent_reactions(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesGetScheduledMessages`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_scheduled_messages(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesGetUnreadMentions`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_unread_mentions(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesGetUnreadReactions`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_unread_reactions(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesListMessageChanges`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_list_message_changes(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesListMessageReactions`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_list_message_reactions(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesListThreadMessages`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_list_thread_messages(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesMarkHistoryRead`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_mark_history_read(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesReadMentions`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_read_mentions(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesReadReactions`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_read_reactions(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesReadThread`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_read_thread(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesRemoveChatParticipant`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_remove_chat_participant(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesSearch`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_search(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesSendAlbum`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_send_album(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesSendMedia`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_send_media(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesSendMessage`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_send_message(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesSendReaction`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_send_reaction(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesSendVote`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_send_vote(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesSetHistoryTtl`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_set_history_ttl(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesSetMessagePin`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_set_message_pin(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesSetTyping`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_set_typing(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesStartBot`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_start_bot(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesUnpinAllMessages`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_unpin_all_messages(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `messagesUpdateChatDescription`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_messages_update_chat_description(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersAddPackAsset`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_add_pack_asset(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersClearRecentStickers`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_clear_recent_stickers(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersCreatePack`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_create_pack(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersCreateStickerAsset`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_create_sticker_asset(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersDeletePack`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_delete_pack(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersDeleteStickerAsset`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_delete_sticker_asset(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersGetArchivedPacks`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_archived_packs(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersGetFavoriteStickers`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_favorite_stickers(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersGetInstalledPacks`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_installed_packs(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersGetOwnedPacks`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_owned_packs(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersGetPack`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_pack(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersGetPackByShortName`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_pack_by_short_name(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersGetRecentStickers`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_recent_stickers(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersGetStickerAssets`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_sticker_assets(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersInstallPack`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_install_pack(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersPublishPack`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_publish_pack(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersRemovePackAsset`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_remove_pack_asset(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersReorderPackAssets`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_reorder_pack_assets(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersReorderPacks`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_reorder_packs(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersSaveRecentSticker`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_save_recent_sticker(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersSearchPacks`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_search_packs(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersToggleFavoriteSticker`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_toggle_favorite_sticker(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersUninstallPack`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_uninstall_pack(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersUnpublishPack`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_unpublish_pack(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersUpdatePack`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_update_pack(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stickersUpdateStickerAsset`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_update_sticker_asset(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `usersGetUserComplete`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_users_get_user_complete(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `usersGetUsers`(`request`: kotlin.ByteArray) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_users_get_users(
+                uniffiHandle,
+
+        FfiConverterByteArray.lower(`request`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Release the configured callback. Retained manifests remain resumable without an encoder.
+     */
+    @Throws(FfiException::class)override fun `clearNativeMediaPreparer`()
+        =
+    callWithHandle {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_clear_native_media_preparer(
+        it,
+        _status)
+}
+    }
+
+
+
+
+    /**
+     * Install the real host encoder for normal attachment preparation; never capture this client
+     * inside the callback. Clearing it does not abort native work already retained by an invocation.
+     */
+    @Throws(FfiException::class)override fun `configureNativeMediaPreparer`(`preparer`: FfiPlatformMediaPreparer)
+        =
+    callWithHandle {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_configure_native_media_preparer(
+        it,
+
+        FfiConverterTypeFfiPlatformMediaPreparer.lower(`preparer`),_status)
+}
+    }
+
+
+
+
+    /**
+     * Download at most the core's bounded byte-convenience limit using only this exact context.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `filesDownloadBytesWithContext`(`fileId`: kotlin.Long, `context`: kotlin.ByteArray, `control`: TransferControl) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_files_download_bytes_with_context(
+                uniffiHandle,
+
+        FfiConverterLong.lower(`fileId`),
+        FfiConverterByteArray.lower(`context`),
+        FfiConverterTypeTransferControl.lower(`control`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Verify a streamed download and atomically publish the destination. No file-sized FFI buffer.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `filesDownloadToPath`(`fileId`: kotlin.Long, `path`: kotlin.String, `cacheDirectory`: kotlin.String?, `control`: TransferControl) : kotlin.String {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_files_download_to_path(
+                uniffiHandle,
+
+        FfiConverterLong.lower(`fileId`),
+        FfiConverterString.lower(`path`),
+        FfiConverterOptionalString.lower(`cacheDirectory`),
+        FfiConverterTypeTransferControl.lower(`control`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterString.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Stream to disk under exactly the encoded FileAccessContext; denial never retries as uploader.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `filesDownloadToPathWithContext`(`fileId`: kotlin.Long, `path`: kotlin.String, `context`: kotlin.ByteArray, `cacheDirectory`: kotlin.String?, `control`: TransferControl) : kotlin.String {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_files_download_to_path_with_context(
+                uniffiHandle,
+
+        FfiConverterLong.lower(`fileId`),
+        FfiConverterString.lower(`path`),
+        FfiConverterByteArray.lower(`context`),
+        FfiConverterOptionalString.lower(`cacheDirectory`),
+        FfiConverterTypeTransferControl.lower(`control`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterString.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Read one durable transfer observation on a blocking worker, fenced to this principal.
+     */
+    @Throws(FfiSendException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `filesTransferCheckpoint`(`jobId`: kotlin.String) : FfiTransferCheckpoint? {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_files_transfer_checkpoint(
+                uniffiHandle,
+
+        FfiConverterString.lower(`jobId`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalTypeFfiTransferCheckpoint.lift(it) },
+        // Error FFI converter
+        FfiSendException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Stream a native path through the Rust snapshot/resume upload pipeline; returns FileInfo bytes.
+     */
+    @Throws(FfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `filesUploadPath`(`path`: kotlin.String, `options`: FfiUploadOptions, `control`: TransferControl) : kotlin.ByteArray {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_files_upload_path(
+                uniffiHandle,
+
+        FfiConverterString.lower(`path`),
+        FfiConverterTypeFfiUploadOptions.lower(`options`),
+        FfiConverterTypeTransferControl.lower(`control`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        FfiException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Adopt the exact retained native artifact, verifying its copied hash and persisting its
+     * recipe/facts under this account and trust before uploading. No codec callback is invoked.
+     */
+    @Throws(FfiSendException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sendingAdoptNativeAttachment`(`key`: kotlin.String, `sourcePath`: kotlin.String, `prepared`: FfiPreparedNativeMedia, `control`: TransferControl) : FfiPreparedAttachment {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_sending_adopt_native_attachment(
+                uniffiHandle,
+
+        FfiConverterString.lower(`key`),
+        FfiConverterString.lower(`sourcePath`),
+        FfiConverterTypeFfiPreparedNativeMedia.lower(`prepared`),
+        FfiConverterTypeTransferControl.lower(`control`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeFfiPreparedAttachment.lift(it) },
+        // Error FFI converter
+        FfiSendException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Read retained preparation identity without starting a codec or network request.
+     */
+    @Throws(FfiSendException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sendingAttachmentManifest`(`key`: kotlin.String) : FfiAttachmentManifest? {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_sending_attachment_manifest(
+                uniffiHandle,
+
+        FfiConverterString.lower(`key`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalTypeFfiAttachmentManifest.lift(it) },
+        // Error FFI converter
+        FfiSendException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Prepare real native input and upload completed main/thumbnail files for a typed media send.
+     */
+    @Throws(FfiSendException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sendingPrepareAttachment`(`key`: kotlin.String, `path`: kotlin.String, `kind`: FfiMediaKind, `control`: TransferControl) : FfiPreparedAttachment {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_sending_prepare_attachment(
+                uniffiHandle,
+
+        FfiConverterString.lower(`key`),
+        FfiConverterString.lower(`path`),
+        FfiConverterTypeFfiMediaKind.lower(`kind`),
+        FfiConverterTypeTransferControl.lower(`control`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeFfiPreparedAttachment.lift(it) },
+        // Error FFI converter
+        FfiSendException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Persist a real native encoder's main-only output before upload. Retries use the retained
+     * artifact without invoking the callback; no client-wide callback retention is needed.
+     */
+    @Throws(FfiSendException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sendingPrepareNativeAttachment`(`key`: kotlin.String, `path`: kotlin.String, `kind`: FfiNativeMediaKind, `preparer`: FfiPlatformMediaPreparer, `control`: TransferControl) : FfiPreparedAttachment {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_sending_prepare_native_attachment(
+                uniffiHandle,
+
+        FfiConverterString.lower(`key`),
+        FfiConverterString.lower(`path`),
+        FfiConverterTypeFfiNativeMediaKind.lower(`kind`),
+        FfiConverterTypeFfiPlatformMediaPreparer.lower(`preparer`),
+        FfiConverterTypeTransferControl.lower(`control`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeFfiPreparedAttachment.lift(it) },
+        // Error FFI converter
+        FfiSendException.ErrorHandler,
+    )
+    }
+
+
+    /**
+     * Remove the configured decoder. Future video preparation returns typed Unsupported;
+     * existing native work keeps its captured callback/read lease until actual completion.
+     */
+    @Throws(FfiException::class)override fun `clearVideoDecoder`()
+        =
+    callWithHandle {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_clear_video_decoder(
+        it,
+        _status)
+}
+    }
+
+
+
+
+    /**
+     * Select the native decoder used by sending_prepare_attachment(Video); installation is real,
+     * not a capability flag. Each operation retains its selected callback through completion.
+     */
+    @Throws(FfiException::class)override fun `configureVideoDecoder`(`decoder`: FfiPlatformVideoDecoder)
+        =
+    callWithHandle {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_tinkleclient_configure_video_decoder(
+        it,
+
+        FfiConverterTypeFfiPlatformVideoDecoder.lower(`decoder`),_status)
+}
+    }
+
+
+
+
 
 
 
@@ -7851,6 +13554,306 @@ public object FfiConverterTypeTinkleClient: FfiConverter<TinkleClient, Long> {
     override fun allocationSize(value: TinkleClient) = 8UL
 
     override fun write(value: TinkleClient, buf: ByteBuffer) {
+        buf.putLong(lower(value))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a handle
+// to the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its handle should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the handle, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
+ * A one-use explicit cancellation channel. Cancelling a download affects only this consumer.
+ * Keep this handle while awaiting an operation; cancel() stops local work, not remote effects.
+ */
+public interface TransferControlInterface {
+
+    /**
+     * Request local cancellation. A completion already committed may still win the race.
+     */
+    fun `cancel`()
+
+    /**
+     * Read current phase/counts without a callback retained across a foreign runtime lifetime.
+     */
+    fun `progress`(): FfiTransferProgress
+
+    companion object
+}
+
+/**
+ * A one-use explicit cancellation channel. Cancelling a download affects only this consumer.
+ * Keep this handle while awaiting an operation; cancel() stops local work, not remote effects.
+ */
+open class TransferControl: Disposable, AutoCloseable, TransferControlInterface
+{
+
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
+    }
+
+    /**
+     * @suppress
+     *
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
+    }
+    /**
+     * Allocate a fresh cancellation/progress owner for one path operation or sending attempt.
+     */
+    constructor() :
+        this(UniffiWithHandle,
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_constructor_transfercontrol_new(
+
+        _status)
+}
+    )
+
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the handle being freed concurrently.
+        try {
+            return block(this.uniffiCloneHandle())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
+        override fun run() {
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_tinkle_ffi_fn_free_transfercontrol(handle, status)
+            }
+        }
+    }
+
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
+        return uniffiRustCall() { status ->
+            UniffiLib.uniffi_tinkle_ffi_fn_clone_transfercontrol(handle, status)
+        }
+    }
+
+
+    /**
+     * Request local cancellation. A completion already committed may still win the race.
+     */override fun `cancel`()
+        =
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_transfercontrol_cancel(
+        it,
+        _status)
+}
+    }
+
+
+
+
+    /**
+     * Read current phase/counts without a callback retained across a foreign runtime lifetime.
+     */override fun `progress`(): FfiTransferProgress {
+            return FfiConverterTypeFfiTransferProgress.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_method_transfercontrol_progress(
+        it,
+        _status)
+}
+    }
+    )
+    }
+
+
+
+
+
+
+
+
+
+    /**
+     * @suppress
+     */
+    companion object
+
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeTransferControl: FfiConverter<TransferControl, Long> {
+    override fun lower(value: TransferControl): Long {
+        return value.uniffiCloneHandle()
+    }
+
+    override fun lift(value: Long): TransferControl {
+        return TransferControl(UniffiWithHandle, value)
+    }
+
+    override fun read(buf: ByteBuffer): TransferControl {
+        return lift(buf.getLong())
+    }
+
+    override fun allocationSize(value: TransferControl) = 8UL
+
+    override fun write(value: TransferControl, buf: ByteBuffer) {
         buf.putLong(lower(value))
     }
 }
@@ -8747,6 +14750,201 @@ public object FfiConverterTypeEnrollmentStatus: FfiConverterRustBuffer<Enrollmen
 
 
 /**
+ * Durable main-only handoff; paths are SDK-owned and cleared with the principal.
+ */
+data class FfiAttachmentManifest (
+    var `inputPath`: kotlin.String
+    ,
+    var `settings`: kotlin.String
+    ,
+    var `artifactPath`: kotlin.String
+    ,
+    var `sourceSha256`: kotlin.ByteArray
+    ,
+    var `outputSha256`: kotlin.ByteArray
+    ,
+    var `preparationProfile`: kotlin.String
+    ,
+    var `mimeType`: kotlin.String
+    ,
+    var `mediaSource`: kotlin.ByteArray
+    ,
+    var `nativeFacts`: FfiNativeMediaOutput?
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiAttachmentManifest: FfiConverterRustBuffer<FfiAttachmentManifest> {
+    override fun read(buf: ByteBuffer): FfiAttachmentManifest {
+        return FfiAttachmentManifest(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterByteArray.read(buf),
+            FfiConverterByteArray.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterByteArray.read(buf),
+            FfiConverterOptionalTypeFfiNativeMediaOutput.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiAttachmentManifest) = (
+            FfiConverterString.allocationSize(value.`inputPath`) +
+            FfiConverterString.allocationSize(value.`settings`) +
+            FfiConverterString.allocationSize(value.`artifactPath`) +
+            FfiConverterByteArray.allocationSize(value.`sourceSha256`) +
+            FfiConverterByteArray.allocationSize(value.`outputSha256`) +
+            FfiConverterString.allocationSize(value.`preparationProfile`) +
+            FfiConverterString.allocationSize(value.`mimeType`) +
+            FfiConverterByteArray.allocationSize(value.`mediaSource`) +
+            FfiConverterOptionalTypeFfiNativeMediaOutput.allocationSize(value.`nativeFacts`)
+    )
+
+    override fun write(value: FfiAttachmentManifest, buf: ByteBuffer) {
+            FfiConverterString.write(value.`inputPath`, buf)
+            FfiConverterString.write(value.`settings`, buf)
+            FfiConverterString.write(value.`artifactPath`, buf)
+            FfiConverterByteArray.write(value.`sourceSha256`, buf)
+            FfiConverterByteArray.write(value.`outputSha256`, buf)
+            FfiConverterString.write(value.`preparationProfile`, buf)
+            FfiConverterString.write(value.`mimeType`, buf)
+            FfiConverterByteArray.write(value.`mediaSource`, buf)
+            FfiConverterOptionalTypeFfiNativeMediaOutput.write(value.`nativeFacts`, buf)
+    }
+}
+
+
+
+/**
+ * Actual facts measured from a fully decoded MP4 stream, not inferred from a container header.
+ * NativeDecoded requires full-stream validation and a measured frame count. Unsupported color,
+ * HDR or alpha handling must return Unsupported (or omit a thumbnail), never silently flatten it.
+ */
+data class FfiDecodedVideo (
+    var `width`: kotlin.UInt
+    ,
+    var `height`: kotlin.UInt
+    ,
+    var `durationMs`: kotlin.ULong
+    ,
+    var `frameCount`: kotlin.UInt
+    ,
+    var `hasAlpha`: kotlin.Boolean?
+    ,
+    var `bitDepth`: kotlin.UByte?
+    ,
+    var `evidence`: FfiVideoEvidence
+    ,
+    var `thumbnail`: FfiDecodedVideoFrame?
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiDecodedVideo: FfiConverterRustBuffer<FfiDecodedVideo> {
+    override fun read(buf: ByteBuffer): FfiDecodedVideo {
+        return FfiDecodedVideo(
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterOptionalBoolean.read(buf),
+            FfiConverterOptionalUByte.read(buf),
+            FfiConverterTypeFfiVideoEvidence.read(buf),
+            FfiConverterOptionalTypeFfiDecodedVideoFrame.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiDecodedVideo) = (
+            FfiConverterUInt.allocationSize(value.`width`) +
+            FfiConverterUInt.allocationSize(value.`height`) +
+            FfiConverterULong.allocationSize(value.`durationMs`) +
+            FfiConverterUInt.allocationSize(value.`frameCount`) +
+            FfiConverterOptionalBoolean.allocationSize(value.`hasAlpha`) +
+            FfiConverterOptionalUByte.allocationSize(value.`bitDepth`) +
+            FfiConverterTypeFfiVideoEvidence.allocationSize(value.`evidence`) +
+            FfiConverterOptionalTypeFfiDecodedVideoFrame.allocationSize(value.`thumbnail`)
+    )
+
+    override fun write(value: FfiDecodedVideo, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`width`, buf)
+            FfiConverterUInt.write(value.`height`, buf)
+            FfiConverterULong.write(value.`durationMs`, buf)
+            FfiConverterUInt.write(value.`frameCount`, buf)
+            FfiConverterOptionalBoolean.write(value.`hasAlpha`, buf)
+            FfiConverterOptionalUByte.write(value.`bitDepth`, buf)
+            FfiConverterTypeFfiVideoEvidence.write(value.`evidence`, buf)
+            FfiConverterOptionalTypeFfiDecodedVideoFrame.write(value.`thumbnail`, buf)
+    }
+}
+
+
+
+/**
+ * Bounded display-oriented sRGB RGBA8 thumbnail. Tightly packed rows, no full-size decoded frame.
+ */
+data class FfiDecodedVideoFrame (
+    var `width`: kotlin.UInt
+    ,
+    var `height`: kotlin.UInt
+    ,
+    var `rgba`: kotlin.ByteArray
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiDecodedVideoFrame: FfiConverterRustBuffer<FfiDecodedVideoFrame> {
+    override fun read(buf: ByteBuffer): FfiDecodedVideoFrame {
+        return FfiDecodedVideoFrame(
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterByteArray.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiDecodedVideoFrame) = (
+            FfiConverterUInt.allocationSize(value.`width`) +
+            FfiConverterUInt.allocationSize(value.`height`) +
+            FfiConverterByteArray.allocationSize(value.`rgba`)
+    )
+
+    override fun write(value: FfiDecodedVideoFrame, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`width`, buf)
+            FfiConverterUInt.write(value.`height`, buf)
+            FfiConverterByteArray.write(value.`rgba`, buf)
+    }
+}
+
+
+
+/**
  * FFI-safe cached dialog.
  */
 data class FfiDialog (
@@ -8961,6 +15159,47 @@ public object FfiConverterTypeFfiHistoryRequest: FfiConverterRustBuffer<FfiHisto
 
 
 /**
+ * Shared fitting result, no platform-specific resizing policy.
+ */
+data class FfiMediaDimensions (
+    var `width`: kotlin.UInt
+    ,
+    var `height`: kotlin.UInt
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiMediaDimensions: FfiConverterRustBuffer<FfiMediaDimensions> {
+    override fun read(buf: ByteBuffer): FfiMediaDimensions {
+        return FfiMediaDimensions(
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiMediaDimensions) = (
+            FfiConverterUInt.allocationSize(value.`width`) +
+            FfiConverterUInt.allocationSize(value.`height`)
+    )
+
+    override fun write(value: FfiMediaDimensions, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`width`, buf)
+            FfiConverterUInt.write(value.`height`, buf)
+    }
+}
+
+
+
+/**
  * FFI-safe cached message.
  */
 data class FfiMessage (
@@ -9030,6 +15269,306 @@ public object FfiConverterTypeFfiMessage: FfiConverterRustBuffer<FfiMessage> {
             FfiConverterString.write(value.`body`, buf)
             FfiConverterByteArray.write(value.`messageProto`, buf)
             FfiConverterOptionalLong.write(value.`acceptSeq`, buf)
+    }
+}
+
+
+
+/**
+ * Small measured facts for the exact closed output; no arbitrary output path or media buffer.
+ */
+data class FfiNativeMediaOutput (
+    var `width`: kotlin.UInt
+    ,
+    var `height`: kotlin.UInt
+    ,
+    var `frameCount`: kotlin.UInt
+    ,
+    var `durationMs`: kotlin.ULong
+    ,
+    var `audioChannels`: kotlin.UByte
+    ,
+    var `audioSampleRate`: kotlin.UInt
+    ,
+    var `audioSamples`: kotlin.ULong
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiNativeMediaOutput: FfiConverterRustBuffer<FfiNativeMediaOutput> {
+    override fun read(buf: ByteBuffer): FfiNativeMediaOutput {
+        return FfiNativeMediaOutput(
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterUByte.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiNativeMediaOutput) = (
+            FfiConverterUInt.allocationSize(value.`width`) +
+            FfiConverterUInt.allocationSize(value.`height`) +
+            FfiConverterUInt.allocationSize(value.`frameCount`) +
+            FfiConverterULong.allocationSize(value.`durationMs`) +
+            FfiConverterUByte.allocationSize(value.`audioChannels`) +
+            FfiConverterUInt.allocationSize(value.`audioSampleRate`) +
+            FfiConverterULong.allocationSize(value.`audioSamples`)
+    )
+
+    override fun write(value: FfiNativeMediaOutput, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`width`, buf)
+            FfiConverterUInt.write(value.`height`, buf)
+            FfiConverterUInt.write(value.`frameCount`, buf)
+            FfiConverterULong.write(value.`durationMs`, buf)
+            FfiConverterUByte.write(value.`audioChannels`, buf)
+            FfiConverterUInt.write(value.`audioSampleRate`, buf)
+            FfiConverterULong.write(value.`audioSamples`, buf)
+    }
+}
+
+
+
+/**
+ * Retained keyed request/result. Response is the named method's protobuf only when Accepted.
+ */
+data class FfiOutgoingJob (
+    var `jobId`: kotlin.String
+    ,
+    var `targetKey`: kotlin.String
+    ,
+    var `method`: kotlin.String
+    ,
+    var `request`: kotlin.ByteArray
+    ,
+    var `state`: FfiOutgoingState
+    ,
+    var `response`: kotlin.ByteArray
+    ,
+    var `lastOutcome`: FfiOutgoingOutcome?
+    ,
+    var `revision`: kotlin.Long
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiOutgoingJob: FfiConverterRustBuffer<FfiOutgoingJob> {
+    override fun read(buf: ByteBuffer): FfiOutgoingJob {
+        return FfiOutgoingJob(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterByteArray.read(buf),
+            FfiConverterTypeFfiOutgoingState.read(buf),
+            FfiConverterByteArray.read(buf),
+            FfiConverterOptionalTypeFfiOutgoingOutcome.read(buf),
+            FfiConverterLong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiOutgoingJob) = (
+            FfiConverterString.allocationSize(value.`jobId`) +
+            FfiConverterString.allocationSize(value.`targetKey`) +
+            FfiConverterString.allocationSize(value.`method`) +
+            FfiConverterByteArray.allocationSize(value.`request`) +
+            FfiConverterTypeFfiOutgoingState.allocationSize(value.`state`) +
+            FfiConverterByteArray.allocationSize(value.`response`) +
+            FfiConverterOptionalTypeFfiOutgoingOutcome.allocationSize(value.`lastOutcome`) +
+            FfiConverterLong.allocationSize(value.`revision`)
+    )
+
+    override fun write(value: FfiOutgoingJob, buf: ByteBuffer) {
+            FfiConverterString.write(value.`jobId`, buf)
+            FfiConverterString.write(value.`targetKey`, buf)
+            FfiConverterString.write(value.`method`, buf)
+            FfiConverterByteArray.write(value.`request`, buf)
+            FfiConverterTypeFfiOutgoingState.write(value.`state`, buf)
+            FfiConverterByteArray.write(value.`response`, buf)
+            FfiConverterOptionalTypeFfiOutgoingOutcome.write(value.`lastOutcome`, buf)
+            FfiConverterLong.write(value.`revision`, buf)
+    }
+}
+
+
+
+/**
+ * Lightweight inventory entry; list operations do not copy all message bodies/results across FFI.
+ */
+data class FfiOutgoingJobSummary (
+    var `jobId`: kotlin.String
+    ,
+    var `targetKey`: kotlin.String
+    ,
+    var `method`: kotlin.String
+    ,
+    var `state`: FfiOutgoingState
+    ,
+    var `revision`: kotlin.Long
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiOutgoingJobSummary: FfiConverterRustBuffer<FfiOutgoingJobSummary> {
+    override fun read(buf: ByteBuffer): FfiOutgoingJobSummary {
+        return FfiOutgoingJobSummary(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeFfiOutgoingState.read(buf),
+            FfiConverterLong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiOutgoingJobSummary) = (
+            FfiConverterString.allocationSize(value.`jobId`) +
+            FfiConverterString.allocationSize(value.`targetKey`) +
+            FfiConverterString.allocationSize(value.`method`) +
+            FfiConverterTypeFfiOutgoingState.allocationSize(value.`state`) +
+            FfiConverterLong.allocationSize(value.`revision`)
+    )
+
+    override fun write(value: FfiOutgoingJobSummary, buf: ByteBuffer) {
+            FfiConverterString.write(value.`jobId`, buf)
+            FfiConverterString.write(value.`targetKey`, buf)
+            FfiConverterString.write(value.`method`, buf)
+            FfiConverterTypeFfiOutgoingState.write(value.`state`, buf)
+            FfiConverterLong.write(value.`revision`, buf)
+    }
+}
+
+
+
+/**
+ * Last observed failure; it does not authorize replay or establish rollback.
+ */
+data class FfiOutgoingOutcome (
+    var `code`: kotlin.Int
+    ,
+    var `rawCode`: kotlin.Int?
+    ,
+    var `unknownOutcome`: kotlin.Boolean
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiOutgoingOutcome: FfiConverterRustBuffer<FfiOutgoingOutcome> {
+    override fun read(buf: ByteBuffer): FfiOutgoingOutcome {
+        return FfiOutgoingOutcome(
+            FfiConverterInt.read(buf),
+            FfiConverterOptionalInt.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiOutgoingOutcome) = (
+            FfiConverterInt.allocationSize(value.`code`) +
+            FfiConverterOptionalInt.allocationSize(value.`rawCode`) +
+            FfiConverterBoolean.allocationSize(value.`unknownOutcome`)
+    )
+
+    override fun write(value: FfiOutgoingOutcome, buf: ByteBuffer) {
+            FfiConverterInt.write(value.`code`, buf)
+            FfiConverterOptionalInt.write(value.`rawCode`, buf)
+            FfiConverterBoolean.write(value.`unknownOutcome`, buf)
+    }
+}
+
+
+
+/**
+ * Completed main/thumbnail metadata and MediaSource protobuf; never full-size media bytes.
+ */
+data class FfiPreparedAttachment (
+    var `fileInfo`: kotlin.ByteArray
+    ,
+    var `thumbnailFileInfo`: kotlin.ByteArray?
+    ,
+    var `mediaSource`: kotlin.ByteArray
+    ,
+    var `sourceSha256`: kotlin.ByteArray
+    ,
+    var `outputSha256`: kotlin.ByteArray
+    ,
+    var `preparationProfile`: kotlin.String
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiPreparedAttachment: FfiConverterRustBuffer<FfiPreparedAttachment> {
+    override fun read(buf: ByteBuffer): FfiPreparedAttachment {
+        return FfiPreparedAttachment(
+            FfiConverterByteArray.read(buf),
+            FfiConverterOptionalByteArray.read(buf),
+            FfiConverterByteArray.read(buf),
+            FfiConverterByteArray.read(buf),
+            FfiConverterByteArray.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiPreparedAttachment) = (
+            FfiConverterByteArray.allocationSize(value.`fileInfo`) +
+            FfiConverterOptionalByteArray.allocationSize(value.`thumbnailFileInfo`) +
+            FfiConverterByteArray.allocationSize(value.`mediaSource`) +
+            FfiConverterByteArray.allocationSize(value.`sourceSha256`) +
+            FfiConverterByteArray.allocationSize(value.`outputSha256`) +
+            FfiConverterString.allocationSize(value.`preparationProfile`)
+    )
+
+    override fun write(value: FfiPreparedAttachment, buf: ByteBuffer) {
+            FfiConverterByteArray.write(value.`fileInfo`, buf)
+            FfiConverterOptionalByteArray.write(value.`thumbnailFileInfo`, buf)
+            FfiConverterByteArray.write(value.`mediaSource`, buf)
+            FfiConverterByteArray.write(value.`sourceSha256`, buf)
+            FfiConverterByteArray.write(value.`outputSha256`, buf)
+            FfiConverterString.write(value.`preparationProfile`, buf)
     }
 }
 
@@ -9131,6 +15670,234 @@ public object FfiConverterTypeFfiSubscribeResponse: FfiConverterRustBuffer<FfiSu
 
     override fun write(value: FfiSubscribeResponse, buf: ByteBuffer) {
             FfiConverterSequenceString.write(value.`targets`, buf)
+    }
+}
+
+
+
+/**
+ * Durable transfer observations. Download prefix bytes are diagnostic until server metadata
+ * and digest verification complete. Upload managers currently report phase, not per-part bytes.
+ */
+data class FfiTransferCheckpoint (
+    var `jobId`: kotlin.String
+    ,
+    var `kind`: kotlin.String
+    ,
+    var `fileId`: kotlin.Long
+    ,
+    var `state`: kotlin.String
+    ,
+    var `retainedPrefixBytes`: kotlin.Long
+    ,
+    /**
+     * Confirmed upload part count; not bytes and not a server resume authority.
+     */
+    var `uploadedParts`: kotlin.ULong?
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiTransferCheckpoint: FfiConverterRustBuffer<FfiTransferCheckpoint> {
+    override fun read(buf: ByteBuffer): FfiTransferCheckpoint {
+        return FfiTransferCheckpoint(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiTransferCheckpoint) = (
+            FfiConverterString.allocationSize(value.`jobId`) +
+            FfiConverterString.allocationSize(value.`kind`) +
+            FfiConverterLong.allocationSize(value.`fileId`) +
+            FfiConverterString.allocationSize(value.`state`) +
+            FfiConverterLong.allocationSize(value.`retainedPrefixBytes`) +
+            FfiConverterOptionalULong.allocationSize(value.`uploadedParts`)
+    )
+
+    override fun write(value: FfiTransferCheckpoint, buf: ByteBuffer) {
+            FfiConverterString.write(value.`jobId`, buf)
+            FfiConverterString.write(value.`kind`, buf)
+            FfiConverterLong.write(value.`fileId`, buf)
+            FfiConverterString.write(value.`state`, buf)
+            FfiConverterLong.write(value.`retainedPrefixBytes`, buf)
+            FfiConverterOptionalULong.write(value.`uploadedParts`, buf)
+    }
+}
+
+
+
+/**
+ * Honest progress snapshot. Byte counts are absent until known, never estimated from elapsed time.
+ */
+data class FfiTransferProgress (
+    var `phase`: FfiTransferPhase
+    ,
+    var `cancellationRequested`: kotlin.Boolean
+    ,
+    var `completedBytes`: kotlin.ULong?
+    ,
+    var `totalBytes`: kotlin.ULong?
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiTransferProgress: FfiConverterRustBuffer<FfiTransferProgress> {
+    override fun read(buf: ByteBuffer): FfiTransferProgress {
+        return FfiTransferProgress(
+            FfiConverterTypeFfiTransferPhase.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiTransferProgress) = (
+            FfiConverterTypeFfiTransferPhase.allocationSize(value.`phase`) +
+            FfiConverterBoolean.allocationSize(value.`cancellationRequested`) +
+            FfiConverterOptionalULong.allocationSize(value.`completedBytes`) +
+            FfiConverterOptionalULong.allocationSize(value.`totalBytes`)
+    )
+
+    override fun write(value: FfiTransferProgress, buf: ByteBuffer) {
+            FfiConverterTypeFfiTransferPhase.write(value.`phase`, buf)
+            FfiConverterBoolean.write(value.`cancellationRequested`, buf)
+            FfiConverterOptionalULong.write(value.`completedBytes`, buf)
+            FfiConverterOptionalULong.write(value.`totalBytes`, buf)
+    }
+}
+
+
+
+/**
+ * Exact upload declaration. Digest absence/presence is preserved by the core upload manager.
+ */
+data class FfiUploadOptions (
+    var `idempotencyKey`: kotlin.String
+    ,
+    var `fileName`: kotlin.String?
+    ,
+    var `mimeType`: kotlin.String?
+    ,
+    var `sha256`: kotlin.ByteArray?
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiUploadOptions: FfiConverterRustBuffer<FfiUploadOptions> {
+    override fun read(buf: ByteBuffer): FfiUploadOptions {
+        return FfiUploadOptions(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalByteArray.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiUploadOptions) = (
+            FfiConverterString.allocationSize(value.`idempotencyKey`) +
+            FfiConverterOptionalString.allocationSize(value.`fileName`) +
+            FfiConverterOptionalString.allocationSize(value.`mimeType`) +
+            FfiConverterOptionalByteArray.allocationSize(value.`sha256`)
+    )
+
+    override fun write(value: FfiUploadOptions, buf: ByteBuffer) {
+            FfiConverterString.write(value.`idempotencyKey`, buf)
+            FfiConverterOptionalString.write(value.`fileName`, buf)
+            FfiConverterOptionalString.write(value.`mimeType`, buf)
+            FfiConverterOptionalByteArray.write(value.`sha256`, buf)
+    }
+}
+
+
+
+/**
+ * The fixed limits of this invocation, not a host-selected expansion of SDK budgets.
+ */
+data class FfiVideoDecodeLimits (
+    var `maxInputBytes`: kotlin.ULong
+    ,
+    var `maxPixels`: kotlin.ULong
+    ,
+    var `maxFrames`: kotlin.UInt
+    ,
+    var `maxDurationMs`: kotlin.ULong
+    ,
+    var `thumbnailEdge`: kotlin.UInt
+    ,
+    var `deadlineMs`: kotlin.UInt
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiVideoDecodeLimits: FfiConverterRustBuffer<FfiVideoDecodeLimits> {
+    override fun read(buf: ByteBuffer): FfiVideoDecodeLimits {
+        return FfiVideoDecodeLimits(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiVideoDecodeLimits) = (
+            FfiConverterULong.allocationSize(value.`maxInputBytes`) +
+            FfiConverterULong.allocationSize(value.`maxPixels`) +
+            FfiConverterUInt.allocationSize(value.`maxFrames`) +
+            FfiConverterULong.allocationSize(value.`maxDurationMs`) +
+            FfiConverterUInt.allocationSize(value.`thumbnailEdge`) +
+            FfiConverterUInt.allocationSize(value.`deadlineMs`)
+    )
+
+    override fun write(value: FfiVideoDecodeLimits, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`maxInputBytes`, buf)
+            FfiConverterULong.write(value.`maxPixels`, buf)
+            FfiConverterUInt.write(value.`maxFrames`, buf)
+            FfiConverterULong.write(value.`maxDurationMs`, buf)
+            FfiConverterUInt.write(value.`thumbnailEdge`, buf)
+            FfiConverterUInt.write(value.`deadlineMs`, buf)
     }
 }
 
@@ -9571,6 +16338,25 @@ public object FfiConverterTypeAccountSignOutReason: FfiConverterRustBuffer<Accou
  */
 sealed class FfiException: kotlin.Exception() {
 
+    /**
+     * Exact terminal RPC status. Unknown outcome is not rollback, even for a received result.
+     */
+    class Rpc(
+
+        val `code`: kotlin.Int,
+
+        val `rawCode`: kotlin.Int?,
+
+        val `diagnostic`: kotlin.String,
+
+        val `unknownOutcome`: kotlin.Boolean,
+
+        val `recovery`: FfiRpcRecovery
+        ) : FfiException() {
+        override val message
+            get() = "code=${ `code` }, rawCode=${ `rawCode` }, diagnostic=${ `diagnostic` }, unknownOutcome=${ `unknownOutcome` }, recovery=${ `recovery` }"
+    }
+
     class Network(
 
         val v1: kotlin.String
@@ -9648,8 +16434,7 @@ sealed class FfiException: kotlin.Exception() {
     }
 
     /**
-     * Transient failure: bounded retry with backoff is safe. Reconciliation
-     * reads are idempotent; sends still require their `random_id` policy.
+     * Local transient failure. Retry policy still depends on operation identity and uncertainty.
      */
     class Retryable(
 
@@ -9678,29 +16463,36 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
 
 
         return when(buf.getInt()) {
-            1 -> FfiException.Network(
+            1 -> FfiException.Rpc(
+                FfiConverterInt.read(buf),
+                FfiConverterOptionalInt.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterBoolean.read(buf),
+                FfiConverterTypeFfiRpcRecovery.read(buf),
+                )
+            2 -> FfiException.Network(
                 FfiConverterString.read(buf),
                 )
-            2 -> FfiException.NotConnected()
-            3 -> FfiException.Timeout()
-            4 -> FfiException.Cancelled()
-            5 -> FfiException.Sync(
+            3 -> FfiException.NotConnected()
+            4 -> FfiException.Timeout()
+            5 -> FfiException.Cancelled()
+            6 -> FfiException.Sync(
                 FfiConverterString.read(buf),
                 )
-            6 -> FfiException.Codec(
+            7 -> FfiException.Codec(
                 FfiConverterString.read(buf),
                 )
-            7 -> FfiException.Storage(
+            8 -> FfiException.Storage(
                 FfiConverterString.read(buf),
                 )
-            8 -> FfiException.ReconnectExhausted()
-            9 -> FfiException.Internal(
+            9 -> FfiException.ReconnectExhausted()
+            10 -> FfiException.Internal(
                 FfiConverterString.read(buf),
                 )
-            10 -> FfiException.Auth(
+            11 -> FfiException.Auth(
                 FfiConverterString.read(buf),
                 )
-            11 -> FfiException.Retryable(
+            12 -> FfiException.Retryable(
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
@@ -9709,6 +16501,15 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
 
     override fun allocationSize(value: FfiException): ULong {
         return when(value) {
+            is FfiException.Rpc -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterInt.allocationSize(value.`code`)
+                + FfiConverterOptionalInt.allocationSize(value.`rawCode`)
+                + FfiConverterString.allocationSize(value.`diagnostic`)
+                + FfiConverterBoolean.allocationSize(value.`unknownOutcome`)
+                + FfiConverterTypeFfiRpcRecovery.allocationSize(value.`recovery`)
+            )
             is FfiException.Network -> (
                 // Add the size for the Int that specifies the variant plus the size needed for all fields
                 4UL
@@ -9765,54 +16566,63 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
 
     override fun write(value: FfiException, buf: ByteBuffer) {
         when(value) {
-            is FfiException.Network -> {
+            is FfiException.Rpc -> {
                 buf.putInt(1)
+                FfiConverterInt.write(value.`code`, buf)
+                FfiConverterOptionalInt.write(value.`rawCode`, buf)
+                FfiConverterString.write(value.`diagnostic`, buf)
+                FfiConverterBoolean.write(value.`unknownOutcome`, buf)
+                FfiConverterTypeFfiRpcRecovery.write(value.`recovery`, buf)
+                Unit
+            }
+            is FfiException.Network -> {
+                buf.putInt(2)
                 FfiConverterString.write(value.v1, buf)
                 Unit
             }
             is FfiException.NotConnected -> {
-                buf.putInt(2)
-                Unit
-            }
-            is FfiException.Timeout -> {
                 buf.putInt(3)
                 Unit
             }
-            is FfiException.Cancelled -> {
+            is FfiException.Timeout -> {
                 buf.putInt(4)
                 Unit
             }
-            is FfiException.Sync -> {
+            is FfiException.Cancelled -> {
                 buf.putInt(5)
-                FfiConverterString.write(value.v1, buf)
                 Unit
             }
-            is FfiException.Codec -> {
+            is FfiException.Sync -> {
                 buf.putInt(6)
                 FfiConverterString.write(value.v1, buf)
                 Unit
             }
-            is FfiException.Storage -> {
+            is FfiException.Codec -> {
                 buf.putInt(7)
                 FfiConverterString.write(value.v1, buf)
                 Unit
             }
-            is FfiException.ReconnectExhausted -> {
+            is FfiException.Storage -> {
                 buf.putInt(8)
-                Unit
-            }
-            is FfiException.Internal -> {
-                buf.putInt(9)
                 FfiConverterString.write(value.v1, buf)
                 Unit
             }
-            is FfiException.Auth -> {
+            is FfiException.ReconnectExhausted -> {
+                buf.putInt(9)
+                Unit
+            }
+            is FfiException.Internal -> {
                 buf.putInt(10)
                 FfiConverterString.write(value.v1, buf)
                 Unit
             }
-            is FfiException.Retryable -> {
+            is FfiException.Auth -> {
                 buf.putInt(11)
+                FfiConverterString.write(value.v1, buf)
+                Unit
+            }
+            is FfiException.Retryable -> {
+                buf.putInt(12)
                 FfiConverterString.write(value.v1, buf)
                 Unit
             }
@@ -9859,6 +16669,450 @@ public object FfiConverterTypeFfiLoadPolicy: FfiConverterRustBuffer<FfiLoadPolic
     override fun allocationSize(value: FfiLoadPolicy) = 4UL
 
     override fun write(value: FfiLoadPolicy, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+
+/**
+ * Typed authoring/preparation failures, including unsupported non-document media.
+ */
+sealed class FfiMediaException: kotlin.Exception() {
+
+    class Budget(
+        ) : FfiMediaException() {
+        override val message
+            get() = ""
+    }
+
+    class Invalid(
+        ) : FfiMediaException() {
+        override val message
+            get() = ""
+    }
+
+    class Io(
+        ) : FfiMediaException() {
+        override val message
+            get() = ""
+    }
+
+    class SourceChanged(
+        ) : FfiMediaException() {
+        override val message
+            get() = ""
+    }
+
+    class Cancelled(
+        ) : FfiMediaException() {
+        override val message
+            get() = ""
+    }
+
+    class Busy(
+        ) : FfiMediaException() {
+        override val message
+            get() = ""
+    }
+
+    class Unsupported(
+        ) : FfiMediaException() {
+        override val message
+            get() = ""
+    }
+
+    class Codec(
+        ) : FfiMediaException() {
+        override val message
+            get() = ""
+    }
+
+
+
+
+
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<FfiMediaException> {
+        override fun lift(error_buf: RustBuffer.ByValue): FfiMediaException = FfiConverterTypeFfiMediaError.lift(error_buf)
+    }
+
+
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiMediaError : FfiConverterRustBuffer<FfiMediaException> {
+    override fun read(buf: ByteBuffer): FfiMediaException {
+
+
+        return when(buf.getInt()) {
+            1 -> FfiMediaException.Budget()
+            2 -> FfiMediaException.Invalid()
+            3 -> FfiMediaException.Io()
+            4 -> FfiMediaException.SourceChanged()
+            5 -> FfiMediaException.Cancelled()
+            6 -> FfiMediaException.Busy()
+            7 -> FfiMediaException.Unsupported()
+            8 -> FfiMediaException.Codec()
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: FfiMediaException): ULong {
+        return when(value) {
+            is FfiMediaException.Budget -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is FfiMediaException.Invalid -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is FfiMediaException.Io -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is FfiMediaException.SourceChanged -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is FfiMediaException.Cancelled -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is FfiMediaException.Busy -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is FfiMediaException.Unsupported -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is FfiMediaException.Codec -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+        }
+    }
+
+    override fun write(value: FfiMediaException, buf: ByteBuffer) {
+        when(value) {
+            is FfiMediaException.Budget -> {
+                buf.putInt(1)
+                Unit
+            }
+            is FfiMediaException.Invalid -> {
+                buf.putInt(2)
+                Unit
+            }
+            is FfiMediaException.Io -> {
+                buf.putInt(3)
+                Unit
+            }
+            is FfiMediaException.SourceChanged -> {
+                buf.putInt(4)
+                Unit
+            }
+            is FfiMediaException.Cancelled -> {
+                buf.putInt(5)
+                Unit
+            }
+            is FfiMediaException.Busy -> {
+                buf.putInt(6)
+                Unit
+            }
+            is FfiMediaException.Unsupported -> {
+                buf.putInt(7)
+                Unit
+            }
+            is FfiMediaException.Codec -> {
+                buf.putInt(8)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+
+}
+
+
+
+/**
+ * Explicit preparation intent. Video without a qualified native codec is Unsupported, not a document.
+ */
+sealed class FfiMediaKind {
+
+    object Document : FfiMediaKind()
+
+
+    object Image : FfiMediaKind()
+
+
+    data class Voice(
+        val `sampleRate`: kotlin.UInt,
+        val `channels`: kotlin.UByte,
+        val `bitsPerSample`: kotlin.UByte) : FfiMediaKind()
+
+    {
+
+
+        companion object
+    }
+
+    object Video : FfiMediaKind()
+
+
+    object Audio : FfiMediaKind()
+
+
+
+
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiMediaKind : FfiConverterRustBuffer<FfiMediaKind>{
+    override fun read(buf: ByteBuffer): FfiMediaKind {
+        return when(buf.getInt()) {
+            1 -> FfiMediaKind.Document
+            2 -> FfiMediaKind.Image
+            3 -> FfiMediaKind.Voice(
+                FfiConverterUInt.read(buf),
+                FfiConverterUByte.read(buf),
+                FfiConverterUByte.read(buf),
+                )
+            4 -> FfiMediaKind.Video
+            5 -> FfiMediaKind.Audio
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: FfiMediaKind): ULong = when(value) {
+        is FfiMediaKind.Document -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is FfiMediaKind.Image -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is FfiMediaKind.Voice -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterUInt.allocationSize(value.`sampleRate`)
+                + FfiConverterUByte.allocationSize(value.`channels`)
+                + FfiConverterUByte.allocationSize(value.`bitsPerSample`)
+            )
+        }
+        is FfiMediaKind.Video -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is FfiMediaKind.Audio -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+    }
+
+    override fun write(value: FfiMediaKind, buf: ByteBuffer) {
+        when(value) {
+            is FfiMediaKind.Document -> {
+                buf.putInt(1)
+                Unit
+            }
+            is FfiMediaKind.Image -> {
+                buf.putInt(2)
+                Unit
+            }
+            is FfiMediaKind.Voice -> {
+                buf.putInt(3)
+                FfiConverterUInt.write(value.`sampleRate`, buf)
+                FfiConverterUByte.write(value.`channels`, buf)
+                FfiConverterUByte.write(value.`bitsPerSample`, buf)
+                Unit
+            }
+            is FfiMediaKind.Video -> {
+                buf.putInt(4)
+                Unit
+            }
+            is FfiMediaKind.Audio -> {
+                buf.putInt(5)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+/**
+ * Local processing purpose, independent of a filename, MIME guess or upload intent.
+ */
+sealed class FfiNativeMediaKind {
+
+    object Image : FfiNativeMediaKind()
+
+
+    object Video : FfiNativeMediaKind()
+
+
+    object Audio : FfiNativeMediaKind()
+
+
+    data class Voice(
+        val `sampleRate`: kotlin.UInt,
+        val `channels`: kotlin.UByte,
+        val `bitsPerSample`: kotlin.UByte) : FfiNativeMediaKind()
+
+    {
+
+
+        companion object
+    }
+
+
+
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiNativeMediaKind : FfiConverterRustBuffer<FfiNativeMediaKind>{
+    override fun read(buf: ByteBuffer): FfiNativeMediaKind {
+        return when(buf.getInt()) {
+            1 -> FfiNativeMediaKind.Image
+            2 -> FfiNativeMediaKind.Video
+            3 -> FfiNativeMediaKind.Audio
+            4 -> FfiNativeMediaKind.Voice(
+                FfiConverterUInt.read(buf),
+                FfiConverterUByte.read(buf),
+                FfiConverterUByte.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: FfiNativeMediaKind): ULong = when(value) {
+        is FfiNativeMediaKind.Image -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is FfiNativeMediaKind.Video -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is FfiNativeMediaKind.Audio -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is FfiNativeMediaKind.Voice -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterUInt.allocationSize(value.`sampleRate`)
+                + FfiConverterUByte.allocationSize(value.`channels`)
+                + FfiConverterUByte.allocationSize(value.`bitsPerSample`)
+            )
+        }
+    }
+
+    override fun write(value: FfiNativeMediaKind, buf: ByteBuffer) {
+        when(value) {
+            is FfiNativeMediaKind.Image -> {
+                buf.putInt(1)
+                Unit
+            }
+            is FfiNativeMediaKind.Video -> {
+                buf.putInt(2)
+                Unit
+            }
+            is FfiNativeMediaKind.Audio -> {
+                buf.putInt(3)
+                Unit
+            }
+            is FfiNativeMediaKind.Voice -> {
+                buf.putInt(4)
+                FfiConverterUInt.write(value.`sampleRate`, buf)
+                FfiConverterUByte.write(value.`channels`, buf)
+                FfiConverterUByte.write(value.`bitsPerSample`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+/**
+ * Retained state, independent of whether the foreign waiter remains alive.
+ */
+
+enum class FfiOutgoingState {
+
+    PREPARED,
+    DISPATCHING,
+    UNCONFIRMED,
+    ACCEPTED,
+    REJECTED,
+    TRANSIENT,
+    ACCEPTED_PENDING;
+
+
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiOutgoingState: FfiConverterRustBuffer<FfiOutgoingState> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiOutgoingState.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiOutgoingState) = 4UL
+
+    override fun write(value: FfiOutgoingState, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }
@@ -10033,6 +17287,311 @@ public object FfiConverterTypeFfiReconcileStatus: FfiConverterRustBuffer<FfiReco
 
 
 /**
+ * Recovery guidance does not authorize replay of an uncertain mutation.
+ */
+
+enum class FfiRpcRecovery {
+
+    /**
+     * Refetch the current revision and reconcile user intent before another mutation.
+     */
+    REFETCH,
+    /**
+     * Only an idempotent read or explicitly authorized exact-key retry may back off and retry.
+     */
+    CONDITIONAL_RETRY,
+    /**
+     * Correct input or authorization; do not retry the same mutation blindly.
+     */
+    DO_NOT_RETRY;
+
+
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiRpcRecovery: FfiConverterRustBuffer<FfiRpcRecovery> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiRpcRecovery.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiRpcRecovery) = 4UL
+
+    override fun write(value: FfiRpcRecovery, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+
+/**
+ * Structured coordinator errors; RPC failures carry the ordinary FFI error, never replay advice.
+ */
+sealed class FfiSendException: kotlin.Exception() {
+
+    class NoStorage(
+        ) : FfiSendException() {
+        override val message
+            get() = ""
+    }
+
+    class NoPrincipal(
+        ) : FfiSendException() {
+        override val message
+            get() = ""
+    }
+
+    class ScopeChanged(
+        ) : FfiSendException() {
+        override val message
+            get() = ""
+    }
+
+    class Busy(
+        ) : FfiSendException() {
+        override val message
+            get() = ""
+    }
+
+    class NotFound(
+        ) : FfiSendException() {
+        override val message
+            get() = ""
+    }
+
+    class Conflict(
+        ) : FfiSendException() {
+        override val message
+            get() = ""
+    }
+
+    class Storage(
+        ) : FfiSendException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidRequest(
+        ) : FfiSendException() {
+        override val message
+            get() = ""
+    }
+
+    class Random(
+        ) : FfiSendException() {
+        override val message
+            get() = ""
+    }
+
+    class Media(
+
+        val `error`: FfiMediaException
+        ) : FfiSendException() {
+        override val message
+            get() = "error=${ `error` }"
+    }
+
+    class Rpc(
+
+        val `error`: FfiException
+        ) : FfiSendException() {
+        override val message
+            get() = "error=${ `error` }"
+    }
+
+
+
+
+
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<FfiSendException> {
+        override fun lift(error_buf: RustBuffer.ByValue): FfiSendException = FfiConverterTypeFfiSendError.lift(error_buf)
+    }
+
+
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiSendError : FfiConverterRustBuffer<FfiSendException> {
+    override fun read(buf: ByteBuffer): FfiSendException {
+
+
+        return when(buf.getInt()) {
+            1 -> FfiSendException.NoStorage()
+            2 -> FfiSendException.NoPrincipal()
+            3 -> FfiSendException.ScopeChanged()
+            4 -> FfiSendException.Busy()
+            5 -> FfiSendException.NotFound()
+            6 -> FfiSendException.Conflict()
+            7 -> FfiSendException.Storage()
+            8 -> FfiSendException.InvalidRequest()
+            9 -> FfiSendException.Random()
+            10 -> FfiSendException.Media(
+                FfiConverterTypeFfiMediaError.read(buf),
+                )
+            11 -> FfiSendException.Rpc(
+                FfiConverterTypeFfiError.read(buf),
+                )
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: FfiSendException): ULong {
+        return when(value) {
+            is FfiSendException.NoStorage -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is FfiSendException.NoPrincipal -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is FfiSendException.ScopeChanged -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is FfiSendException.Busy -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is FfiSendException.NotFound -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is FfiSendException.Conflict -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is FfiSendException.Storage -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is FfiSendException.InvalidRequest -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is FfiSendException.Random -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is FfiSendException.Media -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterTypeFfiMediaError.allocationSize(value.`error`)
+            )
+            is FfiSendException.Rpc -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterTypeFfiError.allocationSize(value.`error`)
+            )
+        }
+    }
+
+    override fun write(value: FfiSendException, buf: ByteBuffer) {
+        when(value) {
+            is FfiSendException.NoStorage -> {
+                buf.putInt(1)
+                Unit
+            }
+            is FfiSendException.NoPrincipal -> {
+                buf.putInt(2)
+                Unit
+            }
+            is FfiSendException.ScopeChanged -> {
+                buf.putInt(3)
+                Unit
+            }
+            is FfiSendException.Busy -> {
+                buf.putInt(4)
+                Unit
+            }
+            is FfiSendException.NotFound -> {
+                buf.putInt(5)
+                Unit
+            }
+            is FfiSendException.Conflict -> {
+                buf.putInt(6)
+                Unit
+            }
+            is FfiSendException.Storage -> {
+                buf.putInt(7)
+                Unit
+            }
+            is FfiSendException.InvalidRequest -> {
+                buf.putInt(8)
+                Unit
+            }
+            is FfiSendException.Random -> {
+                buf.putInt(9)
+                Unit
+            }
+            is FfiSendException.Media -> {
+                buf.putInt(10)
+                FfiConverterTypeFfiMediaError.write(value.`error`, buf)
+                Unit
+            }
+            is FfiSendException.Rpc -> {
+                buf.putInt(11)
+                FfiConverterTypeFfiError.write(value.`error`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+
+}
+
+
+
+/**
+ * Explicit retry selection. Never use a fresh random ID after an uncertain result.
+ */
+
+enum class FfiSendRetry {
+
+    NEVER,
+    EXACT_KEYED_REQUEST;
+
+
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiSendRetry: FfiConverterRustBuffer<FfiSendRetry> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiSendRetry.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiSendRetry) = 4UL
+
+    override fun write(value: FfiSendRetry, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
  * App-visible sync events.
  *
  * Journal payloads cross as protobuf bytes where noted; hosts decode with
@@ -10119,6 +17678,19 @@ sealed class FfiSyncEvent {
         companion object
     }
 
+    /**
+     * Validated ephemeral `tinkle.v1.MessageChanged` protobuf, including original effect expiry.
+     * Check that deadline again at display time. Never hydrate, persist or replay from this event.
+     */
+    data class ReactionEffect(
+        val `payload`: kotlin.ByteArray) : FfiSyncEvent()
+
+    {
+
+
+        companion object
+    }
+
 
 
 
@@ -10159,6 +17731,9 @@ public object FfiConverterTypeFfiSyncEvent : FfiConverterRustBuffer<FfiSyncEvent
                 FfiConverterString.read(buf),
                 FfiConverterLong.read(buf),
                 FfiConverterString.read(buf),
+                )
+            7 -> FfiSyncEvent.ReactionEffect(
+                FfiConverterByteArray.read(buf),
                 )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
@@ -10214,6 +17789,13 @@ public object FfiConverterTypeFfiSyncEvent : FfiConverterRustBuffer<FfiSyncEvent
                 + FfiConverterString.allocationSize(value.`error`)
             )
         }
+        is FfiSyncEvent.ReactionEffect -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterByteArray.allocationSize(value.`payload`)
+            )
+        }
     }
 
     override fun write(value: FfiSyncEvent, buf: ByteBuffer) {
@@ -10255,7 +17837,92 @@ public object FfiConverterTypeFfiSyncEvent : FfiConverterRustBuffer<FfiSyncEvent
                 FfiConverterString.write(value.`error`, buf)
                 Unit
             }
+            is FfiSyncEvent.ReactionEffect -> {
+                buf.putInt(7)
+                FfiConverterByteArray.write(value.`payload`, buf)
+                Unit
+            }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+/**
+ * Local operation phase, not proof that a remote mutation rolled back or a message was delivered.
+ */
+
+enum class FfiTransferPhase {
+
+    READY,
+    PREPARING,
+    UPLOADING,
+    DOWNLOADING,
+    SENDING,
+    COMPLETE,
+    FAILED,
+    INTERRUPTED;
+
+
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiTransferPhase: FfiConverterRustBuffer<FfiTransferPhase> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiTransferPhase.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiTransferPhase) = 4UL
+
+    override fun write(value: FfiTransferPhase, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * Header probing alone is explicitly unqualified and is rejected by common Rust preparation.
+ */
+
+enum class FfiVideoEvidence {
+
+    HEADER_ONLY,
+    NATIVE_DECODED;
+
+
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiVideoEvidence: FfiConverterRustBuffer<FfiVideoEvidence> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiVideoEvidence.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiVideoEvidence) = 4UL
+
+    override fun write(value: FfiVideoEvidence, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
     }
 }
 
@@ -10298,6 +17965,38 @@ public object FfiConverterTypeSecureEnrollmentWrite: FfiConverterRustBuffer<Secu
 }
 
 
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalUByte: FfiConverterRustBuffer<kotlin.UByte?> {
+    override fun read(buf: ByteBuffer): kotlin.UByte? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterUByte.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.UByte?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterUByte.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.UByte?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterUByte.write(value, buf)
+        }
+    }
+}
 
 
 
@@ -10369,6 +18068,38 @@ public object FfiConverterOptionalInt: FfiConverterRustBuffer<kotlin.Int?> {
 /**
  * @suppress
  */
+public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
+    override fun read(buf: ByteBuffer): kotlin.ULong? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterULong.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.ULong?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterULong.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.ULong?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterULong.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalLong: FfiConverterRustBuffer<kotlin.Long?> {
     override fun read(buf: ByteBuffer): kotlin.Long? {
         if (buf.get().toInt() == 0) {
@@ -10391,6 +18122,38 @@ public object FfiConverterOptionalLong: FfiConverterRustBuffer<kotlin.Long?> {
         } else {
             buf.put(1)
             FfiConverterLong.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalBoolean: FfiConverterRustBuffer<kotlin.Boolean?> {
+    override fun read(buf: ByteBuffer): kotlin.Boolean? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterBoolean.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Boolean?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterBoolean.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Boolean?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterBoolean.write(value, buf)
         }
     }
 }
@@ -10519,6 +18282,166 @@ public object FfiConverterOptionalTypeAccountState: FfiConverterRustBuffer<Accou
         } else {
             buf.put(1)
             FfiConverterTypeAccountState.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeFfiAttachmentManifest: FfiConverterRustBuffer<FfiAttachmentManifest?> {
+    override fun read(buf: ByteBuffer): FfiAttachmentManifest? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiAttachmentManifest.read(buf)
+    }
+
+    override fun allocationSize(value: FfiAttachmentManifest?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiAttachmentManifest.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiAttachmentManifest?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiAttachmentManifest.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeFfiDecodedVideoFrame: FfiConverterRustBuffer<FfiDecodedVideoFrame?> {
+    override fun read(buf: ByteBuffer): FfiDecodedVideoFrame? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiDecodedVideoFrame.read(buf)
+    }
+
+    override fun allocationSize(value: FfiDecodedVideoFrame?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiDecodedVideoFrame.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiDecodedVideoFrame?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiDecodedVideoFrame.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeFfiNativeMediaOutput: FfiConverterRustBuffer<FfiNativeMediaOutput?> {
+    override fun read(buf: ByteBuffer): FfiNativeMediaOutput? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiNativeMediaOutput.read(buf)
+    }
+
+    override fun allocationSize(value: FfiNativeMediaOutput?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiNativeMediaOutput.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiNativeMediaOutput?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiNativeMediaOutput.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeFfiOutgoingOutcome: FfiConverterRustBuffer<FfiOutgoingOutcome?> {
+    override fun read(buf: ByteBuffer): FfiOutgoingOutcome? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiOutgoingOutcome.read(buf)
+    }
+
+    override fun allocationSize(value: FfiOutgoingOutcome?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiOutgoingOutcome.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiOutgoingOutcome?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiOutgoingOutcome.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeFfiTransferCheckpoint: FfiConverterRustBuffer<FfiTransferCheckpoint?> {
+    override fun read(buf: ByteBuffer): FfiTransferCheckpoint? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiTransferCheckpoint.read(buf)
+    }
+
+    override fun allocationSize(value: FfiTransferCheckpoint?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiTransferCheckpoint.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiTransferCheckpoint?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiTransferCheckpoint.write(value, buf)
         }
     }
 }
@@ -10829,6 +18752,34 @@ public object FfiConverterSequenceTypeFfiMessage: FfiConverterRustBuffer<List<Ff
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeFfiOutgoingJobSummary: FfiConverterRustBuffer<List<FfiOutgoingJobSummary>> {
+    override fun read(buf: ByteBuffer): List<FfiOutgoingJobSummary> {
+        val len = buf.getInt()
+        return List<FfiOutgoingJobSummary>(len) {
+            FfiConverterTypeFfiOutgoingJobSummary.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiOutgoingJobSummary>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiOutgoingJobSummary.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiOutgoingJobSummary>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiOutgoingJobSummary.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeTargetSub: FfiConverterRustBuffer<List<TargetSub>> {
     override fun read(buf: ByteBuffer): List<TargetSub> {
         val len = buf.getInt()
@@ -10933,5 +18884,53 @@ public object FfiConverterSequenceTypeTargetSub: FfiConverterRustBuffer<List<Tar
 }
 
 
+
+    @Throws(FfiMediaException::class) fun `mediaImageDimensions`(`width`: kotlin.UInt, `height`: kotlin.UInt, `attempt`: kotlin.UInt): FfiMediaDimensions {
+            return FfiConverterTypeFfiMediaDimensions.lift(
+    uniffiRustCallWithError(FfiMediaException) { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_func_media_image_dimensions(
+
+
+        FfiConverterUInt.lower(`width`),
+        FfiConverterUInt.lower(`height`),
+        FfiConverterUInt.lower(`attempt`),_status)
+}
+    )
+    }
+
+
+    @Throws(FfiMediaException::class) fun `mediaVideoDimensions`(`width`: kotlin.UInt, `height`: kotlin.UInt): FfiMediaDimensions {
+            return FfiConverterTypeFfiMediaDimensions.lift(
+    uniffiRustCallWithError(FfiMediaException) { _status ->
+    UniffiLib.uniffi_tinkle_ffi_fn_func_media_video_dimensions(
+
+
+        FfiConverterUInt.lower(`width`),
+        FfiConverterUInt.lower(`height`),_status)
+}
+    )
+    }
+
+
+        /**
+         * LOCAL only; does not upload, create thumbnails for publication, or persist a send intent.
+         */
+    @Throws(FfiMediaException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+     suspend fun `prepareNativeMedia`(`path`: kotlin.String, `kind`: FfiNativeMediaKind, `preparer`: FfiPlatformMediaPreparer) : FfiPreparedNativeMedia {
+        return uniffiRustCallAsync(
+        UniffiLib.uniffi_tinkle_ffi_fn_func_prepare_native_media(
+        FfiConverterString.lower(`path`),
+        FfiConverterTypeFfiNativeMediaKind.lower(`kind`),
+        FfiConverterTypeFfiPlatformMediaPreparer.lower(`preparer`),),
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_u64(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_u64(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_u64(future) },
+        // lift function
+        { FfiConverterTypeFfiPreparedNativeMedia.lift(it) },
+        // Error FFI converter
+        FfiMediaException.ErrorHandler,
+    )
+    }
 
 

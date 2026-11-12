@@ -811,6 +811,20 @@ impl PushManager {
             // Capture the client reconcile epoch before the fetch: data
             // read before a logout must not commit after its epoch bump.
             let run_epoch = self.client.reconcile_epoch();
+            let cache_fence = match tokio::time::timeout_at(
+                deadline,
+                self.client.capture_message_scope(&wanted, &target_key),
+            )
+            .await
+            {
+                Ok(Ok(fence)) => fence,
+                _ => {
+                    release(&storage, &wanted, &job_id, &owner).await;
+                    return PushOutcome::Deferred {
+                        reason: "cache_scope".into(),
+                    };
+                }
+            };
             let fetch_fut = self.client.get_messages(target, ids);
             match tokio::time::timeout_at(deadline, fetch_fut).await {
                 Ok(Ok(resp)) => {
@@ -882,7 +896,7 @@ impl PushManager {
                 let empty = std::collections::HashSet::new();
                 match self
                     .client
-                    .ingest_messages(
+                    .ingest_messages_fenced(
                         &wanted,
                         &target_key,
                         crate::client::IngestBatch {
@@ -892,11 +906,19 @@ impl PushManager {
                             exclude: &empty,
                         },
                         run_epoch,
+                        &cache_fence,
                     )
                     .await
                 {
                     Ok(_) => {}
                     Err(e) => {
+                        // The shared ingest preserves invalid input as a typed codec failure.
+                        if matches!(e, TinkleError::Codec(_)) {
+                            complete(&storage, &wanted, &job_id, "failed").await;
+                            return PushOutcome::Failed {
+                                reason: format!("invalid:{e}"),
+                            };
+                        }
                         let msg = e.to_string();
                         if msg.contains("GenerationMismatch")
                             || msg.contains("generation")
@@ -908,13 +930,7 @@ impl PushManager {
                                 reason: "account_mismatch".into(),
                             };
                         }
-                        // Storage write failure: retryable unless input.
-                        if msg.contains("InvalidInput") || msg.contains("invalid input") {
-                            complete(&storage, &wanted, &job_id, "failed").await;
-                            return PushOutcome::Failed {
-                                reason: format!("invalid:{e}"),
-                            };
-                        }
+                        // Other storage write failures remain retryable.
                         release(&storage, &wanted, &job_id, &owner).await;
                         return PushOutcome::Deferred {
                             reason: format!("transient:{e}"),
