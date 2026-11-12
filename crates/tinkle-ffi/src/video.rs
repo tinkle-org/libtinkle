@@ -226,6 +226,27 @@ pub async fn prepare_native_media(
     Ok(Arc::new(FfiPreparedNativeMedia { inner }))
 }
 
+/// Local preparation in an existing absolute host-owned private writable directory.
+/// Keep the directory available through native teardown and release of the returned artifact.
+/// Use Android Context.cacheDir rather than the process-wide system temporary directory.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn prepare_native_media_in(
+    path: String,
+    scratch_root: String,
+    kind: FfiNativeMediaKind,
+    preparer: Arc<dyn FfiPlatformMediaPreparer>,
+) -> Result<Arc<FfiPreparedNativeMedia>, FfiMediaError> {
+    let inner = m::prepare_native_media_in(
+        std::path::Path::new(&path),
+        std::path::Path::new(&scratch_root),
+        kind.into(),
+        Arc::new(NativeMediaPreparerAdapter(preparer, kind)),
+        None,
+    )
+    .await?;
+    Ok(Arc::new(FfiPreparedNativeMedia { inner }))
+}
+
 /// The fixed limits of this invocation, not a host-selected expansion of SDK budgets.
 #[derive(Debug, Clone, Copy, uniffi::Record)]
 pub struct FfiVideoDecodeLimits {
@@ -438,6 +459,47 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
         }
+    }
+
+    /// The exported root reaches the callback lease; failures remain typed and clean scratch.
+    #[tokio::test]
+    async fn bridge_explicit_scratch_root_and_error_cleanup() {
+        let _preparation = PREPARATIONS.lock().await;
+        let source = Source::new();
+        let root = source.0.with_extension("scratch");
+        std::fs::create_dir(&root).unwrap();
+        struct Host(std::path::PathBuf);
+        #[async_trait::async_trait]
+        impl FfiPlatformMediaPreparer for Host {
+            async fn prepare(
+                &self,
+                input: Arc<FfiNativeMediaInput>,
+            ) -> Result<FfiNativeMediaOutput, FfiMediaError> {
+                assert_eq!(
+                    std::path::Path::new(&input.source_path()).parent(),
+                    Some(self.0.as_path())
+                );
+                assert_eq!(
+                    std::path::Path::new(&input.output_path())
+                        .parent()
+                        .unwrap()
+                        .parent(),
+                    Some(self.0.as_path())
+                );
+                Err(FfiMediaError::Unsupported)
+            }
+        }
+        let result = prepare_native_media_in(
+            source.0.to_string_lossy().into_owned(),
+            root.to_string_lossy().into_owned(),
+            FfiNativeMediaKind::Video,
+            Arc::new(Host(root.clone())),
+        )
+        .await;
+        assert!(matches!(result, Err(FfiMediaError::Unsupported)));
+        assert!(source.0.is_file());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        std::fs::remove_dir(root).unwrap();
     }
 
     struct Decoder {

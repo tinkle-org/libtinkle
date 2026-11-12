@@ -28,27 +28,33 @@ import kotlinx.coroutines.*
 public object MediaSmokeChecks {
     @JvmStatic public fun pcmVoiceAndImportedAudio(context: Context): Unit = runBlocking {
         TinkleSdk.initialize()
-        val source = File.createTempFile("voice-", ".pcm", context.cacheDir)
-        try {
-            source.outputStream().use { output ->
-                val block = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN)
-                for (i in 0 until 19200) {
-                    if (block.remaining() < 2) { output.write(block.array(), 0, block.position()); block.clear() }
-                    block.putShort((sin(i * 2.0 * PI * 440 / 48000) * 16000).toInt().toShort())
+        for ((rate, channels, samples) in listOf(Triple(48000, 1, 19200), Triple(44100, 2, 17777), Triple(48000, 1, 20480))) {
+            val source = File.createTempFile("voice-", ".pcm", context.cacheDir)
+            try {
+                source.outputStream().use { output ->
+                    val block = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN)
+                    for (i in 0 until samples) {
+                        if (block.remaining() < channels * 2) { output.write(block.array(), 0, block.position()); block.clear() }
+                        repeat(channels) { block.putShort((sin(i * 2.0 * PI * 440 / rate) * 16000).toInt().toShort()) }
+                    }
+                    output.write(block.array(), 0, block.position())
                 }
-                output.write(block.array(), 0, block.position())
-            }
-            prepareNativeMedia(source.path, FfiNativeMediaKind.Voice(48000u, 1u, 16u), AndroidMediaPreparer()).use { voice ->
-                check(voice.mimeType() == "audio/mp4" && voice.facts().audioSamples == 19200uL)
-                check(voice.facts().width == 0u && voice.facts().height == 0u && voice.facts().audioChannels == 1.toUByte())
-                check(voice.waveform().size == 100 && voice.sourceSha256().size == 32)
-                requireAacOnly(File(voice.path()))
-                prepareNativeMedia(voice.path(), FfiNativeMediaKind.Audio, AndroidMediaPreparer()).use { audio ->
-                    check(audio.waveform().isEmpty() && audio.facts().audioChannels == 1.toUByte())
-                    requireAacOnly(File(audio.path()))
+                prepareNativeMedia(source.path, FfiNativeMediaKind.Voice(rate.toUInt(), channels.toUByte(), 16u), AndroidMediaPreparer()).use { voice ->
+                    check(voice.mimeType() == "audio/mp4" && voice.facts().audioSamples == samples.toULong())
+                    check(voice.facts().width == 0u && voice.facts().height == 0u && voice.facts().audioChannels == channels.toUByte())
+                    check(voice.facts().audioSampleRate == rate.toUInt())
+                    check(voice.waveform().size == 100 && voice.sourceSha256().size == 32)
+                    val units = requireAacOnly(File(voice.path()))
+                    prepareNativeMedia(voice.path(), FfiNativeMediaKind.Audio, AndroidMediaPreparer()).use { audio ->
+                        check(audio.waveform().isEmpty() && audio.facts().audioChannels == channels.toUByte())
+                        check(audio.facts().audioSampleRate == rate.toUInt())
+                        // No gapless trim metadata was written: import must consume every padded AU.
+                        check(audio.facts().audioSamples == units.toULong() * 1024uL)
+                        requireAacOnly(File(audio.path()))
+                    }
                 }
-            }
-        } finally { source.delete() }
+            } finally { source.delete() }
+        }
     }
 
     @JvmStatic public fun alphaPngAndOrientedJpeg(context: Context): Unit = runBlocking {
@@ -120,7 +126,7 @@ public object MediaSmokeChecks {
     }
 
     /** Independently inspect the encoded track/profile instead of trusting returned MIME metadata. */
-    private fun requireAacOnly(file: File) {
+    private fun requireAacOnly(file: File): Long {
         val extractor = MediaExtractor()
         try {
             extractor.setDataSource(file.path)
@@ -129,6 +135,21 @@ public object MediaSmokeChecks {
             check(format.getString(MediaFormat.KEY_MIME) == "audio/mp4a-latm")
             val config = checkNotNull(format.getByteBuffer("csd-0"))
             check(config.remaining() >= 2 && (config.get(config.position()).toInt() and 255) ushr 3 == 2)
+            check(config.get(config.position() + 1).toInt() and 4 == 0)
+            val rate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            extractor.selectTrack(0)
+            var units = 0L
+            while (extractor.sampleTime >= 0) {
+                // Inspect actual muxed timing, including all delayed/padded access units at EOS.
+                val expected = units * 1024 * 1_000_000L / rate
+                check(kotlin.math.abs(extractor.sampleTime - expected) < 100) {
+                    "AAC access unit $units: pts=${extractor.sampleTime}, expected=$expected"
+                }
+                units++
+                extractor.advance()
+            }
+            check(units > 0)
+            return units
         } finally { extractor.release() }
     }
 }
@@ -375,7 +396,7 @@ public object VideoSmokeChecks {
     /** Assert the Rust sending error preserves the callback's typed media variant. */
     private suspend inline fun <reified E : FfiMediaException> expectMedia(block: () -> Unit) {
         try { block(); error("Expected typed media failure") }
-        catch (error: FfiSendException.Media) { check(error.error is E) }
+        catch (error: FfiSendException.Media) { check(error.error is E) { "Expected ${E::class.java.simpleName}, got ${error.error}" } }
     }
 
     /** Local lease is a platform test double, never used as evidence of native callback behavior. */

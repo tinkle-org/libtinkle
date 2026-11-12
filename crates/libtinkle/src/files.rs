@@ -697,14 +697,18 @@ struct FrozenSource {
 }
 #[cfg(not(target_arch = "wasm32"))]
 impl FrozenSource {
-    fn capture(path: &std::path::Path, token: &crate::CancelToken) -> Result<Self, TinkleError> {
+    fn capture(
+        path: &std::path::Path,
+        scratch_root: &std::path::Path,
+        token: &crate::CancelToken,
+    ) -> Result<Self, TinkleError> {
         use std::io::{Read, Seek, Write};
         let mut input = std::fs::File::open(path).map_err(io_error)?;
         let before = input.metadata().map_err(io_error)?;
         if !before.is_file() {
             return Err(transfer_error("source must be a regular file"));
         }
-        let mut snapshot = tempfile::NamedTempFile::new().map_err(io_error)?;
+        let mut snapshot = tempfile::NamedTempFile::new_in(scratch_root).map_err(io_error)?;
         let mut hash = Sha256::new();
         let mut buffer = [0u8; 65536];
         let mut size = 0u64;
@@ -1400,16 +1404,21 @@ impl UploadManager {
             .map_err(|_| transfer_error("transfer admission full"))?;
         check_cancel(cancel.as_ref())?;
         let scope = TransferScope::capture(&self.client).await?;
-        if scope.client.sqlite_storage().is_none() {
-            return Err(transfer_error(
-                "managed upload requires SQLite intent storage",
-            ));
-        }
+        let storage = scope
+            .client
+            .sqlite_storage()
+            .ok_or_else(|| transfer_error("managed upload requires SQLite intent storage"))?;
         let stopped = cancel.unwrap_or_default();
         let _cancel_on_drop = CancelOnDrop(crate::CancelToken::new());
         let token = _cancel_on_drop.0.clone();
         let input = path.to_path_buf();
-        let source = disk(move || FrozenSource::capture(&input, &token)).await?;
+        let source = disk(move || {
+            let root = storage
+                .temporary_directory()
+                .map_err(|_| transfer_error("scratch directory unavailable"))?;
+            FrozenSource::capture(&input, &root, &token)
+        })
+        .await?;
         scope.check()?;
         let size = i64::try_from(source.size).map_err(|_| transfer_error("source too large"))?;
         let begin = BeginUploadRequest {
@@ -1618,9 +1627,16 @@ impl UploadManager {
         if data.len() > MAX_CONVENIENCE_BYTES {
             return Err(transfer_error("byte upload exceeds convenience limit"));
         }
+        let storage = self.client.sqlite_storage();
         let temp = disk(move || {
             use std::io::Write;
-            let mut temp = tempfile::NamedTempFile::new().map_err(io_error)?;
+            let root = match storage {
+                Some(storage) => storage
+                    .temporary_directory()
+                    .map_err(|_| transfer_error("scratch directory unavailable"))?,
+                None => std::env::temp_dir(),
+            };
+            let mut temp = tempfile::NamedTempFile::new_in(root).map_err(io_error)?;
             temp.write_all(&data).map_err(io_error)?;
             Ok(temp)
         })
@@ -3547,6 +3563,30 @@ mod tests {
         assert_eq!(dec.upload_id, "upl-1");
         assert_eq!(dec.received, received);
         assert!(dec.begin_has_sha);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn upload_snapshot_uses_storage_root_not_source_parent_and_retains_lease() {
+        let imports = tempfile::tempdir().unwrap();
+        let source = imports.path().join("source.bin");
+        std::fs::write(&source, b"original").unwrap();
+        let private = tempfile::tempdir().unwrap();
+        let storage =
+            tinkle_storage::Storage::open(private.path().join("cache.sqlite").to_str().unwrap())
+                .unwrap();
+        let root = storage.temporary_directory().unwrap();
+        let snapshot = FrozenSource::capture(&source, &root, &crate::CancelToken::new()).unwrap();
+        let path = snapshot.file.path().to_path_buf();
+        assert_eq!(path.parent(), Some(root.as_path()));
+        std::fs::write(&source, b"modified").unwrap();
+        assert_eq!(snapshot.read_part(0, 8).unwrap(), b"original");
+        let retained = snapshot.clone();
+        drop(snapshot);
+        assert!(path.exists());
+        drop(retained);
+        assert!(!path.exists());
+        assert_eq!(std::fs::read_dir(imports.path()).unwrap().count(), 1);
     }
 
     #[test]

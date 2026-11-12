@@ -1661,6 +1661,11 @@ RustBuffer uniffi_tinkle_ffi_fn_func_media_video_dimensions(uint32_t width, uint
 uint64_t uniffi_tinkle_ffi_fn_func_prepare_native_media(RustBuffer path, RustBuffer kind, uint64_t preparer
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_TINKLE_FFI_FN_FUNC_PREPARE_NATIVE_MEDIA_IN
+#define UNIFFI_FFIDEF_UNIFFI_TINKLE_FFI_FN_FUNC_PREPARE_NATIVE_MEDIA_IN
+uint64_t uniffi_tinkle_ffi_fn_func_prepare_native_media_in(RustBuffer path, RustBuffer scratch_root, RustBuffer kind, uint64_t preparer
+);
+#endif
 #ifndef UNIFFI_FFIDEF_FFI_TINKLE_FFI_RUSTBUFFER_ALLOC
 #define UNIFFI_FFIDEF_FFI_TINKLE_FFI_RUSTBUFFER_ALLOC
 RustBuffer ffi_tinkle_ffi_rustbuffer_alloc(uint64_t size, RustCallStatus *_Nonnull out_status
@@ -1960,6 +1965,12 @@ uint16_t uniffi_tinkle_ffi_checksum_func_media_video_dimensions(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_TINKLE_FFI_CHECKSUM_FUNC_PREPARE_NATIVE_MEDIA
 #define UNIFFI_FFIDEF_UNIFFI_TINKLE_FFI_CHECKSUM_FUNC_PREPARE_NATIVE_MEDIA
 uint16_t uniffi_tinkle_ffi_checksum_func_prepare_native_media(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_TINKLE_FFI_CHECKSUM_FUNC_PREPARE_NATIVE_MEDIA_IN
+#define UNIFFI_FFIDEF_UNIFFI_TINKLE_FFI_CHECKSUM_FUNC_PREPARE_NATIVE_MEDIA_IN
+uint16_t uniffi_tinkle_ffi_checksum_func_prepare_native_media_in(void
 
 );
 #endif

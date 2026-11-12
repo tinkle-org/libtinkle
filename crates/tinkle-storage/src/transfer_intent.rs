@@ -148,6 +148,20 @@ fn read(
 }
 
 impl Storage {
+    /// Scratch files live beside the host-configured database, outside principal artifact cleanup.
+    /// The host must provision a private writable database directory. In-memory storage retains
+    /// the system temporary-directory behavior; this does not derive paths from imported media.
+    pub fn temporary_directory(&self) -> Result<std::path::PathBuf, StorageError> {
+        let conn = self.lock()?;
+        match conn.path().filter(|p| !p.is_empty()) {
+            Some(path) => std::path::absolute(path)
+                .ok()
+                .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+                .ok_or_else(|| StorageError::Unavailable("scratch directory unavailable".into())),
+            None => Ok(std::env::temp_dir()),
+        }
+    }
+
     /// SDK-owned artifact directory for one principal. Names derive only from the database
     /// identity and validated principal; callers must never store authorization material here.
     pub fn preparation_directory(
@@ -363,6 +377,24 @@ mod tests {
             resume_offset: 0,
             updated_at: 1,
         }
+    }
+
+    #[test]
+    fn scratch_uses_database_parent_and_memory_keeps_system_default() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache.sqlite");
+        let storage = Storage::open(path.to_str().unwrap()).unwrap();
+        assert_eq!(
+            storage.temporary_directory().unwrap(),
+            directory.path().canonicalize().unwrap()
+        );
+        assert_eq!(
+            Storage::open_in_memory()
+                .unwrap()
+                .temporary_directory()
+                .unwrap(),
+            std::env::temp_dir()
+        );
     }
 
     /// Both independent connections observe absence, then race the actual DB claim.

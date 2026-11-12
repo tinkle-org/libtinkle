@@ -13783,6 +13783,25 @@ public func prepareNativeMedia(path: String, kind: FfiNativeMediaKind, preparer:
             errorHandler: FfiConverterTypeFfiMediaError_lift
         )
 }
+/**
+ * Local preparation in an existing absolute host-owned private writable directory.
+ * Keep the directory available through native teardown and release of the returned artifact.
+ * Use Android Context.cacheDir rather than the process-wide system temporary directory.
+ */
+public func prepareNativeMediaIn(path: String, scratchRoot: String, kind: FfiNativeMediaKind, preparer: FfiPlatformMediaPreparer)async throws  -> FfiPreparedNativeMedia  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_func_prepare_native_media_in(FfiConverterString.lower(path),FfiConverterString.lower(scratchRoot),FfiConverterTypeFfiNativeMediaKind_lower(kind),FfiConverterTypeFfiPlatformMediaPreparer_lower(preparer)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeFfiPreparedNativeMedia_lift,
+            errorHandler: FfiConverterTypeFfiMediaError_lift
+        )
+}
 
 private enum InitializationResult {
     case ok
@@ -13818,6 +13837,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_func_prepare_native_media() != 532) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_func_prepare_native_media_in() != 11103) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_accountstatesubscription_next() != 38373) {

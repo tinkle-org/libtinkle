@@ -301,6 +301,20 @@ commit before upload. `Sending::adopt_native_attachment` and the FFI
 encoding again. Durable artifacts use container-appropriate suffixes for native readers.
 Platform codec qualification is separate from durable artifact recovery tests.
 
+Native preparation and upload scratch files use the private writable parent of the
+host-configured SQLite database, outside principal artifact cleanup. In-memory
+storage retains the system temporary-directory default. Standalone
+`prepare_native_media` also retains that default; hosts without a usable system
+temporary directory (including Android below API 33) use
+`prepare_native_media_in` / UniFFI `prepareNativeMediaIn(path, scratchRoot, kind,
+preparer)` with an existing absolute private writable root such as Android
+`Context.cacheDir`. Sources may be read-only imports; their parents never select
+scratch destinations. The host must keep this root stable and available through
+native teardown and release of the returned artifact. Files retain their existing
+owned leases; each native destination is in a fresh owner-only directory, and the
+final snapshot is separate from that callback destination. No process-wide
+`TMPDIR` is set, and an unusable explicit root is an error, not a fallback.
+
 `Users::get_users` and `get_user_complete` provide typed profile reads without implicit
 unversioned cache replacement. `Messages::delete_history` requires a caller-persisted
 nonzero UUID and exact selection parameters. It never silently generates an operation

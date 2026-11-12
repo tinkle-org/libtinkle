@@ -201,6 +201,135 @@ impl media::PlatformMediaPreparer for NativePngPreparer {
     }
 }
 
+/// Imported files need only read access; scratch is explicit, invocation-local and never a
+/// predictable destination in either the source directory or the root itself.
+#[cfg(unix)]
+#[tokio::test]
+async fn native_explicit_scratch_root_isolated_from_readonly_source_and_poisoned_names() {
+    use std::{
+        os::unix::fs::{symlink, PermissionsExt},
+        sync::Arc,
+    };
+    let _test = MEDIA_TESTS.lock().await;
+    let imports = tempfile::tempdir().unwrap();
+    let source = imports.path().join("import.png");
+    std::fs::write(&source, b"read-only import").unwrap();
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o400)).unwrap();
+    std::fs::set_permissions(imports.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let victim = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(victim.path(), b"do not truncate").unwrap();
+    let poisoned = scratch.path().join("main.mp4");
+    symlink(victim.path(), &poisoned).unwrap();
+
+    struct PrivateRoot(std::path::PathBuf);
+    #[async_trait::async_trait]
+    impl media::PlatformMediaPreparer for PrivateRoot {
+        async fn prepare(
+            &self,
+            input: Arc<media::NativeMediaInput>,
+        ) -> Result<media::NativeMediaOutput, media::MediaError> {
+            assert_eq!(input.source_path().parent(), Some(self.0.as_path()));
+            let output = input.output_path();
+            let directory = output.parent().unwrap();
+            assert_eq!(directory.parent(), Some(self.0.as_path()));
+            assert_ne!(directory, self.0);
+            assert!(!output.exists());
+            assert_eq!(
+                directory.metadata().unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert_eq!(
+                input.source_path().metadata().unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            NativePngPreparer {
+                mutate_source: false,
+                quota: false,
+            }
+            .prepare(input)
+            .await
+        }
+    }
+    let preparer = Arc::new(PrivateRoot(scratch.path().to_path_buf()));
+    let first = media::prepare_native_media_in(
+        &source,
+        scratch.path(),
+        media::NativeMediaKind::Image,
+        preparer.clone(),
+        None,
+    )
+    .await
+    .unwrap();
+    let second = media::prepare_native_media_in(
+        &source,
+        scratch.path(),
+        media::NativeMediaKind::Image,
+        preparer,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.main.path().parent(), Some(scratch.path()));
+    assert_ne!(first.main.path(), second.main.path());
+    assert_eq!(
+        first.main.source_sha256,
+        libtinkle::sha256(b"read-only import")
+    );
+    let artifact_path = first.main.path().to_path_buf();
+    let retained = first.clone();
+    drop(first);
+    assert!(artifact_path.is_file());
+    drop(retained);
+    drop(second);
+    assert!(!artifact_path.exists());
+    assert_eq!(std::fs::read(victim.path()).unwrap(), b"do not truncate");
+    assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 1);
+    assert_eq!(std::fs::read(&source).unwrap(), b"read-only import");
+    assert_eq!(std::fs::read_dir(imports.path()).unwrap().count(), 1);
+    std::fs::set_permissions(imports.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[tokio::test]
+async fn native_explicit_scratch_root_errors_never_fall_back_to_source_or_system_temp() {
+    let _test = MEDIA_TESTS.lock().await;
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source");
+    std::fs::write(&source, b"source").unwrap();
+    let host = || {
+        std::sync::Arc::new(NativePngPreparer {
+            mutate_source: true,
+            quota: true,
+        })
+    };
+    assert!(matches!(
+        media::prepare_native_media_in(
+            &source,
+            std::path::Path::new("relative"),
+            media::NativeMediaKind::Image,
+            host(),
+            None
+        )
+        .await,
+        Err(media::MediaError::Invalid)
+    ));
+    for root in [directory.path().join("missing"), source.clone()] {
+        assert!(matches!(
+            media::prepare_native_media_in(
+                &source,
+                &root,
+                media::NativeMediaKind::Image,
+                host(),
+                None
+            )
+            .await,
+            Err(media::MediaError::Io)
+        ));
+    }
+    assert_eq!(std::fs::read(&source).unwrap(), b"source");
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+}
+
 #[tokio::test]
 async fn native_owned_artifact_source_precedes_output_quota_and_precancel() {
     let _test = MEDIA_TESTS.lock().await;
@@ -299,11 +428,20 @@ async fn native_cancel_has_bounded_join_and_retains_unjoined_lease() {
     let source = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(source.path(), b"frozen source").unwrap();
     let path = source.path().to_owned();
+    let scratch = tempfile::tempdir().unwrap();
+    let scratch_path = scratch.path().to_path_buf();
     let cancel = libtinkle::CancelToken::new();
     let h = host.clone();
     let token = cancel.clone();
     let work = tokio::spawn(async move {
-        media::prepare_native_media(&path, media::NativeMediaKind::Video, h, Some(token)).await
+        media::prepare_native_media_in(
+            &path,
+            &scratch_path,
+            media::NativeMediaKind::Video,
+            h,
+            Some(token),
+        )
+        .await
     });
     host.entered.notified().await;
     cancel.cancel();
@@ -316,8 +454,12 @@ async fn native_cancel_has_bounded_join_and_retains_unjoined_lease() {
     ));
     let lease = host.lease.lock().unwrap().take().unwrap();
     let frozen = lease.source_path().to_owned();
+    let destination = lease.output_path();
+    assert_eq!(frozen.parent(), Some(scratch.path()));
+    assert_eq!(destination.parent().unwrap().parent(), Some(scratch.path()));
     let joined = std::sync::Arc::downgrade(&lease);
     assert!(lease.is_cancelled() && frozen.is_file());
+    assert!(destination.parent().unwrap().is_dir());
     host.release.notify_one();
     drop(lease);
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
@@ -328,6 +470,8 @@ async fn native_cancel_has_bounded_join_and_retains_unjoined_lease() {
     .await
     .expect("native worker must release its entire admission lease before the next test");
     assert!(!frozen.exists());
+    assert!(!destination.parent().unwrap().exists());
+    assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 0);
 }
 
 /// Animation markers inside metadata are not RIFF chunk tags or animation evidence.
@@ -576,8 +720,10 @@ async fn animated_gif_is_never_flattened() {
     assert_eq!(facts.loop_count, Some(4));
     let source = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(source.path(), &gif).unwrap();
-    let prepared = media::prepare_native_media(
+    let scratch = tempfile::tempdir().unwrap();
+    let prepared = media::prepare_native_media_in(
         source.path(),
+        scratch.path(),
         media::NativeMediaKind::Image,
         std::sync::Arc::new(NativePngPreparer {
             mutate_source: true,
@@ -591,7 +737,10 @@ async fn animated_gif_is_never_flattened() {
     assert_eq!(prepared.output.frame_count, 2);
     assert_eq!(prepared.output.duration_ms, 200);
     assert_eq!(prepared.main.source_sha256, libtinkle::sha256(&gif));
-    assert!(prepared.main.main_facts.unwrap().animated);
+    assert!(prepared.main.main_facts.as_ref().unwrap().animated);
+    assert_eq!(prepared.main.path().parent(), Some(scratch.path()));
+    drop(prepared);
+    assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 0);
 }
 
 /// Larger GIF fixtures normalize only after independent composited-frame verification.

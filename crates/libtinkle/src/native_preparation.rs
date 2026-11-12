@@ -164,6 +164,32 @@ pub async fn prepare_native_media(
     preparer: Arc<dyn PlatformMediaPreparer>,
     cancel: Option<syntra_runtime::CancelToken>,
 ) -> Result<NativePreparedMedia, MediaError> {
+    prepare_native_media_inner(path, kind, preparer, cancel, std::env::temp_dir()).await
+}
+
+/// Prepare using an existing host-owned private writable directory (e.g. Android cacheDir).
+/// The root must be absolute and remain available through actual native completion and release
+/// of the returned artifact. No source parent, global TMPDIR, or fallback root is used.
+pub async fn prepare_native_media_in(
+    path: &Path,
+    scratch_root: &Path,
+    kind: NativeMediaKind,
+    preparer: Arc<dyn PlatformMediaPreparer>,
+    cancel: Option<syntra_runtime::CancelToken>,
+) -> Result<NativePreparedMedia, MediaError> {
+    if !scratch_root.is_absolute() {
+        return Err(MediaError::Invalid);
+    }
+    prepare_native_media_inner(path, kind, preparer, cancel, scratch_root.to_path_buf()).await
+}
+
+async fn prepare_native_media_inner(
+    path: &Path,
+    kind: NativeMediaKind,
+    preparer: Arc<dyn PlatformMediaPreparer>,
+    cancel: Option<syntra_runtime::CancelToken>,
+    scratch_root: std::path::PathBuf,
+) -> Result<NativePreparedMedia, MediaError> {
     let token = cancel.unwrap_or_default();
     let _guard = CancelOnDrop(token.clone());
     if token.is_cancelled() {
@@ -181,13 +207,10 @@ pub async fn prepare_native_media(
         .try_acquire()
         .map_err(|_| MediaError::Busy)?;
     let limits = NativePreparationLimits::default();
-    let prepared = prepare_path_with_policy(
-        path,
-        MediaKind::Document,
-        Some(token.clone()),
-        SnapshotPolicy::new(Some(limits.max_input_bytes)),
-    )
-    .await?;
+    let mut policy = SnapshotPolicy::new(Some(limits.max_input_bytes));
+    policy.scratch_root = scratch_root.clone();
+    let prepared =
+        prepare_path_with_policy(path, MediaKind::Document, Some(token.clone()), policy).await?;
     if token.is_cancelled() {
         return Err(MediaError::Cancelled);
     }
@@ -206,13 +229,30 @@ pub async fn prepare_native_media(
             return Err(MediaError::Budget);
         }
     }
+    let (directory, permit) = tokio::task::spawn_blocking(move || {
+        // The worker keeps admission even if its waiter is dropped during directory I/O.
+        let permit = permit;
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("tinkle-media-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        let directory = builder
+            .tempdir_in(scratch_root)
+            .map_err(|_| MediaError::Io)?;
+        Ok::<_, MediaError>((directory, permit))
+    })
+    .await
+    .map_err(|_| MediaError::Codec)??;
     let input = Arc::new(NativeMediaInput {
         source: prepared.output,
         source_sha256: prepared.source_sha256,
         size_bytes,
         kind,
         limits,
-        directory: tempfile::tempdir().map_err(|_| MediaError::Io)?,
+        directory,
         _permit: permit,
         cancel: token.clone(),
     });
@@ -273,13 +313,16 @@ pub async fn prepare_native_media(
         if meta.len() == 0 || meta.len() > ceiling {
             return Err(MediaError::Budget);
         }
-        let mut main = prepare_path_with_policy(
-            &path,
-            MediaKind::Document,
-            Some(token.clone()),
-            SnapshotPolicy::new(Some(ceiling)),
-        )
-        .await?;
+        let mut policy = SnapshotPolicy::new(Some(ceiling));
+        // The random snapshot must outlive the callback directory, separate from its destination.
+        policy.scratch_root = input
+            .source_path()
+            .parent()
+            .ok_or(MediaError::Io)?
+            .to_path_buf();
+        let mut main =
+            prepare_path_with_policy(&path, MediaKind::Document, Some(token.clone()), policy)
+                .await?;
         let artifact = main.output.clone();
         let measured = facts.clone();
         let image_facts = tokio::task::spawn_blocking(move || {
@@ -406,7 +449,9 @@ fn prepare_shared_animation(
         audio_samples: 0,
         waveform: Vec::new(),
     };
-    let mut file = tempfile::NamedTempFile::new().map_err(|_| MediaError::Io)?;
+    let mut file =
+        tempfile::NamedTempFile::new_in(input.source_path().parent().ok_or(MediaError::Io)?)
+            .map_err(|_| MediaError::Io)?;
     file.write_all(&result.bytes).map_err(|_| MediaError::Io)?;
     file.as_file().sync_all().map_err(|_| MediaError::Io)?;
     if input.is_cancelled() {

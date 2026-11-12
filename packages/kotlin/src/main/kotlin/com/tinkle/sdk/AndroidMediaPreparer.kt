@@ -318,6 +318,8 @@ public class AndroidMediaPreparer : FfiPlatformMediaPreparer {
         private var track = -1
         private var eos = false
         private var written = 0uL
+        private val aacRate = if (format.getString(MediaFormat.KEY_MIME) == "audio/mp4a-latm") format.getInteger(MediaFormat.KEY_SAMPLE_RATE) else null
+        private var aacAccessUnits = 0L
         init {
             try {
                 codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
@@ -338,6 +340,12 @@ public class AndroidMediaPreparer : FfiPlatformMediaPreparer {
                     if (muxStarted) throw FfiMediaException.Codec()
                     val output = codec.outputFormat
                     if (output.getString(MediaFormat.KEY_MIME) == "video/avc") AndroidVideoPolicy.requireAvc8(output)
+                    if (aacRate != null) {
+                        val config = output.getByteBuffer("csd-0") ?: throw FfiMediaException.Codec()
+                        // The sample clock requires AAC-LC with a 1024-sample (not 960) frame.
+                        if (config.remaining() < 2 || (config.get(config.position()).toInt() and 255) ushr 3 != 2 ||
+                            config.get(config.position() + 1).toInt() and 4 != 0) throw FfiMediaException.Codec()
+                    }
                     track = muxer!!.addTrack(output); muxer!!.start(); muxStarted = true
                 } else if (slot >= 0) withVideoCleanup({ codec.releaseOutputBuffer(slot, false) }) {
                     if (info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
@@ -346,6 +354,9 @@ public class AndroidMediaPreparer : FfiPlatformMediaPreparer {
                         if (written + 1024uL * 1024uL > maximum || file.length().toULong() > maximum) throw FfiMediaException.Budget()
                         val data = codec.getOutputBuffer(slot) ?: throw FfiMediaException.Codec()
                         data.position(info.offset); data.limit(info.offset + info.size)
+                        // AAC-LC access units contain 1024 samples, including priming/padding. Codec2
+                        // can timestamp the flush batch from the partial PCM tail's end, leaving a gap.
+                        aacRate?.let { info.presentationTimeUs = aacLcTimestampUs(aacAccessUnits++, it) }
                         muxer!!.writeSampleData(track, data, info)
                     }
                     eos = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
@@ -428,3 +439,6 @@ public class AndroidMediaPreparer : FfiPlatformMediaPreparer {
         val quarantine: MutableSet<FfiNativeMediaInput> = ConcurrentHashMap.newKeySet()
     }
 }
+
+/** Sample clock for this adapter's AAC-LC encoder, not a repair of imported source timestamps. */
+internal fun aacLcTimestampUs(accessUnit: Long, sampleRate: Int): Long = accessUnit * 1024 * 1_000_000L / sampleRate

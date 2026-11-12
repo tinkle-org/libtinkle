@@ -111,6 +111,26 @@ class AndroidVideoPolicyTest {
         assertEquals("release failure", thrown.suppressed.single().suppressed.single().message)
     }
 
+    @Test fun partialPcmTailDoesNotChangeAacAccessUnitDuration() {
+        // The installed smoke feeds 19,200 PCM samples: 18 whole blocks and a 768-sample tail.
+        // AAC flush still emits whole 1024-sample access units, not 768-sample access units.
+        val timestamps = (0L..20L).map { aacLcTimestampUs(it, 48000) }
+        assertEquals(0L, timestamps.first())
+        assertEquals(384000L, timestamps[18])
+        assertEquals(405333L, timestamps[19])
+        assertEquals(426666L, timestamps[20])
+        assertTrue(timestamps.zipWithNext().all { (a, b) -> b - a in 21333L..21334L })
+    }
+
+    @Test fun aacClockDoesNotAccumulateRoundingDrift() {
+        for (rate in listOf(8000, 11025, 16000, 22050, 32000, 44100, 48000)) {
+            for (unit in listOf(0L, 1L, 19L, 20L, 100_000L)) {
+                val timestamp = aacLcTimestampUs(unit, rate)
+                assertTrue(unit * 1024 * 1_000_000L - timestamp * rate in 0L until rate.toLong())
+            }
+        }
+    }
+
     /** Minimal SPS prefix; full malformed bitstreams are MediaCodec's responsibility. */
     private fun sps(profile: Int, fields: Int) = byteArrayOf(0, 0, 0, 1, 0x67, profile.toByte(), 0, 30, fields.toByte())
 }

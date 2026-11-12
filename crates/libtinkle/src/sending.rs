@@ -779,7 +779,9 @@ impl<'a> Sending<'a> {
             cancel_on_drop.0 = None;
             return Ok(result);
         }
-        let prepared = crate::media::prepare_path(path, kind, Some(cancel.clone())).await?;
+        let scratch_root = scope.store(|s, _, _| s.temporary_directory()).await?;
+        let prepared =
+            crate::media::prepare_path_in(path, &scratch_root, kind, Some(cancel.clone())).await?;
         scope.check()?;
         let media = p::media_source::Media::Document(p::DocumentSource {
             file_id: 0,
@@ -1002,10 +1004,11 @@ impl<'a> Sending<'a> {
         // A preparation stage owns its own cancellation; finishing it cannot cancel upload.
         let stage_cancel = crate::CancelToken::new();
         let stage_owner = CancelOnDrop(Some(stage_cancel.clone()));
+        let scratch_root = scope.store(|s, _, _| s.temporary_directory()).await?;
         let prepared = tokio::select! {biased;
             _=cancel.cancelled()=>return Err(SendError::Media(crate::media::MediaError::Cancelled)),
             _=self.client.authorization.revoked.cancelled()=>return Err(SendError::ScopeChanged),
-            result=crate::media::prepare_native_media(path,kind,preparer,Some(stage_cancel))=>result?,
+            result=crate::media::prepare_native_media_in(path,&scratch_root,kind,preparer,Some(stage_cancel))=>result?,
         };
         drop(stage_owner);
         scope.check()?;

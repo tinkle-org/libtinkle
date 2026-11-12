@@ -856,6 +856,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_tinkle_ffi_checksum_func_prepare_native_media(
     ): Int
+    external fun uniffi_tinkle_ffi_checksum_func_prepare_native_media_in(
+    ): Int
     external fun uniffi_tinkle_ffi_checksum_method_accountstatesubscription_next(
     ): Int
     external fun uniffi_tinkle_ffi_checksum_method_accountstatesubscription_stop(
@@ -1810,6 +1812,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_tinkle_ffi_fn_func_prepare_native_media(`path`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`preparer`: Long,
     ): Long
+    external fun uniffi_tinkle_ffi_fn_func_prepare_native_media_in(`path`: RustBuffer.ByValue,`scratchRoot`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`preparer`: Long,
+    ): Long
     external fun ffi_tinkle_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     external fun ffi_tinkle_ffi_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus,
@@ -1948,6 +1952,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_func_prepare_native_media() and 0xFFFF) != 532) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_tinkle_ffi_checksum_func_prepare_native_media_in() and 0xFFFF) != 11103) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_tinkle_ffi_checksum_method_accountstatesubscription_next() and 0xFFFF) != 38373) {
@@ -18921,6 +18928,30 @@ public object FfiConverterSequenceTypeTargetSub: FfiConverterRustBuffer<List<Tar
         return uniffiRustCallAsync(
         UniffiLib.uniffi_tinkle_ffi_fn_func_prepare_native_media(
         FfiConverterString.lower(`path`),
+        FfiConverterTypeFfiNativeMediaKind.lower(`kind`),
+        FfiConverterTypeFfiPlatformMediaPreparer.lower(`preparer`),),
+        { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_u64(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_complete_u64(future, continuation) },
+        { future -> UniffiLib.ffi_tinkle_ffi_rust_future_free_u64(future) },
+        // lift function
+        { FfiConverterTypeFfiPreparedNativeMedia.lift(it) },
+        // Error FFI converter
+        FfiMediaException.ErrorHandler,
+    )
+    }
+
+        /**
+         * Local preparation in an existing absolute host-owned private writable directory.
+         * Keep the directory available through native teardown and release of the returned artifact.
+         * Use Android Context.cacheDir rather than the process-wide system temporary directory.
+         */
+    @Throws(FfiMediaException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+     suspend fun `prepareNativeMediaIn`(`path`: kotlin.String, `scratchRoot`: kotlin.String, `kind`: FfiNativeMediaKind, `preparer`: FfiPlatformMediaPreparer) : FfiPreparedNativeMedia {
+        return uniffiRustCallAsync(
+        UniffiLib.uniffi_tinkle_ffi_fn_func_prepare_native_media_in(
+        FfiConverterString.lower(`path`),
+        FfiConverterString.lower(`scratchRoot`),
         FfiConverterTypeFfiNativeMediaKind.lower(`kind`),
         FfiConverterTypeFfiPlatformMediaPreparer.lower(`preparer`),),
         { future, callback, continuation -> UniffiLib.ffi_tinkle_ffi_rust_future_poll_u64(future, callback, continuation) },

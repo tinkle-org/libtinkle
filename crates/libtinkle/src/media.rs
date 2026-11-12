@@ -1515,11 +1515,25 @@ pub async fn prepare_path(
     prepare_path_with_policy(path, kind, cancel, SnapshotPolicy::new(None)).await
 }
 
+/// Client preparation uses its storage directory, never the imported source's parent.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) async fn prepare_path_in(
+    path: &std::path::Path,
+    scratch_root: &std::path::Path,
+    kind: MediaKind,
+    cancel: Option<syntra_runtime::CancelToken>,
+) -> Result<PreparedMediaPath, MediaError> {
+    let mut policy = SnapshotPolicy::new(None);
+    policy.scratch_root = scratch_root.to_path_buf();
+    prepare_path_with_policy(path, kind, cancel, policy).await
+}
+
 /// Internal copy policy is independent of transform intent: video can pass exact
 /// original bytes while still enforcing its own opened-file snapshot ceiling.
 #[cfg(not(target_arch = "wasm32"))]
 struct SnapshotPolicy {
     max_input_bytes: Option<u64>,
+    scratch_root: std::path::PathBuf,
     #[cfg(test)]
     audit: Option<std::sync::Arc<SnapshotAudit>>,
 }
@@ -1528,6 +1542,7 @@ impl SnapshotPolicy {
     fn new(max_input_bytes: Option<u64>) -> Self {
         Self {
             max_input_bytes,
+            scratch_root: std::env::temp_dir(),
             #[cfg(test)]
             audit: None,
         }
@@ -1599,7 +1614,8 @@ async fn prepare_path_with_policy(
         if maximum.is_some_and(|limit| before.len() > limit) {
             return Err(MediaError::Budget);
         }
-        let mut output = tempfile::NamedTempFile::new().map_err(|_| MediaError::Io)?;
+        let mut output =
+            tempfile::NamedTempFile::new_in(&policy.scratch_root).map_err(|_| MediaError::Io)?;
         #[cfg(test)]
         if let Some(audit) = &policy.audit {
             audit

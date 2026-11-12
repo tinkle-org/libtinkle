@@ -32,6 +32,77 @@ impl libtinkle::media::PlatformMediaPreparer for PngPreparer {
     }
 }
 
+/// Client preparation gets scratch from the database, not the imported source or system default.
+#[tokio::test]
+async fn native_client_preparation_uses_database_parent_before_upload() {
+    let private = tempfile::tempdir().unwrap();
+    let imports = tempfile::tempdir().unwrap();
+    let path = imports.path().join("source.bin");
+    std::fs::write(&path, b"imported source").unwrap();
+    struct RootedPreparer(std::path::PathBuf);
+    #[async_trait::async_trait]
+    impl libtinkle::media::PlatformMediaPreparer for RootedPreparer {
+        async fn prepare(
+            &self,
+            input: Arc<libtinkle::media::NativeMediaInput>,
+        ) -> Result<libtinkle::media::NativeMediaOutput, libtinkle::media::MediaError> {
+            assert_eq!(input.source_path().parent(), Some(self.0.as_path()));
+            assert_eq!(
+                input.output_path().parent().unwrap().parent(),
+                Some(self.0.as_path())
+            );
+            PngPreparer(Arc::new(std::sync::atomic::AtomicUsize::new(0)))
+                .prepare(input)
+                .await
+        }
+    }
+    let storage =
+        Arc::new(Storage::open(private.path().join("cache.sqlite").to_str().unwrap()).unwrap());
+    let client = Client::new_sqlite(
+        support::config("127.0.0.1:1".parse().unwrap()),
+        support::source(),
+        storage.clone(),
+    );
+    client.set_principal_user_id(42).await;
+    client
+        .configure_media_preparer(Some(Arc::new(RootedPreparer(
+            storage.temporary_directory().unwrap(),
+        ))))
+        .unwrap();
+    let result = client
+        .sending()
+        .prepare_attachment(
+            "root".into(),
+            &path,
+            libtinkle::media::NativeMediaKind::Image,
+            None,
+        )
+        .await;
+    assert!(
+        matches!(result, Err(libtinkle::SendError::Rpc(TinkleError::Sync(_)))),
+        "{result:?}"
+    );
+    let manifest = client
+        .sending()
+        .attachment_manifest("root".into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        manifest.source_sha256,
+        libtinkle::sha256(b"imported source")
+    );
+    assert!(std::path::Path::new(&manifest.artifact_path).is_file());
+    // Only SQLite and the durable preparation namespace remain; scratch is not durable state.
+    assert!(std::fs::read_dir(private.path()).unwrap().all(|entry| {
+        let name = entry.unwrap().file_name();
+        let name = name.to_string_lossy();
+        !name.starts_with(".tmp") && !name.starts_with("tinkle-media-")
+    }));
+    assert_eq!(std::fs::read_dir(imports.path()).unwrap().count(), 1);
+    client.close().await;
+}
+
 /// A failed upload followed by restart reuses the frozen artifact even after input replacement.
 #[tokio::test]
 async fn preparation_manifest_survives_restart_without_reencoding_and_logout_cleans_artifact() {
