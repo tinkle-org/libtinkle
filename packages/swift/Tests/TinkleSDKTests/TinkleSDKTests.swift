@@ -3,8 +3,18 @@ import Darwin
 import CryptoKit
 import XCTest
 
-/// Real AVFoundation decoding plus the actual Rust-to-Swift video callback bridge.
+/// Real AVFoundation decoding plus the current Rust-to-Swift media preparation bridge.
 final class AVFoundationVideoDecoderTests: XCTestCase {
+    override func setUp() async throws {
+        try await super.setUp()
+        // Cold simulator media-service startup can exceed the decoder's 10s ceiling.
+        // Warm the real codec via the separate 120s preparation contract, never widen decode limits.
+        let input = try VideoFileFixture()
+        defer { input.remove() }
+        _ = try await prepareNativeMedia(path: input.url.path, kind: .video,
+            preparer: AVFoundationMediaPreparer())
+    }
+
     /// Encoded streams stay byte-identical; measured sample count is not a header estimate.
     func testActualDecodeOrientationColorAndBounds() async throws {
         let input = try VideoFileFixture()
@@ -125,9 +135,8 @@ final class AVFoundationVideoDecoderTests: XCTestCase {
         let tasks = [first, second].map { input in
             Task { try await decoder.decode(input: input, limits: videoLimits()) }
         }
-        let firstEntered = await first.waitForEntry()
-        let secondEntered = await second.waitForEntry()
-        XCTAssertTrue(firstEntered && secondEntered, "Both native queue closures must own their admission")
+        defer { first.resume.signal(); second.resume.signal() }
+        await fulfillment(of: [first.entered, second.entered], timeout: 30)
         for task in tasks { task.cancel() }
         do {
             _ = try await decoder.decode(input: first.fixture, limits: videoLimits())
@@ -144,16 +153,16 @@ final class AVFoundationVideoDecoderTests: XCTestCase {
         XCTAssertEqual(result.frameCount, 4)
     }
 
-    /// Real Rust creates a private lease, invokes Swift, and projects the typed callback
-    /// failure before upload. The recorder intentionally stops after the actual decode.
-    func testRustCallsActualDecoderWithFrozenSource() async throws {
+    /// Normal sending now requires encoding, not the legacy decoder-only registration.
+    /// Real Rust creates the frozen lease and projects a typed callback failure before upload.
+    func testRustCallsActualPreparerWithFrozenSource() async throws {
         let fixture = try VideoFileFixture()
         defer { fixture.remove() }
         let client = try await videoClient()
-        let recorder = VideoCallbackRecorder()
+        let recorder = MediaCallbackRecorder()
         do {
-            try client.configureAVFoundationVideoDecoder()
-            try client.configureVideoDecoder(decoder: recorder)
+            try client.configureAVFoundationMediaPreparer()
+            try client.configureNativeMediaPreparer(preparer: recorder)
             do {
                 _ = try await client.sendingPrepareAttachment(key: "video-native-decode",
                     path: fixture.url.path, kind: .video, control: TransferControl())
@@ -161,13 +170,14 @@ final class AVFoundationVideoDecoderTests: XCTestCase {
             } catch FfiSendError.Media(let error) { XCTAssertEqual(error, .Unsupported) }
             let recorded = await recorder.result
             XCTAssertEqual(recorded?.frameCount, 4)
-            XCTAssertEqual(recorded?.evidence, .nativeDecoded)
-            XCTAssertNotNil(recorded?.thumbnail)
+            XCTAssertEqual(recorded?.width, 32)
+            XCTAssertEqual(recorded?.height, 64)
             let path = await recorder.path
             XCTAssertNotEqual(path, fixture.url.path)
             let hash = await recorder.hash
             XCTAssertEqual(hash, fixture.sourceSha256())
-            try client.clearVideoDecoder()
+            XCTAssertEqual(try Data(contentsOf: fixture.url), fixture.bytes)
+            try client.clearNativeMediaPreparer()
         } catch {
             await client.shutdown()
             throw error
@@ -181,9 +191,9 @@ final class AVFoundationVideoDecoderTests: XCTestCase {
         let fixture = try VideoFileFixture()
         defer { fixture.remove() }
         let client = try await videoClient()
-        let callback = SuspendedVideoCallback()
+        let callback = SuspendedMediaCallback()
         let control = TransferControl()
-        try client.configureVideoDecoder(decoder: callback)
+        try client.configureNativeMediaPreparer(preparer: callback)
         let pending = Task {
             try await client.sendingPrepareAttachment(key: "video-cancel-lease",
                 path: fixture.url.path, kind: .video, control: control)
@@ -197,14 +207,16 @@ final class AVFoundationVideoDecoderTests: XCTestCase {
             control.cancel()
             await callback.resume()
             await client.shutdown()
-            XCTFail("Rust did not invoke video callback")
+            // Surface an early typed failure rather than hiding it behind a barrier timeout.
+            _ = try await pending.value
+            XCTFail("Rust did not invoke media preparation callback")
             return
         }
         control.cancel()
         do { _ = try await pending.value; XCTFail("Cancellation must stop preparation") }
         catch FfiSendError.Media(let error) { XCTAssertEqual(error, .Cancelled) }
         // Remove configuration/client ownership while the invocation remains parked.
-        try client.clearVideoDecoder()
+        try client.clearNativeMediaPreparer()
         await client.shutdown()
         XCTAssertTrue(FileManager.default.fileExists(atPath: path))
         await callback.resume()
@@ -262,51 +274,43 @@ private final class VideoFileFixture: FfiVideoInputProtocol, Sendable {
 /// A synchronous native-input barrier; all mutable synchronization lives in system primitives.
 private final class ParkedVideoInput: FfiVideoInputProtocol, Sendable {
     let fixture: VideoFileFixture
-    let entered = DispatchSemaphore(value: 0)
+    let entered = XCTestExpectation(description: "Native worker owns admission")
     let resume = DispatchSemaphore(value: 0)
     init() throws { fixture = try VideoFileFixture() }
     func sourcePath() -> String {
-        entered.signal()
-        XCTAssertEqual(resume.wait(timeout: .now() + 10), .success)
+        entered.fulfill()
+        XCTAssertEqual(resume.wait(timeout: .now() + 60), .success)
         return fixture.sourcePath()
     }
     func sourceSha256() -> Data { fixture.sourceSha256() }
     func sizeBytes() -> UInt64 { fixture.sizeBytes() }
     func isCancelled() -> Bool { fixture.isCancelled() }
-    /// Do not park a cooperative Swift executor waiting for the native queue barrier.
-    func waitForEntry() async -> Bool {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                continuation.resume(returning: self.entered.wait(timeout: .now() + 5) == .success)
-            }
-        }
-    }
 }
 
-/// Captures facts from the production decoder; the typed sentinel prevents network upload.
-private actor VideoCallbackRecorder: FfiPlatformVideoDecoder {
-    private(set) var result: FfiDecodedVideo?
+/// Captures facts from the production encoder; the typed sentinel prevents network upload.
+private actor MediaCallbackRecorder: FfiPlatformMediaPreparer {
+    private(set) var result: FfiNativeMediaOutput?
     private(set) var path: String?
     private(set) var hash: Data?
-    func inspectAndDecode(input: FfiVideoInput, limits: FfiVideoDecodeLimits) async throws -> FfiDecodedVideo {
+    func prepare(input: FfiNativeMediaInput) async throws -> FfiNativeMediaOutput {
         path = input.sourcePath()
-        hash = input.sourceSha256()
-        result = try await AVFoundationVideoDecoder().inspectAndDecode(input: input, limits: limits)
+        hash = Data(SHA256.hash(data: try Data(contentsOf: URL(fileURLWithPath: input.sourcePath()))))
+        result = try await AVFoundationMediaPreparer().prepare(input: input)
         throw FfiMediaError.Unsupported
     }
 }
 
 /// A barrier-controlled callback proves invocation ownership after cancellation and shutdown.
-private actor SuspendedVideoCallback: FfiPlatformVideoDecoder {
+private actor SuspendedMediaCallback: FfiPlatformMediaPreparer {
     private(set) var path: String?
     private(set) var finished = false
     private var continuation: CheckedContinuation<Void, Never>?
     private var released = false
-    func inspectAndDecode(input: FfiVideoInput, limits: FfiVideoDecodeLimits) async throws -> FfiDecodedVideo {
+    func prepare(input: FfiNativeMediaInput) async throws -> FfiNativeMediaOutput {
         path = input.sourcePath()
         if !released { await withCheckedContinuation { continuation = $0 } }
         defer { finished = true }
-        return try await AVFoundationVideoDecoder().inspectAndDecode(input: input, limits: limits)
+        return try await AVFoundationMediaPreparer().prepare(input: input)
     }
     func resume() {
         released = true
@@ -431,7 +435,7 @@ final class TinkleSDKTests: XCTestCase {
         try gateway.finish()
     }
 
-    /// A synthetic PermissionDenied response crosses Rust/UniFFI as Auth, not Retryable or a fabricated result.
+    /// A received PermissionDenied preserves its exact RPC status and non-retry guidance.
     func testConfirmSessionProjectsSyntheticPermissionDenied() async throws {
         let gateway = try LoopbackGateway(sessionReview: true)
         defer { try? gateway.finish() }
@@ -441,8 +445,12 @@ final class TinkleSDKTests: XCTestCase {
             do {
                 _ = try await client.confirmSession(sessionId: id)
                 XCTFail("A fixture denial must not produce a confirmed session")
-            } catch FfiError.Auth(let message) {
-                XCTAssertTrue(message.contains("synthetic fixture confirmation denied"))
+            } catch FfiError.Rpc(let code, let rawCode, let diagnostic, let unknownOutcome, let recovery) {
+                XCTAssertEqual(code, 7)
+                XCTAssertNil(rawCode)
+                XCTAssertEqual(diagnostic, "synthetic fixture confirmation denied")
+                XCTAssertFalse(unknownOutcome)
+                XCTAssertEqual(recovery, .doNotRetry)
             }
             XCTAssertEqual(try gateway.confirmSessionRequests, [id], "The mutation must not be replayed")
             XCTAssertEqual(try gateway.admittedModes, ["returning"])
@@ -673,8 +681,12 @@ final class TinkleSDKTests: XCTestCase {
             do {
                 _ = try await client.sendCode(phoneNumber: "+14155550123", langCode: "en")
                 XCTFail("The fixture does not implement verification delivery")
-            } catch FfiError.Network {
-                // Unimplemented RPCs map to Network; verified admission below is the handshake proof.
+            } catch FfiError.Rpc(let code, let rawCode, let diagnostic, let unknownOutcome, let recovery) {
+                XCTAssertEqual(code, 12) // Unimplemented, not a local transport failure.
+                XCTAssertNil(rawCode)
+                XCTAssertEqual(diagnostic, "enrollment request rejected")
+                XCTAssertFalse(unknownOutcome)
+                XCTAssertEqual(recovery, .doNotRetry)
             }
             XCTAssertEqual(try gateway.admittedModes, ["bootstrap", "bootstrap"],
                 "The post-denial main connection must authenticate as Bootstrap, never retained Returning")

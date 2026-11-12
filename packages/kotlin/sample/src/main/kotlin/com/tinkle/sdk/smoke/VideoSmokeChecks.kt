@@ -1,6 +1,10 @@
 package com.tinkle.sdk.smoke
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.media.ExifInterface
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaCodec
@@ -10,16 +14,129 @@ import android.util.Base64
 import com.tinkle.sdk.*
 import java.io.File
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.PI
+import kotlin.math.sin
 import kotlinx.coroutines.*
+
+/** Keep SDK/coroutine calls in the target APK: the test APK cannot call R8-renamed APIs. */
+public object MediaSmokeChecks {
+    @JvmStatic public fun pcmVoiceAndImportedAudio(context: Context): Unit = runBlocking {
+        TinkleSdk.initialize()
+        val source = File.createTempFile("voice-", ".pcm", context.cacheDir)
+        try {
+            source.outputStream().use { output ->
+                val block = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN)
+                for (i in 0 until 19200) {
+                    if (block.remaining() < 2) { output.write(block.array(), 0, block.position()); block.clear() }
+                    block.putShort((sin(i * 2.0 * PI * 440 / 48000) * 16000).toInt().toShort())
+                }
+                output.write(block.array(), 0, block.position())
+            }
+            prepareNativeMedia(source.path, FfiNativeMediaKind.Voice(48000u, 1u, 16u), AndroidMediaPreparer()).use { voice ->
+                check(voice.mimeType() == "audio/mp4" && voice.facts().audioSamples == 19200uL)
+                check(voice.facts().width == 0u && voice.facts().height == 0u && voice.facts().audioChannels == 1.toUByte())
+                check(voice.waveform().size == 100 && voice.sourceSha256().size == 32)
+                requireAacOnly(File(voice.path()))
+                prepareNativeMedia(voice.path(), FfiNativeMediaKind.Audio, AndroidMediaPreparer()).use { audio ->
+                    check(audio.waveform().isEmpty() && audio.facts().audioChannels == 1.toUByte())
+                    requireAacOnly(File(audio.path()))
+                }
+            }
+        } finally { source.delete() }
+    }
+
+    @JvmStatic public fun alphaPngAndOrientedJpeg(context: Context): Unit = runBlocking {
+        TinkleSdk.initialize()
+        val bitmap = Bitmap.createBitmap(32, 16, Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(0x80204060.toInt())
+        try {
+            for (jpeg in listOf(false, true)) {
+                val source = File.createTempFile("image-", if (jpeg) ".jpg" else ".png", context.cacheDir)
+                try {
+                    source.outputStream().use { check(bitmap.compress(if (jpeg) Bitmap.CompressFormat.JPEG else Bitmap.CompressFormat.PNG, 100, it)) }
+                    if (jpeg) ExifInterface(source.path).apply { setAttribute(ExifInterface.TAG_ORIENTATION, "6"); saveAttributes() }
+                    prepareNativeMedia(source.path, FfiNativeMediaKind.Image, AndroidMediaPreparer()).use { result ->
+                        check(result.mimeType() == "image/png" && File(result.path()).length() in 1..10_000_000)
+                        check(result.facts().width == (if (jpeg) 16u else 32u) && result.facts().height == (if (jpeg) 32u else 16u))
+                        val decoded = BitmapFactory.decodeFile(result.path()) ?: error("PNG output did not decode")
+                        try { if (!jpeg) check(Color.alpha(decoded.getPixel(0, 0)) == 128) } finally { decoded.recycle() }
+                    }
+                } finally { source.delete() }
+            }
+        } finally { bitmap.recycle() }
+    }
+
+    /** Normal host wiring encodes before offline upload; retained retries need no encoder/source. */
+    @JvmStatic public fun normalVoiceAndAdoption(context: Context): Unit = runBlocking {
+        TinkleSdk.initialize()
+        val directory = File(context.cacheDir, "sending-${System.nanoTime()}")
+        check(directory.mkdir())
+        val storage = SqliteStorage.openAsync(File(directory, "cache.sqlite").path)
+        val trust = TrustSourceFfi.bootstrap(ServerTrustFfi(ByteArray(32) { 7 }, 7u, "native-sending-test"))
+        val client = TinkleClient.newSqlite(ClientConfigFfi(ClientInfoFfi("fixture", "android", "1", "1", "1",
+            ClientOptionsFfi("", "", "", "", "", "")), "127.0.0.1", 1u, null), trust, storage)
+        try {
+            client.setPrincipalUserId(42)
+            client.configureAndroidMediaPreparer()
+            val source = File(directory, "voice.pcm")
+            val pcm = ByteBuffer.allocate(19200 * 2).order(ByteOrder.LITTLE_ENDIAN)
+            repeat(19200) { pcm.putShort((sin(it * 2.0 * PI * 440 / 48000) * 16000).toInt().toShort()) }
+            source.writeBytes(pcm.array())
+            val kind = FfiMediaKind.Voice(48000u, 1u, 16u)
+            suspend fun prepare(): FfiAttachmentManifest {
+                try {
+                    TransferControl().use { client.sendingPrepareAttachment("voice", source.path, kind, it) }
+                    error("offline upload unexpectedly completed")
+                } catch (e: FfiSendException.Rpc) { check(e.error is FfiException.Sync) }
+                return checkNotNull(client.sendingAttachmentManifest("voice"))
+            }
+            val manifest = prepare()
+            check(manifest.mimeType == "audio/mp4" && manifest.nativeFacts?.audioSamples == 19200uL)
+            prepareNativeMedia(source.path, FfiNativeMediaKind.Voice(48000u, 1u, 16u), AndroidMediaPreparer()).use { artifact ->
+                try {
+                    TransferControl().use { client.sendingAdoptNativeAttachment("adopt", source.path, artifact, it) }
+                    error("offline adoption unexpectedly completed")
+                } catch (e: FfiSendException.Rpc) { check(e.error is FfiException.Sync) }
+                check(checkNotNull(client.sendingAttachmentManifest("adopt")).outputSha256.contentEquals(artifact.outputSha256()))
+            }
+            client.clearNativeMediaPreparer()
+            check(source.delete())
+            val retry = prepare()
+            check(retry.artifactPath == manifest.artifactPath && retry.outputSha256.contentEquals(manifest.outputSha256))
+        } finally {
+            withContext(NonCancellable) { client.shutdown() }
+            client.close()
+            storage.clearPrincipal("user:42")
+            storage.close()
+            trust.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    /** Independently inspect the encoded track/profile instead of trusting returned MIME metadata. */
+    private fun requireAacOnly(file: File) {
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(file.path)
+            check(extractor.trackCount == 1)
+            val format = extractor.getTrackFormat(0)
+            check(format.getString(MediaFormat.KEY_MIME) == "audio/mp4a-latm")
+            val config = checkNotNull(format.getByteBuffer("csd-0"))
+            check(config.remaining() >= 2 && (config.get(config.position()).toInt() and 255) ushr 3 == 2)
+        } finally { extractor.release() }
+    }
+}
 
 /** Real MP4 checks in the target APK, so R8 processes the actual adapter and native call sites. */
 public object VideoSmokeChecks {
-    private val limits = FfiVideoDecodeLimits(1024u * 1024u, 4096u, 10u, 1000u, 32u, 5000u)
+    // Kotlin 2.3 boxes the inferred-width UInt product as Long, then casts it to ULong.
+    private val limits = FfiVideoDecodeLimits(1024uL * 1024uL, 4096uL, 10u, 1000uL, 32u, 5000u)
 
     /** Decodes four actual AVC frames and validates bounded derived sRGB, not header facts. */
     @JvmStatic public fun decodePlatform(context: Context): Unit = runBlocking {
@@ -136,8 +253,8 @@ public object VideoSmokeChecks {
 
     /**
      * Requires the final native AAR: real Rust callback suspension, typed failure mapping,
-     * decoder registration, cancellation and opaque-source lifetime. No server/upload needed:
-     * the success probe deliberately returns Codec after checking real decoded results.
+     * preparer registration, cancellation and opaque-source lifetime. No server/upload needed:
+     * the success probe deliberately returns Codec after checking real encoded results.
      */
     @JvmStatic public fun nativeCallbackAndLease(context: Context): Unit = runBlocking {
         TinkleSdk.initialize()
@@ -152,23 +269,26 @@ public object VideoSmokeChecks {
                     val client = TinkleClient.newSqlite(config, trust, storage)
                     try {
                         client.setPrincipalUserId(42)
+                        // Decoder-only registration cannot satisfy normal sending's encoder contract.
                         client.configureAndroidVideoDecoder()
-                        client.clearVideoDecoder()
                         TransferControl().use { control ->
                             expectMedia<FfiMediaException.Unsupported> { client.sendingPrepareAttachment("missing", source.path, FfiMediaKind.Video, control) }
                         }
-                        val result = AtomicReference<FfiDecodedVideo>()
-                        val lease = AtomicReference<FfiVideoInput>()
+                        client.clearVideoDecoder()
+                        client.configureAndroidMediaPreparer()
+                        client.clearNativeMediaPreparer()
+                        val result = AtomicReference<FfiNativeMediaOutput>()
+                        val lease = AtomicReference<FfiNativeMediaInput>()
                         val frozenPath = AtomicReference<String>()
-                        client.configureVideoDecoder(object : FfiPlatformVideoDecoder {
-                            override suspend fun inspectAndDecode(input: FfiVideoInput, limits: FfiVideoDecodeLimits): FfiDecodedVideo {
+                        client.configureNativeMediaPreparer(object : FfiPlatformMediaPreparer {
+                            override suspend fun prepare(input: FfiNativeMediaInput): FfiNativeMediaOutput {
                                 lease.set(input)
                                 frozenPath.set(input.sourcePath())
                                 var handedOff = false
                                 try {
                                     delay(10) // Exercise the generated foreign-future suspension machinery.
                                     handedOff = true
-                                    result.set(AndroidVideoDecoder().inspectAndDecode(input, limits))
+                                    result.set(AndroidMediaPreparer().prepare(input))
                                     throw FfiMediaException.Codec() // Stop before UploadStart; preserve typed errors.
                                 } finally {
                                     // Once handed off, only the adapter can establish native release.
@@ -197,17 +317,23 @@ public object VideoSmokeChecks {
         val entered = CountDownLatch(1)
         val unblock = CountDownLatch(1)
         val finished = CountDownLatch(1)
-        val lease = AtomicReference<FfiVideoInput>()
+        val lease = AtomicReference<FfiNativeMediaInput>()
         val frozenPath = AtomicReference<String>()
-        client.configureVideoDecoder(object : FfiPlatformVideoDecoder {
-            override suspend fun inspectAndDecode(input: FfiVideoInput, limits: FfiVideoDecodeLimits): FfiDecodedVideo {
+        client.configureNativeMediaPreparer(object : FfiPlatformMediaPreparer {
+            override suspend fun prepare(input: FfiNativeMediaInput): FfiNativeMediaOutput {
                 lease.set(input)
                 frozenPath.set(input.sourcePath())
                 val polls = AtomicInteger()
                 // A test wrapper keeps the *object*, not just its pathname, through native cleanup.
-                val held = object : FfiVideoInput(NoHandle) {
+                val held = object : FfiNativeMediaInput(NoHandle) {
                     override fun sourcePath() = input.sourcePath()
                     override fun sizeBytes() = input.sizeBytes()
+                    override fun outputPath() = input.outputPath()
+                    override fun kind() = input.kind()
+                    override fun maxOutputBytes() = input.maxOutputBytes()
+                    override fun maxFrames() = input.maxFrames()
+                    override fun maxDurationMs() = input.maxDurationMs()
+                    override fun deadlineMs() = input.deadlineMs()
                     override fun isCancelled(): Boolean {
                         check(File(frozenPath.get()).isFile && !input.uniffiIsDestroyed)
                         if (polls.incrementAndGet() == 3) {
@@ -219,7 +345,7 @@ public object VideoSmokeChecks {
                     override fun close() { input.close(); super.close() }
                 }
                 try {
-                    return AndroidVideoDecoder().inspectAndDecode(held, limits)
+                    return AndroidMediaPreparer().prepare(held)
                 } finally { finished.countDown() }
             }
         })

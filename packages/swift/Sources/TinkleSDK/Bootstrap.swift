@@ -79,7 +79,8 @@ extension TinkleClient {
         try configureNativeMediaPreparer(preparer: AVFoundationMediaPreparer())
     }
 
-    /// Registers the real iOS decoder only; preparation and sending remain explicit.
+    /// Registers the legacy iOS decoder only. Normal sending uses
+    /// `configureAVFoundationMediaPreparer()` to encode media, not this decoder.
     /// Existing work retains its selected adapter if `clearVideoDecoder()` is called.
     public func configureAVFoundationVideoDecoder() throws {
         try configureVideoDecoder(decoder: AVFoundationVideoDecoder())
