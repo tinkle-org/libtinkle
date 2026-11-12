@@ -38,6 +38,20 @@ class SmokeFixtureTest(unittest.TestCase):
         self.assertEqual(smoke.count('configureNativeMediaPreparer(object : FfiPlatformMediaPreparer'), 2)
         self.assertIn('result.set(AndroidMediaPreparer().prepare(input))', smoke)
 
+    def test_standalone_media_preparation_uses_app_private_scratch(self):
+        """All four standalone paths, including adoption, must work below Android 13."""
+        smoke = (ROOT / 'sample/src/main/kotlin/com/tinkle/sdk/smoke/VideoSmokeChecks.kt').read_text()
+        calls = re.findall(
+            r'\bprepareNativeMediaIn\(\s*(?:source\.path|voice\.path\(\)),\s*context\.cacheDir\.absolutePath,',
+            smoke)
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(smoke.count('prepareNativeMediaIn('), len(calls))
+        for directory in ('src/main/kotlin', 'sample/src'):
+            for source in (ROOT / directory).rglob('*.kt'):
+                text = source.read_text()
+                self.assertNotRegex(text, r'\bprepareNativeMedia\s*\(', str(source))
+                self.assertNotRegex(text, r'(?:setenv|setProperty)\s*\(\s*"(?:TMPDIR|java.io.tmpdir)"', str(source))
+
     def test_gateway_json_control_requests(self):
         """Pin create, request-log, and close messages and newline-delimited JSON I/O."""
         gateway = (ROOT / 'sample/src/main/kotlin/com/tinkle/sdk/smoke/LoopbackGateway.kt').read_text()

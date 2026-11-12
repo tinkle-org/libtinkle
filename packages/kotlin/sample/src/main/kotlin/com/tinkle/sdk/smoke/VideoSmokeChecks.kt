@@ -39,13 +39,13 @@ public object MediaSmokeChecks {
                     }
                     output.write(block.array(), 0, block.position())
                 }
-                prepareNativeMedia(source.path, FfiNativeMediaKind.Voice(rate.toUInt(), channels.toUByte(), 16u), AndroidMediaPreparer()).use { voice ->
+                prepareNativeMediaIn(source.path, context.cacheDir.absolutePath, FfiNativeMediaKind.Voice(rate.toUInt(), channels.toUByte(), 16u), AndroidMediaPreparer()).use { voice ->
                     check(voice.mimeType() == "audio/mp4" && voice.facts().audioSamples == samples.toULong())
                     check(voice.facts().width == 0u && voice.facts().height == 0u && voice.facts().audioChannels == channels.toUByte())
                     check(voice.facts().audioSampleRate == rate.toUInt())
                     check(voice.waveform().size == 100 && voice.sourceSha256().size == 32)
                     val units = requireAacOnly(File(voice.path()))
-                    prepareNativeMedia(voice.path(), FfiNativeMediaKind.Audio, AndroidMediaPreparer()).use { audio ->
+                    prepareNativeMediaIn(voice.path(), context.cacheDir.absolutePath, FfiNativeMediaKind.Audio, AndroidMediaPreparer()).use { audio ->
                         check(audio.waveform().isEmpty() && audio.facts().audioChannels == channels.toUByte())
                         check(audio.facts().audioSampleRate == rate.toUInt())
                         // No gapless trim metadata was written: import must consume every padded AU.
@@ -67,7 +67,7 @@ public object MediaSmokeChecks {
                 try {
                     source.outputStream().use { check(bitmap.compress(if (jpeg) Bitmap.CompressFormat.JPEG else Bitmap.CompressFormat.PNG, 100, it)) }
                     if (jpeg) ExifInterface(source.path).apply { setAttribute(ExifInterface.TAG_ORIENTATION, "6"); saveAttributes() }
-                    prepareNativeMedia(source.path, FfiNativeMediaKind.Image, AndroidMediaPreparer()).use { result ->
+                    prepareNativeMediaIn(source.path, context.cacheDir.absolutePath, FfiNativeMediaKind.Image, AndroidMediaPreparer()).use { result ->
                         check(result.mimeType() == "image/png" && File(result.path()).length() in 1..10_000_000)
                         check(result.facts().width == (if (jpeg) 16u else 32u) && result.facts().height == (if (jpeg) 32u else 16u))
                         val decoded = BitmapFactory.decodeFile(result.path()) ?: error("PNG output did not decode")
@@ -104,7 +104,7 @@ public object MediaSmokeChecks {
             }
             val manifest = prepare()
             check(manifest.mimeType == "audio/mp4" && manifest.nativeFacts?.audioSamples == 19200uL)
-            prepareNativeMedia(source.path, FfiNativeMediaKind.Voice(48000u, 1u, 16u), AndroidMediaPreparer()).use { artifact ->
+            prepareNativeMediaIn(source.path, context.cacheDir.absolutePath, FfiNativeMediaKind.Voice(48000u, 1u, 16u), AndroidMediaPreparer()).use { artifact ->
                 try {
                     TransferControl().use { client.sendingAdoptNativeAttachment("adopt", source.path, artifact, it) }
                     error("offline adoption unexpectedly completed")
