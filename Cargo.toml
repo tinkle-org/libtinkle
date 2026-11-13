@@ -42,7 +42,7 @@ tempfile = "3"
 
 # BSR-generated bindings (public index, no token).
 # Versions pinned from `buf registry sdk version` (see PROTO_PINNING.md).
-tinkle-org_schema_community_neoeinstein-prost = { version = "=0.5.0-20261109202628-d85fcc4fe592.2", registry = "buf" }
+tinkle-org_schema_community_neoeinstein-prost = { version = "=0.5.0-20261112172535-6099d89af63f.2", registry = "buf" }
 
 # Native SDKs must retain unwind containment and matching native symbols.
 # Select staticlib/cdylib at packaging time, not for every workspace build.
