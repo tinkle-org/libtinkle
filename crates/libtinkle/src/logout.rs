@@ -364,6 +364,7 @@ mod review_tests {
     /// The first logout must invalidate credentials before draining a blocked pre-fence cache write.
     async fn review_first_logout_clears_credentials_before_draining_cache_writer() {
         use crate::client::IngestBatch;
+        use std::time::Duration;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("logout-first-call.db");
         let storage = Arc::new(crate::Storage::open(path.to_str().unwrap()).unwrap());
@@ -403,8 +404,8 @@ mod review_tests {
             .capture_message_scope("user:42", "target:user:42")
             .await
             .unwrap();
-        let blocker = rusqlite::Connection::open(&path).unwrap();
-        blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+        // A deferred SQLite read-to-write upgrade can fail immediately with SQLITE_BUSY.
+        let (entered, release) = client.pause_cache_write();
         let write = client.ingest_messages_fenced(
             "user:42",
             "target:user:42",
@@ -418,7 +419,13 @@ mod review_tests {
             &cache_fence,
         );
         tokio::pin!(write);
-        assert!(futures_util::poll!(&mut write).is_pending());
+        tokio::select! {
+            result = &mut write => panic!("cache writer completed before release: {result:?}"),
+            entered = tokio::time::timeout(Duration::from_secs(2), entered) => {
+                entered.expect("cache worker did not start").unwrap();
+            }
+        }
+        assert!(client.checkpoint_save.try_lock().is_err());
         assert!(client
             .logout_cleanup
             .progress
@@ -442,7 +449,7 @@ mod review_tests {
             );
             // Only now allow the pre-fence writer to commit. Wipe still has to
             // drain its gate before it can erase the old principal's cache.
-            blocker.execute_batch("COMMIT").unwrap();
+            release.send(()).unwrap();
         });
         // The admitted worker is drained before wipe, but its stale waiter must
         // not report success after the irreversible authorization fence.
