@@ -2336,8 +2336,9 @@ impl Storage {
                 };
                 let removed_old:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM message_tombstones WHERE principal=?1 AND conversation_key=?2 AND message_id=?3)",params![principal,target_key,old],|r|r.get(0))?;
                 let candidate = position(d.top_message)?;
-                if !(removed_old && candidate.is_some_and(|p| p > 0))
-                    && !matches!((position(old)?,candidate),(Some(a),Some(b)) if b>a)
+                // Keep the removed-head fast path first; it must not query the old position.
+                if !(removed_old && candidate.is_some_and(|p| p > 0)
+                    || matches!((position(old)?,candidate),(Some(a),Some(b)) if b>a))
                 {
                     continue;
                 }
@@ -3215,8 +3216,9 @@ impl Storage {
                 let target = Self::dialog_target(row)?;
                 let removed_old:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM message_tombstones WHERE principal=?1 AND conversation_key=?2 AND message_id=?3)",params![principal,target,current_top],|r|r.get(0))?;
                 let candidate = position(row.top_message)?;
-                if !(removed_old && candidate.is_some_and(|p| p > 0))
-                    && !matches!((position(current_top)?,candidate),(Some(a),Some(b)) if b>a)
+                // Keep the removed-head fast path first; it must not query the old position.
+                if !(removed_old && candidate.is_some_and(|p| p > 0)
+                    || matches!((position(current_top)?,candidate),(Some(a),Some(b)) if b>a))
                 {
                     return Ok(false);
                 }

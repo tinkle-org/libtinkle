@@ -181,14 +181,19 @@ fn winning_body_replaces_refs_and_stale_body_cannot_add_them() {
         .is_empty());
 }
 
-/// A later accepted message can have a smaller numeric ID; the dialog head follows acceptance.
+/// The head follows acceptance, not numeric IDs; an unknown position cannot replace it.
 #[test]
 fn dialog_head_uses_acceptance_order() {
     use tinkle_storage::DialogRow;
     let s = Storage::open_in_memory().unwrap();
-    for (id, position) in [(900, 1), (20, 2), (999, 1)] {
+    for (id, position, expected_head) in [
+        (900, Some(1), 900),
+        (901, None, 900),
+        (20, Some(2), 20),
+        (999, Some(1), 20),
+    ] {
         let mut value = ops(id, Some(1), "body", 1);
-        value.messages[0].accept_seq = Some(position);
+        value.messages[0].accept_seq = position;
         value.dialogs.push(DialogRow {
             peer_kind: "room".into(),
             peer_id: 7,
@@ -203,6 +208,10 @@ fn dialog_head_uses_acceptance_order() {
         });
         s.apply_journal_page_fenced("user:1", "target:room:7", &value, 0, 0)
             .unwrap();
+        assert_eq!(
+            s.list_dialogs("user:1", 10).unwrap()[0].top_message,
+            expected_head
+        );
     }
     assert_eq!(s.list_dialogs("user:1", 10).unwrap()[0].top_message, 20);
 }
