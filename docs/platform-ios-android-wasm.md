@@ -32,7 +32,7 @@ invalidated; retry finishes retained work without remote replay. The
 installed platform tests cover different boundaries.
 
 The application surface retains `start`, `connect`, `subscribe`, typed/raw calls,
-`loadHistory`, `loadDialogs`, `getMessages`, `getTargetChanges`, file transfers,
+`loadHistory`, `loadDialogs`, `getMessages`, `listMessageChanges`, file transfers,
 `nextEvent`, `reconcileNow`, `targetCursor`, `targetStatus`, `trackedTargets`,
 `suspend`, `resume`, `stop` and `shutdown`. Store callbacks remain asynchronous.
 Swift/Kotlin keep structured authentication and retryable error variants.

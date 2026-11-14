@@ -15,3 +15,9 @@ public object TinkleSdk {
         initialized
     }
 }
+
+/** Install the real Android encoder for normal sendingPrepareAttachment calls. Documents stay raw;
+ * retained artifacts resume without invoking this encoder. The adapter never retains the client. */
+public fun TinkleClient.configureAndroidMediaPreparer() {
+    configureNativeMediaPreparer(AndroidMediaPreparer())
+}

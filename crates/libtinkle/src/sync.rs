@@ -1,15 +1,15 @@
 //! Reconciliation coordination + opaque notification hints + journal cursors.
 //!
 //! Sync reconciles per-conversation mutation journals with unary
-//! `MessagesService/GetTargetChanges` pages and fetches bodies with unary
+//! `MessagesService/ListMessageChanges` pages and fetches bodies with unary
 //! `MessagesService/GetMessages`. Connectivity observations stay ephemeral
 //! (`UpdatesService/ObserveConnectivity` notifications carry
 //! `ConnectivityChanged` bytes and must be discarded on disconnect).
 //!
-//! Notification frames are OPAQUE hints: the pump decodes nothing. Each
-//! frame marks reconcile demand for every tracked target (single-flight per
-//! target); the supervisor (or an explicit `reconcile_now`) performs the
-//! actual `GetTargetChanges` paging, validation (`validate_changes_page`),
+//! Unknown conversation notifications remain opaque hints. The application pump decodes exact
+//! schema bindings, independently forwards eligible ephemeral reaction presentation, and marks
+//! reconcile demand (single-flight per target). The supervisor (or `reconcile_now`) performs the
+//! actual `ListMessageChanges` paging, validation (`validate_changes_page`),
 //! projection (`cache_projector`), and atomic commit
 //! (`apply_journal_page_fenced`).
 //!
@@ -34,7 +34,7 @@ use tinkle_schema::proto::{ConnectivityChanged, Target};
 /// Pre-authentication principal placeholder.
 pub(crate) const UNKNOWN_PRINCIPAL: &str = "unknown";
 
-const EVENT_CHANNEL_CAPACITY: usize = 1024;
+pub(crate) const EVENT_CHANNEL_CAPACITY: usize = 1024;
 
 /// Internal recovery signal from the reconcile pipeline to the connection
 /// supervisor. Hints only (bounded `try_send`, never blocks the pump):
@@ -56,6 +56,8 @@ pub(crate) enum RecoverySignal {
 /// App-visible sync events.
 #[derive(Debug, Clone)]
 pub enum SyncEvent {
+    /// Ephemeral presentation only. Never hydrate a body or advance/replay a journal from this event.
+    ReactionEffect(crate::ReactionEffectEvent),
     /// One journal page applied for a conversation.
     ConversationChanged {
         target_key: String,

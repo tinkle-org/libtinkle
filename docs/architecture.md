@@ -172,10 +172,153 @@ recognized runtime notifications by exact `google.protobuf.Any` type URL:
 `SessionChanged` demands an authoritative session refresh, while
 `ConnectivityChanged` is ephemeral contact presence. Neither changes authorization
 or advances a message checkpoint. Malformed recognized payloads are discarded;
-other payloads remain conversation reconciliation hints. Per-target `GetTargetChanges`
+other payloads remain conversation reconciliation hints. Per-target `ListMessageChanges`
 pages hydrate with `GetMessages`, then cache rows and accept positions commit
 atomically. Paged history repair retains continuation, window budgets and scope
 fences. History and dialog snapshots never forge journal progress.
+
+`MessageChanged` is a validated body-free reconciliation hint, including nonterminal
+body-invalidation hints. A malformed presentation extension is removed without losing
+valid reconciliation demand. On a current authenticated Returning connection, a valid
+`ReactionEffect` may additionally produce `SyncEvent::ReactionEffect`; UniFFI carries
+the validated `MessageChanged` protobuf in `FfiSyncEvent::ReactionEffect.payload`.
+This presentation path never hydrates bodies, grants asset access or advances journals.
+Exact custom versions and the original absolute expiry are retained. Delivery requires
+positive remaining time no greater than five seconds. Queued presentation is rechecked
+at app delivery against expiry, connection, principal and source/epoch fences. Dedup
+uses a monotonic local clock high-water so a wall-clock rollback cannot revive an expired operation. It
+retains viewer-scoped actor/UUID markers until original expiry, including reconnect/ABA;
+its cap reuses the 1024-event admission bound and drops new effects instead of evicting
+live markers. No presentation is replayed from retired managers or durable state.
+Hosts must still check original expiry and their current UI account before rendering;
+receiving a presentation event does not establish that an animation was displayed.
+
+`Client::load_dialogs` captures database identity, principal incarnation and a bounded
+principal-local cache revision before I/O. Cache changes can conservatively reject the
+page, including rebuild/wipe followed by revalidation. Known removed heads or bodies
+reject the snapshot rather than inventing a head or unread count. Visibility checks,
+dialog metadata and insert-only entity/file hydration commit in one transaction;
+failures propagate. Removing a cached head hides it and marks read state pending in
+that same removal transaction. A successor needs a valid acceptance position, not a
+larger numeric message ID. Absent public outbox-read evidence remains absent in the
+retained protobuf and pending in the legacy scalar cache projection.
+
+### Shared message search
+
+`Messages::search(SearchRequest)` and the UniFFI `messagesSearch` protobuf-byte
+adapter are the single application search surface. There is no separate public
+cache search request, snippet model or local-only search method. The shared
+`Entity`/`EntityType` and `Reaction.custom_emoji_id` are generated application
+protobuf types; custom emoji retain their exact captured asset version.
+
+New searches try the server once. Only known local `NotConnected` or
+`NetworkUnavailable` errors may select native SQLite when configured and current
+admission checks pass. All Syntra runtime/RPC errors propagate, including
+Unavailable (status 14): it can report a current READ authority outage, not loss
+of connectivity. Ambiguous runtime unavailability is not guessed to be offline.
+Cancellation, deadlines, authentication/permission denial, invalid input/cursors,
+unavailable policy or unsupported methods, trust rejection and scope changes are
+errors, not cache misses. Search never connects implicitly. Cache results contain full cached
+`Message` bodies with `source=CACHE`, `coverage=CACHED_SUBSET`, including empty
+pages and exhaustion. `more_available` describes that selected backend only;
+neither cache exhaustion nor an empty page establishes complete server history.
+Unreported source and coverage remain unknown, not inferred from the socket.
+
+Continuations are opaque per-client in-memory handles, shared by its Rust clones,
+bound to the principal/source generation and exact query/filters. They expire
+five minutes after the sequence starts; at most 64 handles are retained and older
+handles can be evicted. They do not survive process restart. Page size may change;
+initial offset controls must be cleared when continuing. Cache continuations stay
+local after reconnect; remote continuations never silently fall back. Raw remote,
+foreign, expired or changed-scope cursors are rejected, never forwarded as a new
+search. Account/source and request admission fences are rechecked before returning
+any page. Cache continuations additionally reject intervening durable cache revisions.
+
+Local matching is a case-insensitive literal substring of the cached message text
+or caption, including punctuation and whitespace, not FTS token operators. The
+existing unicode61 FTS maintenance and safety tests remain, but token FTS cannot
+implement arbitrary infixes: shared Search traverses bounded source-ordered cache
+candidates and applies its literal/typed predicates to full decoded bodies. A
+page scans at most 128 candidates, batches at most 16, and returns at most 2 MB of
+message protobufs. Four blocking workers are admitted across clients; cancellation
+does not stop SQLite, so its worker retains the permit until completion.
+
+Target-local order and ID/offset boundaries use cached `accept_seq`, not numeric
+message-ID magnitude or edit time. A missing cached boundary fails explicitly;
+it is not guessed from an ID. Global cache traversal groups canonical targets
+in descending lexical order, then uses descending source position and message identity. It does not
+rank unrelated targets by their local positions. Missing source positions do not
+supply an ordering vote and are omitted. Sender, thread, inclusive date/ID bounds,
+offset windows and content filters are applied without dropping predicates.
+A present sender filter must name a positive `UserId`, not a `ChatId`, and is
+validated before either backend. Animated Photo metadata satisfies GIF only,
+not the static PHOTOS or PHOTO_VIDEO filters.
+Cached Documents select one content kind in sticker, video, audio, animated,
+then document precedence, independent of attribute order. Lower-priority
+attributes cannot additionally satisfy another content kind's filters.
+Unknown media classifications cannot satisfy a typed content predicate. Absent
+dates under date filters, pending sends, expired TTL bodies, invalidated scopes
+and tombstoned messages cannot become hits.
+Link/mention filters use retained typed entity evidence; cache recall and Unicode
+case handling are not promised to match the server index. No search read advances
+journal progress or hydrates/reinstates cache bodies.
+
+### Durable sending and preparation
+
+`Client::sending()` persists exact text/media/album request bytes and operation keys
+before dispatch. Inspection never transmits. Known transient refusal, rejection,
+unconfirmed execution, accepted history and accepted-pending scheduling are distinct
+states. Last failure code, raw code and outcome uncertainty commit with the state.
+Only an explicit exact-key retry may retransmit uncertain work. Accepted responses
+are retained before cache hydration; cache failure cannot turn them back into sends.
+Album acknowledgements require a common positive album ID, ordered source identities,
+item count, captions/entities and consistent scheduling. A pending acknowledgement
+does not establish delivery. Unversioned user/chat projections in accepted responses
+are insert-only and cannot replace an already cached entity snapshot.
+
+Attachment preparation publishes a main-only artifact and immutable manifest before
+upload. `Sending::attachment_manifest` (and the matching FFI adapter) exposes the
+source path, settings, hashes, artifact path and preparation profile. Repeating a key
+uses those exact retained bytes, even after restart or source replacement; it never
+invokes a codec again. The parent uses the existing transfer-intent CAS, is scoped to
+principal/provisioned trust and is bounded to 256 retained preparation keys per
+principal. Principal cleanup removes its owned artifact directory and intent rows.
+Upload checkpoints expose part counts separately from download prefix bytes; neither
+diagnostic counter authorizes skipping server verification.
+Normal `Sending::prepare_attachment` uses the host installed by
+`Client::configure_media_preparer` for image/video/audio/voice; documents retain their
+raw bytes. Swift installs `configureAVFoundationMediaPreparer()` and Kotlin installs
+`configureAndroidMediaPreparer()`. Decoder-only video configuration and FLAC convenience
+encoding do not satisfy this normal sending contract. Each invocation snapshots the encoder
+owner without holding its configuration lock. Callbacks must not capture the client;
+sign-out clears the configured callback without aborting retained native work.
+
+The explicit `Sending::prepare_native_attachment` uses an invocation-supplied encoder.
+Both paths inspect retained manifests before resolving an encoder. Native output is copied
+and hashed while its lease remains owned; the recipe, measured facts and source declaration
+commit before upload. `Sending::adopt_native_attachment` and the FFI
+`sendingAdoptNativeAttachment` entry adopt a retained `FfiPreparedNativeMedia` without
+encoding again. Durable artifacts use container-appropriate suffixes for native readers.
+Platform codec qualification is separate from durable artifact recovery tests.
+
+Native preparation and upload scratch files use the private writable parent of the
+host-configured SQLite database, outside principal artifact cleanup. In-memory
+storage retains the system temporary-directory default. Standalone
+`prepare_native_media` also retains that default; hosts without a usable system
+temporary directory (including Android below API 33) use
+`prepare_native_media_in` / UniFFI `prepareNativeMediaIn(path, scratchRoot, kind,
+preparer)` with an existing absolute private writable root such as Android
+`Context.cacheDir`. Sources may be read-only imports; their parents never select
+scratch destinations. The host must keep this root stable and available through
+native teardown and release of the returned artifact. Files retain their existing
+owned leases; each native destination is in a fresh owner-only directory, and the
+final snapshot is separate from that callback destination. No process-wide
+`TMPDIR` is set, and an unusable explicit root is an error, not a fallback.
+
+`Users::get_users` and `get_user_complete` provide typed profile reads without implicit
+unversioned cache replacement. `Messages::delete_history` requires a caller-persisted
+nonzero UUID and exact selection parameters. It never silently generates an operation
+ID; the durable sending coordinator supports only text, media and album sends.
 
 ## Platforms and fixtures
 

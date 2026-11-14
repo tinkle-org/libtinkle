@@ -23,7 +23,7 @@ parser.add_argument("--bindings", action="store_true", help="regenerate owned Sw
 parser.add_argument("command", nargs=argparse.REMAINDER, help="command executed in the isolated workspace (default: cargo test)")
 args = parser.parse_args()
 output = (args.output or Path(tempfile.mkdtemp(prefix="libtinkle-schema-candidate-"))).resolve()
-if output == ROOT or any(output.is_relative_to(ROOT / name) for name in ("crates", "scripts", ".cargo", "bindings")):
+if output.is_relative_to(ROOT) or ROOT.is_relative_to(output):
     raise SystemExit("candidate output must be a separate temporary/build directory")
 output.mkdir(parents=True, exist_ok=True)
 schema = args.schema.resolve(strict=True)
@@ -48,8 +48,9 @@ workspace = output / "workspace"
 workspace.mkdir(exist_ok=True)
 for name in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "uniffi-bindgen.toml"):
     shutil.copy2(ROOT / name, workspace / name)
-for name in ("crates", "scripts", ".cargo", "bindings"):
-    shutil.copytree(ROOT / name, workspace / name, dirs_exist_ok=True, ignore=shutil.ignore_patterns("target", "__pycache__"))
+for name in ("crates", "scripts", ".cargo", "bindings", "packages"):
+    shutil.copytree(ROOT / name, workspace / name, dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("target", "__pycache__", ".build", ".gradle", "build", "node_modules"))
 config = workspace / ".cargo/config.toml"
 with config.open("a") as handle:
     handle.write(f'\n[patch.buf]\n{package_name} = {{ path = {json.dumps(str(crate))} }}\n')
@@ -79,6 +80,7 @@ if command[:1] == ["--"]:
 subprocess.run(command or ["cargo", "test", "--locked", "--workspace", "--all-features"], cwd=workspace, env=env, check=True)
 if args.bindings:
     subprocess.run(["bash", "scripts/generate-bindings.sh", "--write"], cwd=workspace, env=env, check=True)
+    subprocess.run(["bash", "scripts/generate-bindings.sh", "--check"], cwd=workspace, env=env, check=True)
     binding_files = ("swift/TinkleSDK.swift", "swift/TinkleSDKFFI.h", "swift/module.modulemap", "kotlin/com/tinkle/sdk/tinkle_ffi.kt")
     for relative in binding_files:
         if not (workspace / "bindings" / relative).is_file():

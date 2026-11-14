@@ -5,16 +5,19 @@
 //! from [`libtinkle::TinkleError`] via codes, preserving variant structure so
 //! foreign cursor-store failures round-trip instead of panicking.
 //!
-//! Code mapping (never branch on text foreign-side):
-//! - `Unauthenticated` / `PermissionDenied` → [`FfiError::Auth`]
-//!   (re-authenticate, never blindly retry).
-//! - Transient recovery codes (`Unavailable`, `DeadlineExceeded`,
-//!   `Aborted`, `ResourceExhausted`, `Internal`, `Unknown`, `DataLoss`)
-//!   → [`FfiError::Retryable`] (bounded retry with backoff).
-//! - Everything else keeps its legacy variant (`Network`, `Sync`, …).
-//!   There is no rebuild variant: per-target reconciliation reports
-//!   failures as `ReconcileFailed` events and `Failed` target status,
-//!   never as a terminal stream error.
+//! Received RPC failures retain exact status/raw code, outcome uncertainty and conditional
+//! recovery guidance. Revision conflicts require refetch, not blind mutation retry.
+
+/// Recovery guidance does not authorize replay of an uncertain mutation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum FfiRpcRecovery {
+    /// Refetch the current revision and reconcile user intent before another mutation.
+    Refetch,
+    /// Only an idempotent read or explicitly authorized exact-key retry may back off and retry.
+    ConditionalRetry,
+    /// Correct input or authorization; do not retry the same mutation blindly.
+    DoNotRetry,
+}
 
 /// Errors surfaced to Swift/Kotlin.
 ///
@@ -24,6 +27,15 @@
 /// makes store failures round-trip instead of panicking.
 #[derive(Debug, Clone, thiserror::Error, uniffi::Error)]
 pub enum FfiError {
+    /// Exact terminal RPC status. Unknown outcome is not rollback, even for a received result.
+    #[error("RPC failed [{code}]: {diagnostic}")]
+    Rpc {
+        code: i32,
+        raw_code: Option<i32>,
+        diagnostic: String,
+        unknown_outcome: bool,
+        recovery: FfiRpcRecovery,
+    },
     #[error("network error: {0}")]
     Network(String),
     #[error("not connected: call connect() first")]
@@ -46,8 +58,7 @@ pub enum FfiError {
     /// credential); never retry the same bytes in a tight loop.
     #[error("authentication error: {0}")]
     Auth(String),
-    /// Transient failure: bounded retry with backoff is safe. Reconciliation
-    /// reads are idempotent; sends still require their `random_id` policy.
+    /// Local transient failure. Retry policy still depends on operation identity and uncertainty.
     #[error("transient error, retry with backoff: {0}")]
     Retryable(String),
 }
@@ -59,6 +70,28 @@ impl From<libtinkle::TinkleError> for FfiError {
             libtinkle::TinkleError::SignedOut => Self::Auth(e.to_string()),
             libtinkle::TinkleError::SecureStore => Self::Storage(e.to_string()),
             libtinkle::TinkleError::Syntra(s) => {
+                if let syntra_core::error::SyntraError::Rpc {
+                    code,
+                    raw_code,
+                    message,
+                } = &s
+                {
+                    return Self::Rpc {
+                        code: *code as i32,
+                        raw_code: *raw_code,
+                        diagnostic: message.clone(),
+                        unknown_outcome: s.is_unknown_outcome(),
+                        recovery: match code {
+                            syntra_core::ErrorCode::Aborted => FfiRpcRecovery::Refetch,
+                            syntra_core::ErrorCode::Unavailable
+                            | syntra_core::ErrorCode::DeadlineExceeded
+                            | syntra_core::ErrorCode::ResourceExhausted
+                            | syntra_core::ErrorCode::Internal
+                            | syntra_core::ErrorCode::Unknown => FfiRpcRecovery::ConditionalRetry,
+                            _ => FfiRpcRecovery::DoNotRetry,
+                        },
+                    };
+                }
                 let msg = s.to_string();
                 match s.code() {
                     syntra_core::ErrorCode::Cancelled => Self::Cancelled,
@@ -129,6 +162,7 @@ mod tests {
 
     fn discriminant(e: &FfiError) -> &'static str {
         match e {
+            FfiError::Rpc { .. } => "Rpc",
             FfiError::Network(_) => "Network",
             FfiError::NotConnected => "NotConnected",
             FfiError::Timeout => "Timeout",
@@ -166,13 +200,46 @@ mod tests {
             (C::DataLoss, "Retryable"),
             (C::Unauthenticated, "Auth"),
         ];
-        for (code, expected) in cases {
+        for (code, _) in cases {
             let syntra_ffi = FfiError::from(syntra_error(code));
-            assert_eq!(
-                discriminant(&syntra_ffi),
-                expected,
-                "Syntra {code:?} must map to {expected}"
-            );
+            assert_eq!(discriminant(&syntra_ffi), "Rpc");
+            let FfiError::Rpc {
+                code: got,
+                raw_code,
+                unknown_outcome,
+                recovery,
+                ..
+            } = syntra_ffi
+            else {
+                unreachable!()
+            };
+            assert_eq!(got, code as i32);
+            assert_eq!(raw_code, None);
+            assert_eq!(unknown_outcome, syntra_error(code).is_unknown_outcome());
+            if code == C::Aborted {
+                assert_eq!(recovery, FfiRpcRecovery::Refetch);
+            }
         }
+    }
+
+    /// Future status codes retain the exact received number and conservative outcome certainty.
+    #[test]
+    fn future_rpc_code_is_retained() {
+        let error = FfiError::from(libtinkle::TinkleError::Syntra(
+            syntra_core::error::SyntraError::Rpc {
+                code: syntra_core::ErrorCode::Unknown,
+                raw_code: Some(1234),
+                message: "future".into(),
+            },
+        ));
+        assert!(matches!(
+            error,
+            FfiError::Rpc {
+                code: 2,
+                raw_code: Some(1234),
+                unknown_outcome: true,
+                ..
+            }
+        ));
     }
 }

@@ -399,9 +399,13 @@ mod review_tests {
             )
             .await
             .unwrap();
+        let cache_fence = client
+            .capture_message_scope("user:42", "target:user:42")
+            .await
+            .unwrap();
         let blocker = rusqlite::Connection::open(&path).unwrap();
         blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
-        let write = client.ingest_messages(
+        let write = client.ingest_messages_fenced(
             "user:42",
             "target:user:42",
             IngestBatch {
@@ -411,6 +415,7 @@ mod review_tests {
                 exclude: &exclude,
             },
             epoch,
+            &cache_fence,
         );
         tokio::pin!(write);
         assert!(futures_util::poll!(&mut write).is_pending());
@@ -439,7 +444,12 @@ mod review_tests {
             // drain its gate before it can erase the old principal's cache.
             blocker.execute_batch("COMMIT").unwrap();
         });
-        written.unwrap();
+        // The admitted worker is drained before wipe, but its stale waiter must
+        // not report success after the irreversible authorization fence.
+        assert!(
+            matches!(written, Err(TinkleError::SignedOut)),
+            "stale ingestion returned {written:?}"
+        );
         logged_out.unwrap();
         assert!(storage.get_chat("user:42", 42).unwrap().is_none());
         assert_eq!(client.principal().await, crate::sync::UNKNOWN_PRINCIPAL);

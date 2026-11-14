@@ -471,6 +471,22 @@ private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
+    typealias FfiType = UInt8
+    typealias SwiftType = UInt8
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt8 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: UInt8, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt16: FfiConverterPrimitive {
     typealias FfiType = UInt16
     typealias SwiftType = UInt16
@@ -1365,6 +1381,880 @@ public func FfiConverterTypeFfiCursorStore_lower(_ value: FfiCursorStore) -> UIn
 
 
 /**
+ * SDK-owned source/destination lease. Retain through encoder finalization AND teardown.
+ */
+public protocol FfiNativeMediaInputProtocol: AnyObject, Sendable {
+
+    func deadlineMs()  -> UInt32
+
+    func isCancelled()  -> Bool
+
+    func kind()  -> FfiNativeMediaKind
+
+    func maxDurationMs()  -> UInt64
+
+    func maxFrames()  -> UInt32
+
+    func maxOutputBytes()  -> UInt64
+
+    func outputPath()  -> String
+
+    func sizeBytes()  -> UInt64
+
+    func sourcePath()  -> String
+
+}
+/**
+ * SDK-owned source/destination lease. Retain through encoder finalization AND teardown.
+ */
+open class FfiNativeMediaInput: FfiNativeMediaInputProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tinkle_ffi_fn_clone_ffinativemediainput(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tinkle_ffi_fn_free_ffinativemediainput(handle, $0) }
+    }
+
+
+
+
+open func deadlineMs() -> UInt32  {
+    return try!  FfiConverterUInt32.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffinativemediainput_deadline_ms(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func isCancelled() -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffinativemediainput_is_cancelled(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func kind() -> FfiNativeMediaKind  {
+    return try!  FfiConverterTypeFfiNativeMediaKind_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffinativemediainput_kind(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func maxDurationMs() -> UInt64  {
+    return try!  FfiConverterUInt64.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffinativemediainput_max_duration_ms(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func maxFrames() -> UInt32  {
+    return try!  FfiConverterUInt32.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffinativemediainput_max_frames(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func maxOutputBytes() -> UInt64  {
+    return try!  FfiConverterUInt64.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffinativemediainput_max_output_bytes(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func outputPath() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffinativemediainput_output_path(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func sizeBytes() -> UInt64  {
+    return try!  FfiConverterUInt64.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffinativemediainput_size_bytes(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func sourcePath() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffinativemediainput_source_path(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiNativeMediaInput: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = FfiNativeMediaInput
+
+    public static func lift(_ handle: UInt64) throws -> FfiNativeMediaInput {
+        return FfiNativeMediaInput(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: FfiNativeMediaInput) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiNativeMediaInput {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: FfiNativeMediaInput, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiNativeMediaInput_lift(_ handle: UInt64) throws -> FfiNativeMediaInput {
+    return try FfiConverterTypeFfiNativeMediaInput.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiNativeMediaInput_lower(_ value: FfiNativeMediaInput) -> UInt64 {
+    return FfiConverterTypeFfiNativeMediaInput.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Real local encoder. Completion must join all native work, even after cooperative cancellation.
+ * Only the SDK destination may be written; decoder-only adapters cannot implement this contract.
+ */
+public protocol FfiPlatformMediaPreparer: AnyObject, Sendable {
+
+    func prepare(input: FfiNativeMediaInput) async throws  -> FfiNativeMediaOutput
+
+}
+/**
+ * Real local encoder. Completion must join all native work, even after cooperative cancellation.
+ * Only the SDK destination may be written; decoder-only adapters cannot implement this contract.
+ */
+open class FfiPlatformMediaPreparerImpl: FfiPlatformMediaPreparer, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tinkle_ffi_fn_clone_ffiplatformmediapreparer(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tinkle_ffi_fn_free_ffiplatformmediapreparer(handle, $0) }
+    }
+
+
+
+
+open func prepare(input: FfiNativeMediaInput)async throws  -> FfiNativeMediaOutput  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_ffiplatformmediapreparer_prepare(
+                        self.uniffiCloneHandle(),FfiConverterTypeFfiNativeMediaInput_lower(input)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFfiNativeMediaOutput_lift,
+            errorHandler: FfiConverterTypeFfiMediaError_lift
+        )
+}
+
+
+
+}
+
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceFfiPlatformMediaPreparer {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceFfiPlatformMediaPreparer = UniffiVTableCallbackInterfaceFfiPlatformMediaPreparer(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypeFfiPlatformMediaPreparer.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface FfiPlatformMediaPreparer: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypeFfiPlatformMediaPreparer.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface FfiPlatformMediaPreparer: handle missing in uniffiClone")
+            }
+        },
+        prepare: { (
+            uniffiHandle: UInt64,
+            input: UInt64,
+            uniffiFutureCallback: @escaping UniffiForeignFutureCompleteRustBuffer,
+            uniffiCallbackData: UInt64,
+            uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
+        ) in
+            let makeCall = {
+                () async throws -> FfiNativeMediaOutput in
+                guard let uniffiObj = try? FfiConverterTypeFfiPlatformMediaPreparer.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try await uniffiObj.prepare(
+                     input: try FfiConverterTypeFfiNativeMediaInput_lift(input)
+                )
+            }
+
+            let uniffiHandleSuccess = { (returnValue: FfiNativeMediaOutput) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer(
+                        returnValue: FfiConverterTypeFfiNativeMediaOutput_lower(returnValue),
+                        callStatus: RustCallStatus()
+                    )
+                )
+            }
+            let uniffiHandleError = { (statusCode, errorBuf) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer(
+                        returnValue: RustBuffer.empty(),
+                        callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
+                    )
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall: makeCall,
+                handleSuccess: uniffiHandleSuccess,
+                handleError: uniffiHandleError,
+                lowerError: FfiConverterTypeFfiMediaError_lower,
+                droppedCallback: uniffiOutDroppedCallback
+            )
+        }
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceFfiPlatformMediaPreparer> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceFfiPlatformMediaPreparer>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
+}
+
+private func uniffiCallbackInitFfiPlatformMediaPreparer() {
+    uniffi_tinkle_ffi_fn_init_callback_vtable_ffiplatformmediapreparer(UniffiCallbackInterfaceFfiPlatformMediaPreparer.vtablePtr)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiPlatformMediaPreparer: FfiConverter {
+    fileprivate static let handleMap = UniffiHandleMap<FfiPlatformMediaPreparer>()
+
+    typealias FfiType = UInt64
+    typealias SwiftType = FfiPlatformMediaPreparer
+
+    public static func lift(_ handle: UInt64) throws -> FfiPlatformMediaPreparer {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return FfiPlatformMediaPreparerImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
+    }
+
+    public static func lower(_ value: FfiPlatformMediaPreparer) -> UInt64 {
+         if let rustImpl = value as? FfiPlatformMediaPreparerImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPlatformMediaPreparer {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: FfiPlatformMediaPreparer, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPlatformMediaPreparer_lift(_ handle: UInt64) throws -> FfiPlatformMediaPreparer {
+    return try FfiConverterTypeFfiPlatformMediaPreparer.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPlatformMediaPreparer_lower(_ value: FfiPlatformMediaPreparer) -> UInt64 {
+    return FfiConverterTypeFfiPlatformMediaPreparer.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Implement with AVFoundation or MediaExtractor/MediaCodec on native-owned execution queues.
+ * Bound allocations/queues, observe cancellation/deadline, and retain input until actual native
+ * completion. Do not remux/re-encode the source or retain a TinkleClient cycle in this callback.
+ */
+public protocol FfiPlatformVideoDecoder: AnyObject, Sendable {
+
+    /**
+     * Decode/validate the frozen MP4 and optionally return one bounded, oriented thumbnail.
+     */
+    func inspectAndDecode(input: FfiVideoInput, limits: FfiVideoDecodeLimits) async throws  -> FfiDecodedVideo
+
+}
+/**
+ * Implement with AVFoundation or MediaExtractor/MediaCodec on native-owned execution queues.
+ * Bound allocations/queues, observe cancellation/deadline, and retain input until actual native
+ * completion. Do not remux/re-encode the source or retain a TinkleClient cycle in this callback.
+ */
+open class FfiPlatformVideoDecoderImpl: FfiPlatformVideoDecoder, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tinkle_ffi_fn_clone_ffiplatformvideodecoder(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tinkle_ffi_fn_free_ffiplatformvideodecoder(handle, $0) }
+    }
+
+
+
+
+    /**
+     * Decode/validate the frozen MP4 and optionally return one bounded, oriented thumbnail.
+     */
+open func inspectAndDecode(input: FfiVideoInput, limits: FfiVideoDecodeLimits)async throws  -> FfiDecodedVideo  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_ffiplatformvideodecoder_inspect_and_decode(
+                        self.uniffiCloneHandle(),FfiConverterTypeFfiVideoInput_lower(input),FfiConverterTypeFfiVideoDecodeLimits_lower(limits)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFfiDecodedVideo_lift,
+            errorHandler: FfiConverterTypeFfiMediaError_lift
+        )
+}
+
+
+
+}
+
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceFfiPlatformVideoDecoder {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceFfiPlatformVideoDecoder = UniffiVTableCallbackInterfaceFfiPlatformVideoDecoder(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypeFfiPlatformVideoDecoder.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface FfiPlatformVideoDecoder: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypeFfiPlatformVideoDecoder.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface FfiPlatformVideoDecoder: handle missing in uniffiClone")
+            }
+        },
+        inspectAndDecode: { (
+            uniffiHandle: UInt64,
+            input: UInt64,
+            limits: RustBuffer,
+            uniffiFutureCallback: @escaping UniffiForeignFutureCompleteRustBuffer,
+            uniffiCallbackData: UInt64,
+            uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
+        ) in
+            let makeCall = {
+                () async throws -> FfiDecodedVideo in
+                guard let uniffiObj = try? FfiConverterTypeFfiPlatformVideoDecoder.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try await uniffiObj.inspectAndDecode(
+                     input: try FfiConverterTypeFfiVideoInput_lift(input),
+                     limits: try FfiConverterTypeFfiVideoDecodeLimits_lift(limits)
+                )
+            }
+
+            let uniffiHandleSuccess = { (returnValue: FfiDecodedVideo) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer(
+                        returnValue: FfiConverterTypeFfiDecodedVideo_lower(returnValue),
+                        callStatus: RustCallStatus()
+                    )
+                )
+            }
+            let uniffiHandleError = { (statusCode, errorBuf) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer(
+                        returnValue: RustBuffer.empty(),
+                        callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
+                    )
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall: makeCall,
+                handleSuccess: uniffiHandleSuccess,
+                handleError: uniffiHandleError,
+                lowerError: FfiConverterTypeFfiMediaError_lower,
+                droppedCallback: uniffiOutDroppedCallback
+            )
+        }
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceFfiPlatformVideoDecoder> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceFfiPlatformVideoDecoder>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
+}
+
+private func uniffiCallbackInitFfiPlatformVideoDecoder() {
+    uniffi_tinkle_ffi_fn_init_callback_vtable_ffiplatformvideodecoder(UniffiCallbackInterfaceFfiPlatformVideoDecoder.vtablePtr)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiPlatformVideoDecoder: FfiConverter {
+    fileprivate static let handleMap = UniffiHandleMap<FfiPlatformVideoDecoder>()
+
+    typealias FfiType = UInt64
+    typealias SwiftType = FfiPlatformVideoDecoder
+
+    public static func lift(_ handle: UInt64) throws -> FfiPlatformVideoDecoder {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return FfiPlatformVideoDecoderImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
+    }
+
+    public static func lower(_ value: FfiPlatformVideoDecoder) -> UInt64 {
+         if let rustImpl = value as? FfiPlatformVideoDecoderImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPlatformVideoDecoder {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: FfiPlatformVideoDecoder, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPlatformVideoDecoder_lift(_ handle: UInt64) throws -> FfiPlatformVideoDecoder {
+    return try FfiConverterTypeFfiPlatformVideoDecoder.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPlatformVideoDecoder_lower(_ value: FfiPlatformVideoDecoder) -> UInt64 {
+    return FfiConverterTypeFfiPlatformVideoDecoder.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Stable owned result. Path lifetime is this object; upload/adoption must retain it until copied.
+ */
+public protocol FfiPreparedNativeMediaProtocol: AnyObject, Sendable {
+
+    func facts()  -> FfiNativeMediaOutput
+
+    func mimeType()  -> String
+
+    func outputSha256()  -> Data
+
+    func path()  -> String
+
+    func recipe()  -> String
+
+    func sourceSha256()  -> Data
+
+    func waveform()  -> Data
+
+}
+/**
+ * Stable owned result. Path lifetime is this object; upload/adoption must retain it until copied.
+ */
+open class FfiPreparedNativeMedia: FfiPreparedNativeMediaProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tinkle_ffi_fn_clone_ffipreparednativemedia(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tinkle_ffi_fn_free_ffipreparednativemedia(handle, $0) }
+    }
+
+
+
+
+open func facts() -> FfiNativeMediaOutput  {
+    return try!  FfiConverterTypeFfiNativeMediaOutput_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_facts(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func mimeType() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_mime_type(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func outputSha256() -> Data  {
+    return try!  FfiConverterData.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_output_sha256(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func path() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_path(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func recipe() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_recipe(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func sourceSha256() -> Data  {
+    return try!  FfiConverterData.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_source_sha256(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func waveform() -> Data  {
+    return try!  FfiConverterData.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffipreparednativemedia_waveform(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiPreparedNativeMedia: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = FfiPreparedNativeMedia
+
+    public static func lift(_ handle: UInt64) throws -> FfiPreparedNativeMedia {
+        return FfiPreparedNativeMedia(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: FfiPreparedNativeMedia) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPreparedNativeMedia {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: FfiPreparedNativeMedia, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPreparedNativeMedia_lift(_ handle: UInt64) throws -> FfiPreparedNativeMedia {
+    return try FfiConverterTypeFfiPreparedNativeMedia.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPreparedNativeMedia_lower(_ value: FfiPreparedNativeMedia) -> UInt64 {
+    return FfiConverterTypeFfiPreparedNativeMedia.lower(value)
+}
+
+
+
+
+
+
+/**
  * Implement over confidential, durable platform storage. Returning success from
  * commit acknowledges durability, never an asynchronous enqueue. Operation is
  * create-only; Candidate replaces only its operation; Active atomically installs
@@ -2238,6 +3128,192 @@ public func FfiConverterTypeFfiSecureEnrollmentStore_lower(_ value: FfiSecureEnr
 
 
 /**
+ * Opaque, invocation-owned read lease. Retain this object until native codec work actually
+ * completes, even after cancellation/timeout. Never modify, move or delete source_path().
+ * Retaining the pathname alone does not retain the source file or bounded worker admission.
+ */
+public protocol FfiVideoInputProtocol: AnyObject, Sendable {
+
+    /**
+     * Cooperative cancellation, including timeout and dropped waiters. Stop/join native work,
+     * but keep this lease until that work really stops reading the source.
+     */
+    func isCancelled()  -> Bool
+
+    /**
+     * Source length; no full-size video bytes cross this interface.
+     */
+    func sizeBytes()  -> UInt64
+
+    /**
+     * Read-only frozen local input. This is not a caller path and is not a transfer destination.
+     */
+    func sourcePath()  -> String
+
+    /**
+     * SHA-256 of exactly the frozen source; common Rust verifies it again after the callback.
+     */
+    func sourceSha256()  -> Data
+
+}
+/**
+ * Opaque, invocation-owned read lease. Retain this object until native codec work actually
+ * completes, even after cancellation/timeout. Never modify, move or delete source_path().
+ * Retaining the pathname alone does not retain the source file or bounded worker admission.
+ */
+open class FfiVideoInput: FfiVideoInputProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tinkle_ffi_fn_clone_ffivideoinput(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tinkle_ffi_fn_free_ffivideoinput(handle, $0) }
+    }
+
+
+
+
+    /**
+     * Cooperative cancellation, including timeout and dropped waiters. Stop/join native work,
+     * but keep this lease until that work really stops reading the source.
+     */
+open func isCancelled() -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffivideoinput_is_cancelled(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * Source length; no full-size video bytes cross this interface.
+     */
+open func sizeBytes() -> UInt64  {
+    return try!  FfiConverterUInt64.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffivideoinput_size_bytes(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * Read-only frozen local input. This is not a caller path and is not a transfer destination.
+     */
+open func sourcePath() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffivideoinput_source_path(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * SHA-256 of exactly the frozen source; common Rust verifies it again after the callback.
+     */
+open func sourceSha256() -> Data  {
+    return try!  FfiConverterData.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_ffivideoinput_source_sha256(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiVideoInput: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = FfiVideoInput
+
+    public static func lift(_ handle: UInt64) throws -> FfiVideoInput {
+        return FfiVideoInput(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: FfiVideoInput) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiVideoInput {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: FfiVideoInput, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiVideoInput_lift(_ handle: UInt64) throws -> FfiVideoInput {
+    return try FfiConverterTypeFfiVideoInput.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiVideoInput_lower(_ value: FfiVideoInput) -> UInt64 {
+    return FfiConverterTypeFfiVideoInput.lower(value)
+}
+
+
+
+
+
+
+/**
  * In-memory store for tests and ephemeral sessions. Wraps
  * [`libtinkle::InMemoryCursorStore`]; production apps implement
  * [`FfiCursorStore`] over SQLite/Keychain/DataStore instead.
@@ -2536,7 +3612,7 @@ public protocol SqliteStorageProtocol: AnyObject, Sendable {
 
     /**
      * Durable journal cursor for one conversation: the last applied
-     * `GetTargetChanges.last_accept_seq` (`None` when nothing applied yet).
+     * `ListMessageChanges.last_accept_seq` (`None` when nothing applied yet).
      * `target_key` is `target:user:<id>` / `target:room:<id>`.
      */
     func loadJournal(principal: String, targetKey: String) async throws  -> Int64?
@@ -2759,7 +3835,7 @@ open func listDialogs(principal: String, limit: UInt32)async throws  -> [FfiDial
 
     /**
      * Durable journal cursor for one conversation: the last applied
-     * `GetTargetChanges.last_accept_seq` (`None` when nothing applied yet).
+     * `ListMessageChanges.last_accept_seq` (`None` when nothing applied yet).
      * `target_key` is `target:user:<id>` / `target:room:<id>`.
      */
 open func loadJournal(principal: String, targetKey: String)async throws  -> Int64?  {
@@ -3115,7 +4191,7 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
      * `None` preserves absence for idempotency. Returns the encoded
      * `FileInfo` protobuf bytes; hosts decode with their own bindings.
      */
-    func filesUploadBytes(idempotencyKey: String, data: Data, fileName: String?, mimeType: String?, sha256: Data?, encrypted: Bool) async throws  -> Data
+    func filesUploadBytes(idempotencyKey: String, data: Data, fileName: String?, mimeType: String?, sha256: Data?) async throws  -> Data
 
     /**
      * Files upload: `UploadPart` (Syntra primary, gRPC fallback).
@@ -3140,24 +4216,6 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
     func getMessages(targetKind: String, targetId: Int64, messageIds: [Int64]) async throws  -> Data
 
     /**
-     * List retained conversation mutations strictly after one accept
-     * position (`GetTargetChanges`).
-     *
-     * `after_accept_seq` is the exclusive lower bound (zero requests
-     * everything retained); `limit` bounds one page (`0` selects the
-     * deployment default, `1..=500` otherwise). Changes ascend strictly by
-     * `accept_seq`; edited changes carry the current body while
-     * deleted/revoked changes carry identity and kind only.
-     * `more_available` reports continuation: `Some(true)` means request the
-     * next page from `last_accept_seq`; `Some(false)` confirms caught up;
-     * absent is unknown, never caught up.
-     *
-     * Returns the encoded `GetTargetChangesResponse` protobuf bytes; hosts
-     * decode with their own generated bindings.
-     */
-    func getTargetChanges(targetKind: String, targetId: Int64, afterAcceptSeq: Int64, limit: Int32) async throws  -> Data
-
-    /**
      * True while the transport is live (connection exists and its
      * notification pump has not exited).
      */
@@ -3173,6 +4231,24 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
      * True while [`Self::suspend`] is in effect.
      */
     func isSuspended() async  -> Bool
+
+    /**
+     * List retained conversation mutations strictly after one accept
+     * position (`ListMessageChanges`).
+     *
+     * `after_accept_seq` is the exclusive lower bound (zero requests
+     * everything retained); `limit` bounds one page (`0` selects the
+     * deployment default, `1..=500` otherwise). Changes ascend strictly by
+     * `accept_seq`; edited changes carry the current body while
+     * deleted/revoked changes carry identity and kind only.
+     * `more_available` reports continuation: `Some(true)` means request the
+     * next page from `last_accept_seq`; `Some(false)` confirms caught up;
+     * absent is unknown, never caught up.
+     *
+     * Returns the encoded `ListMessageChangesResponse` protobuf bytes; hosts
+     * decode with their own generated bindings.
+     */
+    func listMessageChanges(targetKind: String, targetId: Int64, afterAcceptSeq: Int64, limit: Int32) async throws  -> Data
 
     /**
      * Fetch dialogs. Like [`Self::load_history`], the fetch never touches
@@ -3215,7 +4291,7 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
      * Number of outstanding RPCs on the live connection (zero offline).
      * Send-state query: a nonzero value after reconnect means results
      * reported `UNAVAILABLE` with unknown outcome — retry only with the
-     * same `random_id` and fresh correlation.
+     * same `idempotency_key` and fresh correlation.
      */
     func pendingLen() async  -> UInt64
 
@@ -3264,12 +4340,12 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
      * Returns the server-assigned message id.
      *
      * `target_id` must be positive; `target_kind` is `"user"` for direct
-     * messages, `"room"`/`"chat"` for groups. `random_id` must be nonzero
-     * (and fit in `i64` — the application operation key for idempotent
-     * retry). The server response must carry a message with a positive id;
+     * messages, `"room"`/`"chat"` for groups. `idempotency_key` must be nonzero
+     * (a signed 64-bit application key for idempotent retry).
+     * The server response must carry a message with a positive id;
      * a missing or non-positive id is a codec error, never zero.
      */
-    func sendMessage(targetKind: String, targetId: Int64, text: String, randomId: UInt64) async throws  -> UInt64
+    func sendMessage(targetKind: String, targetId: Int64, text: String, idempotencyKey: Int64) async throws  -> UInt64
 
     /**
      * Set the authenticated principal from a known user id.
@@ -3445,6 +4521,501 @@ public protocol TinkleClientProtocol: AnyObject, Sendable {
      * Returns the server's `removed` flag. Call BEFORE `logout`.
      */
     func unregisterPush(token: String) async throws  -> Bool
+
+    /**
+     * Remove only a settled/never-dispatched job. Uncertain jobs remain retained.
+     */
+    func sendingDiscard(jobId: String) async throws  -> Bool
+
+    /**
+     * Persist one atomic SendAlbumRequest with distinct retained per-item keys.
+     */
+    func sendingEnqueueAlbum(jobId: String, request: Data) async throws  -> FfiOutgoingJob
+
+    /**
+     * Persist a SendMediaRequest containing completed main/variant file IDs.
+     */
+    func sendingEnqueueMedia(jobId: String, request: Data) async throws  -> FfiOutgoingJob
+
+    /**
+     * Persist a SendMessageRequest; zero idempotency_key asks Rust for a stable secure operation key.
+     */
+    func sendingEnqueueMessage(jobId: String, request: Data) async throws  -> FfiOutgoingJob
+
+    /**
+     * Read one retained request/result offline, without replaying a mutation.
+     */
+    func sendingGetJob(jobId: String) async throws  -> FfiOutgoingJob
+
+    /**
+     * Inspect all retained jobs without network activity; accepted results are not replayed.
+     */
+    func sendingJobs() async throws  -> [FfiOutgoingJobSummary]
+
+    /**
+     * Attempt/resume a retained job, with explicit permission for uncertain exact-key retries.
+     */
+    func sendingResume(jobId: String, retry: FfiSendRetry, control: TransferControl) async throws  -> FfiOutgoingJob
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func accountDeleteProfilePhoto(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func accountGetProfilePhotos(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func accountSelectProfilePhoto(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func accountSetProfilePhoto(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func accountUpdateProfile(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func accountUpdateUsername(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func accountValidateUsername(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesAddChatParticipant(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesBatchGetMessageReactions(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesCancelScheduledMessages(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesClosePoll(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesCreateChat(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesDeleteHistory(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesDeleteMessages(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesEditChatAdmin(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesEditChatPhoto(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesEditChatRestrictedScopes(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesEditChatTitle(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesEditMessage(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesGetChatDetails(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesGetChats(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesGetDialogs(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesGetHistory(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesGetMessages(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesGetPollResults(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesGetPollVotes(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesGetRecentReactions(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesGetScheduledMessages(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesGetUnreadMentions(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesGetUnreadReactions(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesListMessageChanges(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesListMessageReactions(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesListThreadMessages(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesMarkHistoryRead(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesReadMentions(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesReadReactions(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesReadThread(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesRemoveChatParticipant(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesSearch(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesSendAlbum(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesSendMedia(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesSendMessage(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesSendReaction(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesSendVote(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesSetHistoryTtl(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesSetMessagePin(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesSetTyping(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesStartBot(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesUnpinAllMessages(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func messagesUpdateChatDescription(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersAddPackAsset(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersClearRecentStickers(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersCreatePack(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersCreateStickerAsset(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersDeletePack(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersDeleteStickerAsset(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersGetArchivedPacks(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersGetFavoriteStickers(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersGetInstalledPacks(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersGetOwnedPacks(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersGetPack(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersGetPackByShortName(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersGetRecentStickers(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersGetStickerAssets(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersInstallPack(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersPublishPack(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersRemovePackAsset(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersReorderPackAssets(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersReorderPacks(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersSaveRecentSticker(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersSearchPacks(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersToggleFavoriteSticker(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersUninstallPack(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersUnpublishPack(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersUpdatePack(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func stickersUpdateStickerAsset(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func usersGetUserComplete(request: Data) async throws  -> Data
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+    func usersGetUsers(request: Data) async throws  -> Data
+
+    /**
+     * Release the configured callback. Retained manifests remain resumable without an encoder.
+     */
+    func clearNativeMediaPreparer() throws
+
+    /**
+     * Install the real host encoder for normal attachment preparation; never capture this client
+     * inside the callback. Clearing it does not abort native work already retained by an invocation.
+     */
+    func configureNativeMediaPreparer(preparer: FfiPlatformMediaPreparer) throws
+
+    /**
+     * Download at most the core's bounded byte-convenience limit using only this exact context.
+     */
+    func filesDownloadBytesWithContext(fileId: Int64, context: Data, control: TransferControl) async throws  -> Data
+
+    /**
+     * Verify a streamed download and atomically publish the destination. No file-sized FFI buffer.
+     */
+    func filesDownloadToPath(fileId: Int64, path: String, cacheDirectory: String?, control: TransferControl) async throws  -> String
+
+    /**
+     * Stream to disk under exactly the encoded FileAccessContext; denial never retries as uploader.
+     */
+    func filesDownloadToPathWithContext(fileId: Int64, path: String, context: Data, cacheDirectory: String?, control: TransferControl) async throws  -> String
+
+    /**
+     * Read one durable transfer observation on a blocking worker, fenced to this principal.
+     */
+    func filesTransferCheckpoint(jobId: String) async throws  -> FfiTransferCheckpoint?
+
+    /**
+     * Stream a native path through the Rust snapshot/resume upload pipeline; returns FileInfo bytes.
+     */
+    func filesUploadPath(path: String, options: FfiUploadOptions, control: TransferControl) async throws  -> Data
+
+    /**
+     * Adopt the exact retained native artifact, verifying its copied hash and persisting its
+     * recipe/facts under this account and trust before uploading. No codec callback is invoked.
+     */
+    func sendingAdoptNativeAttachment(key: String, sourcePath: String, prepared: FfiPreparedNativeMedia, control: TransferControl) async throws  -> FfiPreparedAttachment
+
+    /**
+     * Read retained preparation identity without starting a codec or network request.
+     */
+    func sendingAttachmentManifest(key: String) async throws  -> FfiAttachmentManifest?
+
+    /**
+     * Prepare real native input and upload completed main/thumbnail files for a typed media send.
+     */
+    func sendingPrepareAttachment(key: String, path: String, kind: FfiMediaKind, control: TransferControl) async throws  -> FfiPreparedAttachment
+
+    /**
+     * Persist a real native encoder's main-only output before upload. Retries use the retained
+     * artifact without invoking the callback; no client-wide callback retention is needed.
+     */
+    func sendingPrepareNativeAttachment(key: String, path: String, kind: FfiNativeMediaKind, preparer: FfiPlatformMediaPreparer, control: TransferControl) async throws  -> FfiPreparedAttachment
+
+    /**
+     * Remove the configured decoder. Future video preparation returns typed Unsupported;
+     * existing native work keeps its captured callback/read lease until actual completion.
+     */
+    func clearVideoDecoder() throws
+
+    /**
+     * Select the native decoder used by sending_prepare_attachment(Video); installation is real,
+     * not a capability flag. Each operation retains its selected callback through completion.
+     */
+    func configureVideoDecoder(decoder: FfiPlatformVideoDecoder) throws
 
 }
 /**
@@ -3842,12 +5413,12 @@ open func filesGetUploadStatus(request: Data)async throws  -> Data  {
      * `None` preserves absence for idempotency. Returns the encoded
      * `FileInfo` protobuf bytes; hosts decode with their own bindings.
      */
-open func filesUploadBytes(idempotencyKey: String, data: Data, fileName: String?, mimeType: String?, sha256: Data?, encrypted: Bool)async throws  -> Data  {
+open func filesUploadBytes(idempotencyKey: String, data: Data, fileName: String?, mimeType: String?, sha256: Data?)async throws  -> Data  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tinkle_ffi_fn_method_tinkleclient_files_upload_bytes(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(idempotencyKey),FfiConverterData.lower(data),FfiConverterOptionString.lower(fileName),FfiConverterOptionString.lower(mimeType),FfiConverterOptionData.lower(sha256),FfiConverterBool.lower(encrypted)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(idempotencyKey),FfiConverterData.lower(data),FfiConverterOptionString.lower(fileName),FfiConverterOptionString.lower(mimeType),FfiConverterOptionData.lower(sha256)
                 )
             },
             pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
@@ -3909,38 +5480,6 @@ open func getMessages(targetKind: String, targetId: Int64, messageIds: [Int64])a
 }
 
     /**
-     * List retained conversation mutations strictly after one accept
-     * position (`GetTargetChanges`).
-     *
-     * `after_accept_seq` is the exclusive lower bound (zero requests
-     * everything retained); `limit` bounds one page (`0` selects the
-     * deployment default, `1..=500` otherwise). Changes ascend strictly by
-     * `accept_seq`; edited changes carry the current body while
-     * deleted/revoked changes carry identity and kind only.
-     * `more_available` reports continuation: `Some(true)` means request the
-     * next page from `last_accept_seq`; `Some(false)` confirms caught up;
-     * absent is unknown, never caught up.
-     *
-     * Returns the encoded `GetTargetChangesResponse` protobuf bytes; hosts
-     * decode with their own generated bindings.
-     */
-open func getTargetChanges(targetKind: String, targetId: Int64, afterAcceptSeq: Int64, limit: Int32)async throws  -> Data  {
-    return
-        try  await uniffiRustCallAsync(
-            rustFutureFunc: {
-                uniffi_tinkle_ffi_fn_method_tinkleclient_get_target_changes(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(targetKind),FfiConverterInt64.lower(targetId),FfiConverterInt64.lower(afterAcceptSeq),FfiConverterInt32.lower(limit)
-                )
-            },
-            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
-            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
-            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
-            liftFunc: FfiConverterData.lift,
-            errorHandler: FfiConverterTypeFfiError_lift
-        )
-}
-
-    /**
      * True while the transport is live (connection exists and its
      * notification pump has not exited).
      */
@@ -3991,6 +5530,38 @@ open func isSuspended()async  -> Bool  {
             liftFunc: FfiConverterBool.lift,
             errorHandler: nil
 
+        )
+}
+
+    /**
+     * List retained conversation mutations strictly after one accept
+     * position (`ListMessageChanges`).
+     *
+     * `after_accept_seq` is the exclusive lower bound (zero requests
+     * everything retained); `limit` bounds one page (`0` selects the
+     * deployment default, `1..=500` otherwise). Changes ascend strictly by
+     * `accept_seq`; edited changes carry the current body while
+     * deleted/revoked changes carry identity and kind only.
+     * `more_available` reports continuation: `Some(true)` means request the
+     * next page from `last_accept_seq`; `Some(false)` confirms caught up;
+     * absent is unknown, never caught up.
+     *
+     * Returns the encoded `ListMessageChangesResponse` protobuf bytes; hosts
+     * decode with their own generated bindings.
+     */
+open func listMessageChanges(targetKind: String, targetId: Int64, afterAcceptSeq: Int64, limit: Int32)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_list_message_changes(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(targetKind),FfiConverterInt64.lower(targetId),FfiConverterInt64.lower(afterAcceptSeq),FfiConverterInt32.lower(limit)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
         )
 }
 
@@ -4078,7 +5649,7 @@ open func nextEvent()async  -> FfiSyncEvent?  {
      * Number of outstanding RPCs on the live connection (zero offline).
      * Send-state query: a nonzero value after reconnect means results
      * reported `UNAVAILABLE` with unknown outcome — retry only with the
-     * same `random_id` and fresh correlation.
+     * same `idempotency_key` and fresh correlation.
      */
 open func pendingLen()async  -> UInt64  {
     return
@@ -4199,17 +5770,17 @@ open func resume()async   {
      * Returns the server-assigned message id.
      *
      * `target_id` must be positive; `target_kind` is `"user"` for direct
-     * messages, `"room"`/`"chat"` for groups. `random_id` must be nonzero
-     * (and fit in `i64` — the application operation key for idempotent
-     * retry). The server response must carry a message with a positive id;
+     * messages, `"room"`/`"chat"` for groups. `idempotency_key` must be nonzero
+     * (a signed 64-bit application key for idempotent retry).
+     * The server response must carry a message with a positive id;
      * a missing or non-positive id is a codec error, never zero.
      */
-open func sendMessage(targetKind: String, targetId: Int64, text: String, randomId: UInt64)async throws  -> UInt64  {
+open func sendMessage(targetKind: String, targetId: Int64, text: String, idempotencyKey: Int64)async throws  -> UInt64  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tinkle_ffi_fn_method_tinkleclient_send_message(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(targetKind),FfiConverterInt64.lower(targetId),FfiConverterString.lower(text),FfiConverterUInt64.lower(randomId)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(targetKind),FfiConverterInt64.lower(targetId),FfiConverterString.lower(text),FfiConverterInt64.lower(idempotencyKey)
                 )
             },
             pollFunc: ffi_tinkle_ffi_rust_future_poll_u64,
@@ -4723,6 +6294,1843 @@ open func unregisterPush(token: String)async throws  -> Bool  {
         )
 }
 
+    /**
+     * Remove only a settled/never-dispatched job. Uncertain jobs remain retained.
+     */
+open func sendingDiscard(jobId: String)async throws  -> Bool  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_sending_discard(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(jobId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_i8,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_i8,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: FfiConverterTypeFfiSendError_lift
+        )
+}
+
+    /**
+     * Persist one atomic SendAlbumRequest with distinct retained per-item keys.
+     */
+open func sendingEnqueueAlbum(jobId: String, request: Data)async throws  -> FfiOutgoingJob  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_sending_enqueue_album(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(jobId),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFfiOutgoingJob_lift,
+            errorHandler: FfiConverterTypeFfiSendError_lift
+        )
+}
+
+    /**
+     * Persist a SendMediaRequest containing completed main/variant file IDs.
+     */
+open func sendingEnqueueMedia(jobId: String, request: Data)async throws  -> FfiOutgoingJob  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_sending_enqueue_media(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(jobId),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFfiOutgoingJob_lift,
+            errorHandler: FfiConverterTypeFfiSendError_lift
+        )
+}
+
+    /**
+     * Persist a SendMessageRequest; zero idempotency_key asks Rust for a stable secure operation key.
+     */
+open func sendingEnqueueMessage(jobId: String, request: Data)async throws  -> FfiOutgoingJob  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_sending_enqueue_message(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(jobId),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFfiOutgoingJob_lift,
+            errorHandler: FfiConverterTypeFfiSendError_lift
+        )
+}
+
+    /**
+     * Read one retained request/result offline, without replaying a mutation.
+     */
+open func sendingGetJob(jobId: String)async throws  -> FfiOutgoingJob  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_sending_get_job(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(jobId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFfiOutgoingJob_lift,
+            errorHandler: FfiConverterTypeFfiSendError_lift
+        )
+}
+
+    /**
+     * Inspect all retained jobs without network activity; accepted results are not replayed.
+     */
+open func sendingJobs()async throws  -> [FfiOutgoingJobSummary]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_sending_jobs(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiOutgoingJobSummary.lift,
+            errorHandler: FfiConverterTypeFfiSendError_lift
+        )
+}
+
+    /**
+     * Attempt/resume a retained job, with explicit permission for uncertain exact-key retries.
+     */
+open func sendingResume(jobId: String, retry: FfiSendRetry, control: TransferControl)async throws  -> FfiOutgoingJob  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_sending_resume(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(jobId),FfiConverterTypeFfiSendRetry_lower(retry),FfiConverterTypeTransferControl_lower(control)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFfiOutgoingJob_lift,
+            errorHandler: FfiConverterTypeFfiSendError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func accountDeleteProfilePhoto(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_account_delete_profile_photo(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func accountGetProfilePhotos(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_account_get_profile_photos(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func accountSelectProfilePhoto(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_account_select_profile_photo(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func accountSetProfilePhoto(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_account_set_profile_photo(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func accountUpdateProfile(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_account_update_profile(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func accountUpdateUsername(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_account_update_username(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func accountValidateUsername(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_account_validate_username(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesAddChatParticipant(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_add_chat_participant(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesBatchGetMessageReactions(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_batch_get_message_reactions(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesCancelScheduledMessages(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_cancel_scheduled_messages(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesClosePoll(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_close_poll(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesCreateChat(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_create_chat(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesDeleteHistory(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_delete_history(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesDeleteMessages(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_delete_messages(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesEditChatAdmin(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_edit_chat_admin(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesEditChatPhoto(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_edit_chat_photo(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesEditChatRestrictedScopes(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_edit_chat_restricted_scopes(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesEditChatTitle(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_edit_chat_title(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesEditMessage(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_edit_message(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesGetChatDetails(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_chat_details(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesGetChats(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_chats(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesGetDialogs(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_dialogs(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesGetHistory(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_history(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesGetMessages(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_messages(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesGetPollResults(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_poll_results(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesGetPollVotes(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_poll_votes(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesGetRecentReactions(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_recent_reactions(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesGetScheduledMessages(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_scheduled_messages(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesGetUnreadMentions(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_unread_mentions(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesGetUnreadReactions(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_get_unread_reactions(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesListMessageChanges(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_list_message_changes(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesListMessageReactions(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_list_message_reactions(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesListThreadMessages(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_list_thread_messages(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesMarkHistoryRead(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_mark_history_read(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesReadMentions(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_read_mentions(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesReadReactions(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_read_reactions(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesReadThread(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_read_thread(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesRemoveChatParticipant(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_remove_chat_participant(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesSearch(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_search(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesSendAlbum(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_send_album(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesSendMedia(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_send_media(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesSendMessage(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_send_message(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesSendReaction(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_send_reaction(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesSendVote(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_send_vote(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesSetHistoryTtl(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_set_history_ttl(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesSetMessagePin(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_set_message_pin(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesSetTyping(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_set_typing(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesStartBot(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_start_bot(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesUnpinAllMessages(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_unpin_all_messages(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func messagesUpdateChatDescription(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_messages_update_chat_description(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersAddPackAsset(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_add_pack_asset(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersClearRecentStickers(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_clear_recent_stickers(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersCreatePack(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_create_pack(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersCreateStickerAsset(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_create_sticker_asset(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersDeletePack(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_delete_pack(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersDeleteStickerAsset(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_delete_sticker_asset(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersGetArchivedPacks(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_archived_packs(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersGetFavoriteStickers(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_favorite_stickers(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersGetInstalledPacks(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_installed_packs(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersGetOwnedPacks(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_owned_packs(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersGetPack(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_pack(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersGetPackByShortName(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_pack_by_short_name(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersGetRecentStickers(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_recent_stickers(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersGetStickerAssets(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_get_sticker_assets(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersInstallPack(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_install_pack(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersPublishPack(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_publish_pack(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersRemovePackAsset(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_remove_pack_asset(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersReorderPackAssets(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_reorder_pack_assets(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersReorderPacks(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_reorder_packs(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersSaveRecentSticker(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_save_recent_sticker(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersSearchPacks(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_search_packs(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersToggleFavoriteSticker(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_toggle_favorite_sticker(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersUninstallPack(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_uninstall_pack(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersUnpublishPack(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_unpublish_pack(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersUpdatePack(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_update_pack(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func stickersUpdateStickerAsset(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_stickers_update_sticker_asset(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func usersGetUserComplete(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_users_get_user_complete(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Decode the named request, validate locally, and invoke once. Returns its response protobuf.
+     */
+open func usersGetUsers(request: Data)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_users_get_users(
+                        self.uniffiCloneHandle(),FfiConverterData.lower(request)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Release the configured callback. Retained manifests remain resumable without an encoder.
+     */
+open func clearNativeMediaPreparer()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_tinkleclient_clear_native_media_preparer(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+
+    /**
+     * Install the real host encoder for normal attachment preparation; never capture this client
+     * inside the callback. Clearing it does not abort native work already retained by an invocation.
+     */
+open func configureNativeMediaPreparer(preparer: FfiPlatformMediaPreparer)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_tinkleclient_configure_native_media_preparer(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiPlatformMediaPreparer_lower(preparer),uniffiCallStatus
+    )
+}
+}
+
+    /**
+     * Download at most the core's bounded byte-convenience limit using only this exact context.
+     */
+open func filesDownloadBytesWithContext(fileId: Int64, context: Data, control: TransferControl)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_files_download_bytes_with_context(
+                        self.uniffiCloneHandle(),FfiConverterInt64.lower(fileId),FfiConverterData.lower(context),FfiConverterTypeTransferControl_lower(control)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Verify a streamed download and atomically publish the destination. No file-sized FFI buffer.
+     */
+open func filesDownloadToPath(fileId: Int64, path: String, cacheDirectory: String?, control: TransferControl)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_files_download_to_path(
+                        self.uniffiCloneHandle(),FfiConverterInt64.lower(fileId),FfiConverterString.lower(path),FfiConverterOptionString.lower(cacheDirectory),FfiConverterTypeTransferControl_lower(control)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Stream to disk under exactly the encoded FileAccessContext; denial never retries as uploader.
+     */
+open func filesDownloadToPathWithContext(fileId: Int64, path: String, context: Data, cacheDirectory: String?, control: TransferControl)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_files_download_to_path_with_context(
+                        self.uniffiCloneHandle(),FfiConverterInt64.lower(fileId),FfiConverterString.lower(path),FfiConverterData.lower(context),FfiConverterOptionString.lower(cacheDirectory),FfiConverterTypeTransferControl_lower(control)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Read one durable transfer observation on a blocking worker, fenced to this principal.
+     */
+open func filesTransferCheckpoint(jobId: String)async throws  -> FfiTransferCheckpoint?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_files_transfer_checkpoint(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(jobId)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionTypeFfiTransferCheckpoint.lift,
+            errorHandler: FfiConverterTypeFfiSendError_lift
+        )
+}
+
+    /**
+     * Stream a native path through the Rust snapshot/resume upload pipeline; returns FileInfo bytes.
+     */
+open func filesUploadPath(path: String, options: FfiUploadOptions, control: TransferControl)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_files_upload_path(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(path),FfiConverterTypeFfiUploadOptions_lower(options),FfiConverterTypeTransferControl_lower(control)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+
+    /**
+     * Adopt the exact retained native artifact, verifying its copied hash and persisting its
+     * recipe/facts under this account and trust before uploading. No codec callback is invoked.
+     */
+open func sendingAdoptNativeAttachment(key: String, sourcePath: String, prepared: FfiPreparedNativeMedia, control: TransferControl)async throws  -> FfiPreparedAttachment  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_sending_adopt_native_attachment(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(key),FfiConverterString.lower(sourcePath),FfiConverterTypeFfiPreparedNativeMedia_lower(prepared),FfiConverterTypeTransferControl_lower(control)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFfiPreparedAttachment_lift,
+            errorHandler: FfiConverterTypeFfiSendError_lift
+        )
+}
+
+    /**
+     * Read retained preparation identity without starting a codec or network request.
+     */
+open func sendingAttachmentManifest(key: String)async throws  -> FfiAttachmentManifest?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_sending_attachment_manifest(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(key)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionTypeFfiAttachmentManifest.lift,
+            errorHandler: FfiConverterTypeFfiSendError_lift
+        )
+}
+
+    /**
+     * Prepare real native input and upload completed main/thumbnail files for a typed media send.
+     */
+open func sendingPrepareAttachment(key: String, path: String, kind: FfiMediaKind, control: TransferControl)async throws  -> FfiPreparedAttachment  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_sending_prepare_attachment(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(key),FfiConverterString.lower(path),FfiConverterTypeFfiMediaKind_lower(kind),FfiConverterTypeTransferControl_lower(control)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFfiPreparedAttachment_lift,
+            errorHandler: FfiConverterTypeFfiSendError_lift
+        )
+}
+
+    /**
+     * Persist a real native encoder's main-only output before upload. Retries use the retained
+     * artifact without invoking the callback; no client-wide callback retention is needed.
+     */
+open func sendingPrepareNativeAttachment(key: String, path: String, kind: FfiNativeMediaKind, preparer: FfiPlatformMediaPreparer, control: TransferControl)async throws  -> FfiPreparedAttachment  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_method_tinkleclient_sending_prepare_native_attachment(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(key),FfiConverterString.lower(path),FfiConverterTypeFfiNativeMediaKind_lower(kind),FfiConverterTypeFfiPlatformMediaPreparer_lower(preparer),FfiConverterTypeTransferControl_lower(control)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFfiPreparedAttachment_lift,
+            errorHandler: FfiConverterTypeFfiSendError_lift
+        )
+}
+
+    /**
+     * Remove the configured decoder. Future video preparation returns typed Unsupported;
+     * existing native work keeps its captured callback/read lease until actual completion.
+     */
+open func clearVideoDecoder()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_tinkleclient_clear_video_decoder(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+
+    /**
+     * Select the native decoder used by sending_prepare_attachment(Video); installation is real,
+     * not a capability flag. Each operation retains its selected callback through completion.
+     */
+open func configureVideoDecoder(decoder: FfiPlatformVideoDecoder)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_tinkleclient_configure_video_decoder(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiPlatformVideoDecoder_lower(decoder),uniffiCallStatus
+    )
+}
+}
+
 
 
 }
@@ -4766,6 +8174,164 @@ public func FfiConverterTypeTinkleClient_lift(_ handle: UInt64) throws -> Tinkle
 #endif
 public func FfiConverterTypeTinkleClient_lower(_ value: TinkleClient) -> UInt64 {
     return FfiConverterTypeTinkleClient.lower(value)
+}
+
+
+
+
+
+
+/**
+ * A one-use explicit cancellation channel. Cancelling a download affects only this consumer.
+ * Keep this handle while awaiting an operation; cancel() stops local work, not remote effects.
+ */
+public protocol TransferControlProtocol: AnyObject, Sendable {
+
+    /**
+     * Request local cancellation. A completion already committed may still win the race.
+     */
+    func cancel()
+
+    /**
+     * Read current phase/counts without a callback retained across a foreign runtime lifetime.
+     */
+    func progress()  -> FfiTransferProgress
+
+}
+/**
+ * A one-use explicit cancellation channel. Cancelling a download affects only this consumer.
+ * Keep this handle while awaiting an operation; cancel() stops local work, not remote effects.
+ */
+open class TransferControl: TransferControlProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tinkle_ffi_fn_clone_transfercontrol(self.handle, $0) }
+    }
+    /**
+     * Allocate a fresh cancellation/progress owner for one path operation or sending attempt.
+     */
+public convenience init() {
+    let handle =
+        try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_constructor_transfercontrol_new(uniffiCallStatus
+    )
+}
+    self.init(unsafeFromHandle: handle)
+}
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tinkle_ffi_fn_free_transfercontrol(handle, $0) }
+    }
+
+
+
+
+    /**
+     * Request local cancellation. A completion already committed may still win the race.
+     */
+open func cancel()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_transfercontrol_cancel(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+
+    /**
+     * Read current phase/counts without a callback retained across a foreign runtime lifetime.
+     */
+open func progress() -> FfiTransferProgress  {
+    return try!  FfiConverterTypeFfiTransferProgress_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_method_transfercontrol_progress(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTransferControl: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = TransferControl
+
+    public static func lift(_ handle: UInt64) throws -> TransferControl {
+        return TransferControl(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: TransferControl) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TransferControl {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: TransferControl, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTransferControl_lift(_ handle: UInt64) throws -> TransferControl {
+    return try FfiConverterTypeTransferControl.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTransferControl_lower(_ value: TransferControl) -> UInt64 {
+    return FfiConverterTypeTransferControl.lower(value)
 }
 
 
@@ -5691,6 +9257,235 @@ public func FfiConverterTypeEnrollmentStatus_lower(_ value: EnrollmentStatus) ->
 
 
 /**
+ * Durable main-only handoff; paths are SDK-owned and cleared with the principal.
+ */
+public struct FfiAttachmentManifest: Equatable, Hashable {
+    public var inputPath: String
+    public var settings: String
+    public var artifactPath: String
+    public var sourceSha256: Data
+    public var outputSha256: Data
+    public var preparationProfile: String
+    public var mimeType: String
+    public var mediaSource: Data
+    public var nativeFacts: FfiNativeMediaOutput?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(inputPath: String, settings: String, artifactPath: String, sourceSha256: Data, outputSha256: Data, preparationProfile: String, mimeType: String, mediaSource: Data, nativeFacts: FfiNativeMediaOutput?) {
+        self.inputPath = inputPath
+        self.settings = settings
+        self.artifactPath = artifactPath
+        self.sourceSha256 = sourceSha256
+        self.outputSha256 = outputSha256
+        self.preparationProfile = preparationProfile
+        self.mimeType = mimeType
+        self.mediaSource = mediaSource
+        self.nativeFacts = nativeFacts
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiAttachmentManifest: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAttachmentManifest: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAttachmentManifest {
+        return
+            try FfiAttachmentManifest(
+                inputPath: FfiConverterString.read(from: &buf),
+                settings: FfiConverterString.read(from: &buf),
+                artifactPath: FfiConverterString.read(from: &buf),
+                sourceSha256: FfiConverterData.read(from: &buf),
+                outputSha256: FfiConverterData.read(from: &buf),
+                preparationProfile: FfiConverterString.read(from: &buf),
+                mimeType: FfiConverterString.read(from: &buf),
+                mediaSource: FfiConverterData.read(from: &buf),
+                nativeFacts: FfiConverterOptionTypeFfiNativeMediaOutput.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiAttachmentManifest, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.inputPath, into: &buf)
+        FfiConverterString.write(value.settings, into: &buf)
+        FfiConverterString.write(value.artifactPath, into: &buf)
+        FfiConverterData.write(value.sourceSha256, into: &buf)
+        FfiConverterData.write(value.outputSha256, into: &buf)
+        FfiConverterString.write(value.preparationProfile, into: &buf)
+        FfiConverterString.write(value.mimeType, into: &buf)
+        FfiConverterData.write(value.mediaSource, into: &buf)
+        FfiConverterOptionTypeFfiNativeMediaOutput.write(value.nativeFacts, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAttachmentManifest_lift(_ buf: RustBuffer) throws -> FfiAttachmentManifest {
+    return try FfiConverterTypeFfiAttachmentManifest.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAttachmentManifest_lower(_ value: FfiAttachmentManifest) -> RustBuffer {
+    return FfiConverterTypeFfiAttachmentManifest.lower(value)
+}
+
+
+/**
+ * Actual facts measured from a fully decoded MP4 stream, not inferred from a container header.
+ * NativeDecoded requires full-stream validation and a measured frame count. Unsupported color,
+ * HDR or alpha handling must return Unsupported (or omit a thumbnail), never silently flatten it.
+ */
+public struct FfiDecodedVideo: Equatable, Hashable {
+    public var width: UInt32
+    public var height: UInt32
+    public var durationMs: UInt64
+    public var frameCount: UInt32
+    public var hasAlpha: Bool?
+    public var bitDepth: UInt8?
+    public var evidence: FfiVideoEvidence
+    public var thumbnail: FfiDecodedVideoFrame?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(width: UInt32, height: UInt32, durationMs: UInt64, frameCount: UInt32, hasAlpha: Bool?, bitDepth: UInt8?, evidence: FfiVideoEvidence, thumbnail: FfiDecodedVideoFrame?) {
+        self.width = width
+        self.height = height
+        self.durationMs = durationMs
+        self.frameCount = frameCount
+        self.hasAlpha = hasAlpha
+        self.bitDepth = bitDepth
+        self.evidence = evidence
+        self.thumbnail = thumbnail
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiDecodedVideo: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiDecodedVideo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiDecodedVideo {
+        return
+            try FfiDecodedVideo(
+                width: FfiConverterUInt32.read(from: &buf),
+                height: FfiConverterUInt32.read(from: &buf),
+                durationMs: FfiConverterUInt64.read(from: &buf),
+                frameCount: FfiConverterUInt32.read(from: &buf),
+                hasAlpha: FfiConverterOptionBool.read(from: &buf),
+                bitDepth: FfiConverterOptionUInt8.read(from: &buf),
+                evidence: FfiConverterTypeFfiVideoEvidence.read(from: &buf),
+                thumbnail: FfiConverterOptionTypeFfiDecodedVideoFrame.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiDecodedVideo, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.width, into: &buf)
+        FfiConverterUInt32.write(value.height, into: &buf)
+        FfiConverterUInt64.write(value.durationMs, into: &buf)
+        FfiConverterUInt32.write(value.frameCount, into: &buf)
+        FfiConverterOptionBool.write(value.hasAlpha, into: &buf)
+        FfiConverterOptionUInt8.write(value.bitDepth, into: &buf)
+        FfiConverterTypeFfiVideoEvidence.write(value.evidence, into: &buf)
+        FfiConverterOptionTypeFfiDecodedVideoFrame.write(value.thumbnail, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDecodedVideo_lift(_ buf: RustBuffer) throws -> FfiDecodedVideo {
+    return try FfiConverterTypeFfiDecodedVideo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDecodedVideo_lower(_ value: FfiDecodedVideo) -> RustBuffer {
+    return FfiConverterTypeFfiDecodedVideo.lower(value)
+}
+
+
+/**
+ * Bounded display-oriented sRGB RGBA8 thumbnail. Tightly packed rows, no full-size decoded frame.
+ */
+public struct FfiDecodedVideoFrame: Equatable, Hashable {
+    public var width: UInt32
+    public var height: UInt32
+    public var rgba: Data
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(width: UInt32, height: UInt32, rgba: Data) {
+        self.width = width
+        self.height = height
+        self.rgba = rgba
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiDecodedVideoFrame: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiDecodedVideoFrame: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiDecodedVideoFrame {
+        return
+            try FfiDecodedVideoFrame(
+                width: FfiConverterUInt32.read(from: &buf),
+                height: FfiConverterUInt32.read(from: &buf),
+                rgba: FfiConverterData.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiDecodedVideoFrame, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.width, into: &buf)
+        FfiConverterUInt32.write(value.height, into: &buf)
+        FfiConverterData.write(value.rgba, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDecodedVideoFrame_lift(_ buf: RustBuffer) throws -> FfiDecodedVideoFrame {
+    return try FfiConverterTypeFfiDecodedVideoFrame.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDecodedVideoFrame_lower(_ value: FfiDecodedVideoFrame) -> RustBuffer {
+    return FfiConverterTypeFfiDecodedVideoFrame.lower(value)
+}
+
+
+/**
  * FFI-safe cached dialog.
  */
 public struct FfiDialog: Equatable, Hashable {
@@ -5944,6 +9739,63 @@ public func FfiConverterTypeFfiHistoryRequest_lower(_ value: FfiHistoryRequest) 
 
 
 /**
+ * Shared fitting result, no platform-specific resizing policy.
+ */
+public struct FfiMediaDimensions: Equatable, Hashable {
+    public var width: UInt32
+    public var height: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(width: UInt32, height: UInt32) {
+        self.width = width
+        self.height = height
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiMediaDimensions: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiMediaDimensions: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiMediaDimensions {
+        return
+            try FfiMediaDimensions(
+                width: FfiConverterUInt32.read(from: &buf),
+                height: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiMediaDimensions, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.width, into: &buf)
+        FfiConverterUInt32.write(value.height, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMediaDimensions_lift(_ buf: RustBuffer) throws -> FfiMediaDimensions {
+    return try FfiConverterTypeFfiMediaDimensions.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMediaDimensions_lower(_ value: FfiMediaDimensions) -> RustBuffer {
+    return FfiConverterTypeFfiMediaDimensions.lower(value)
+}
+
+
+/**
  * FFI-safe cached message.
  */
 public struct FfiMessage: Equatable, Hashable {
@@ -6029,6 +9881,367 @@ public func FfiConverterTypeFfiMessage_lift(_ buf: RustBuffer) throws -> FfiMess
 #endif
 public func FfiConverterTypeFfiMessage_lower(_ value: FfiMessage) -> RustBuffer {
     return FfiConverterTypeFfiMessage.lower(value)
+}
+
+
+/**
+ * Small measured facts for the exact closed output; no arbitrary output path or media buffer.
+ */
+public struct FfiNativeMediaOutput: Equatable, Hashable {
+    public var width: UInt32
+    public var height: UInt32
+    public var frameCount: UInt32
+    public var durationMs: UInt64
+    public var audioChannels: UInt8
+    public var audioSampleRate: UInt32
+    public var audioSamples: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(width: UInt32, height: UInt32, frameCount: UInt32, durationMs: UInt64, audioChannels: UInt8, audioSampleRate: UInt32, audioSamples: UInt64) {
+        self.width = width
+        self.height = height
+        self.frameCount = frameCount
+        self.durationMs = durationMs
+        self.audioChannels = audioChannels
+        self.audioSampleRate = audioSampleRate
+        self.audioSamples = audioSamples
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiNativeMediaOutput: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiNativeMediaOutput: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiNativeMediaOutput {
+        return
+            try FfiNativeMediaOutput(
+                width: FfiConverterUInt32.read(from: &buf),
+                height: FfiConverterUInt32.read(from: &buf),
+                frameCount: FfiConverterUInt32.read(from: &buf),
+                durationMs: FfiConverterUInt64.read(from: &buf),
+                audioChannels: FfiConverterUInt8.read(from: &buf),
+                audioSampleRate: FfiConverterUInt32.read(from: &buf),
+                audioSamples: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiNativeMediaOutput, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.width, into: &buf)
+        FfiConverterUInt32.write(value.height, into: &buf)
+        FfiConverterUInt32.write(value.frameCount, into: &buf)
+        FfiConverterUInt64.write(value.durationMs, into: &buf)
+        FfiConverterUInt8.write(value.audioChannels, into: &buf)
+        FfiConverterUInt32.write(value.audioSampleRate, into: &buf)
+        FfiConverterUInt64.write(value.audioSamples, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiNativeMediaOutput_lift(_ buf: RustBuffer) throws -> FfiNativeMediaOutput {
+    return try FfiConverterTypeFfiNativeMediaOutput.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiNativeMediaOutput_lower(_ value: FfiNativeMediaOutput) -> RustBuffer {
+    return FfiConverterTypeFfiNativeMediaOutput.lower(value)
+}
+
+
+/**
+ * Retained keyed request/result. Response is the named method's protobuf only when Accepted.
+ */
+public struct FfiOutgoingJob: Equatable, Hashable {
+    public var jobId: String
+    public var targetKey: String
+    public var method: String
+    public var request: Data
+    public var state: FfiOutgoingState
+    public var response: Data
+    public var lastOutcome: FfiOutgoingOutcome?
+    public var revision: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(jobId: String, targetKey: String, method: String, request: Data, state: FfiOutgoingState, response: Data, lastOutcome: FfiOutgoingOutcome?, revision: Int64) {
+        self.jobId = jobId
+        self.targetKey = targetKey
+        self.method = method
+        self.request = request
+        self.state = state
+        self.response = response
+        self.lastOutcome = lastOutcome
+        self.revision = revision
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiOutgoingJob: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiOutgoingJob: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiOutgoingJob {
+        return
+            try FfiOutgoingJob(
+                jobId: FfiConverterString.read(from: &buf),
+                targetKey: FfiConverterString.read(from: &buf),
+                method: FfiConverterString.read(from: &buf),
+                request: FfiConverterData.read(from: &buf),
+                state: FfiConverterTypeFfiOutgoingState.read(from: &buf),
+                response: FfiConverterData.read(from: &buf),
+                lastOutcome: FfiConverterOptionTypeFfiOutgoingOutcome.read(from: &buf),
+                revision: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiOutgoingJob, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.jobId, into: &buf)
+        FfiConverterString.write(value.targetKey, into: &buf)
+        FfiConverterString.write(value.method, into: &buf)
+        FfiConverterData.write(value.request, into: &buf)
+        FfiConverterTypeFfiOutgoingState.write(value.state, into: &buf)
+        FfiConverterData.write(value.response, into: &buf)
+        FfiConverterOptionTypeFfiOutgoingOutcome.write(value.lastOutcome, into: &buf)
+        FfiConverterInt64.write(value.revision, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiOutgoingJob_lift(_ buf: RustBuffer) throws -> FfiOutgoingJob {
+    return try FfiConverterTypeFfiOutgoingJob.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiOutgoingJob_lower(_ value: FfiOutgoingJob) -> RustBuffer {
+    return FfiConverterTypeFfiOutgoingJob.lower(value)
+}
+
+
+/**
+ * Lightweight inventory entry; list operations do not copy all message bodies/results across FFI.
+ */
+public struct FfiOutgoingJobSummary: Equatable, Hashable {
+    public var jobId: String
+    public var targetKey: String
+    public var method: String
+    public var state: FfiOutgoingState
+    public var revision: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(jobId: String, targetKey: String, method: String, state: FfiOutgoingState, revision: Int64) {
+        self.jobId = jobId
+        self.targetKey = targetKey
+        self.method = method
+        self.state = state
+        self.revision = revision
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiOutgoingJobSummary: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiOutgoingJobSummary: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiOutgoingJobSummary {
+        return
+            try FfiOutgoingJobSummary(
+                jobId: FfiConverterString.read(from: &buf),
+                targetKey: FfiConverterString.read(from: &buf),
+                method: FfiConverterString.read(from: &buf),
+                state: FfiConverterTypeFfiOutgoingState.read(from: &buf),
+                revision: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiOutgoingJobSummary, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.jobId, into: &buf)
+        FfiConverterString.write(value.targetKey, into: &buf)
+        FfiConverterString.write(value.method, into: &buf)
+        FfiConverterTypeFfiOutgoingState.write(value.state, into: &buf)
+        FfiConverterInt64.write(value.revision, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiOutgoingJobSummary_lift(_ buf: RustBuffer) throws -> FfiOutgoingJobSummary {
+    return try FfiConverterTypeFfiOutgoingJobSummary.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiOutgoingJobSummary_lower(_ value: FfiOutgoingJobSummary) -> RustBuffer {
+    return FfiConverterTypeFfiOutgoingJobSummary.lower(value)
+}
+
+
+/**
+ * Last observed failure; it does not authorize replay or establish rollback.
+ */
+public struct FfiOutgoingOutcome: Equatable, Hashable {
+    public var code: Int32
+    public var rawCode: Int32?
+    public var unknownOutcome: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(code: Int32, rawCode: Int32?, unknownOutcome: Bool) {
+        self.code = code
+        self.rawCode = rawCode
+        self.unknownOutcome = unknownOutcome
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiOutgoingOutcome: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiOutgoingOutcome: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiOutgoingOutcome {
+        return
+            try FfiOutgoingOutcome(
+                code: FfiConverterInt32.read(from: &buf),
+                rawCode: FfiConverterOptionInt32.read(from: &buf),
+                unknownOutcome: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiOutgoingOutcome, into buf: inout [UInt8]) {
+        FfiConverterInt32.write(value.code, into: &buf)
+        FfiConverterOptionInt32.write(value.rawCode, into: &buf)
+        FfiConverterBool.write(value.unknownOutcome, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiOutgoingOutcome_lift(_ buf: RustBuffer) throws -> FfiOutgoingOutcome {
+    return try FfiConverterTypeFfiOutgoingOutcome.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiOutgoingOutcome_lower(_ value: FfiOutgoingOutcome) -> RustBuffer {
+    return FfiConverterTypeFfiOutgoingOutcome.lower(value)
+}
+
+
+/**
+ * Completed main/thumbnail metadata and MediaSource protobuf; never full-size media bytes.
+ */
+public struct FfiPreparedAttachment: Equatable, Hashable {
+    public var fileInfo: Data
+    public var thumbnailFileInfo: Data?
+    public var mediaSource: Data
+    public var sourceSha256: Data
+    public var outputSha256: Data
+    public var preparationProfile: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(fileInfo: Data, thumbnailFileInfo: Data?, mediaSource: Data, sourceSha256: Data, outputSha256: Data, preparationProfile: String) {
+        self.fileInfo = fileInfo
+        self.thumbnailFileInfo = thumbnailFileInfo
+        self.mediaSource = mediaSource
+        self.sourceSha256 = sourceSha256
+        self.outputSha256 = outputSha256
+        self.preparationProfile = preparationProfile
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiPreparedAttachment: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiPreparedAttachment: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPreparedAttachment {
+        return
+            try FfiPreparedAttachment(
+                fileInfo: FfiConverterData.read(from: &buf),
+                thumbnailFileInfo: FfiConverterOptionData.read(from: &buf),
+                mediaSource: FfiConverterData.read(from: &buf),
+                sourceSha256: FfiConverterData.read(from: &buf),
+                outputSha256: FfiConverterData.read(from: &buf),
+                preparationProfile: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiPreparedAttachment, into buf: inout [UInt8]) {
+        FfiConverterData.write(value.fileInfo, into: &buf)
+        FfiConverterOptionData.write(value.thumbnailFileInfo, into: &buf)
+        FfiConverterData.write(value.mediaSource, into: &buf)
+        FfiConverterData.write(value.sourceSha256, into: &buf)
+        FfiConverterData.write(value.outputSha256, into: &buf)
+        FfiConverterString.write(value.preparationProfile, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPreparedAttachment_lift(_ buf: RustBuffer) throws -> FfiPreparedAttachment {
+    return try FfiConverterTypeFfiPreparedAttachment.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPreparedAttachment_lower(_ value: FfiPreparedAttachment) -> RustBuffer {
+    return FfiConverterTypeFfiPreparedAttachment.lower(value)
 }
 
 
@@ -6159,6 +10372,289 @@ public func FfiConverterTypeFfiSubscribeResponse_lift(_ buf: RustBuffer) throws 
 #endif
 public func FfiConverterTypeFfiSubscribeResponse_lower(_ value: FfiSubscribeResponse) -> RustBuffer {
     return FfiConverterTypeFfiSubscribeResponse.lower(value)
+}
+
+
+/**
+ * Durable transfer observations. Download prefix bytes are diagnostic until server metadata
+ * and digest verification complete. Upload managers currently report phase, not per-part bytes.
+ */
+public struct FfiTransferCheckpoint: Equatable, Hashable {
+    public var jobId: String
+    public var kind: String
+    public var fileId: Int64
+    public var state: String
+    public var retainedPrefixBytes: Int64
+    /**
+     * Confirmed upload part count; not bytes and not a server resume authority.
+     */
+    public var uploadedParts: UInt64?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(jobId: String, kind: String, fileId: Int64, state: String, retainedPrefixBytes: Int64,
+        /**
+         * Confirmed upload part count; not bytes and not a server resume authority.
+         */uploadedParts: UInt64?) {
+        self.jobId = jobId
+        self.kind = kind
+        self.fileId = fileId
+        self.state = state
+        self.retainedPrefixBytes = retainedPrefixBytes
+        self.uploadedParts = uploadedParts
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiTransferCheckpoint: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiTransferCheckpoint: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTransferCheckpoint {
+        return
+            try FfiTransferCheckpoint(
+                jobId: FfiConverterString.read(from: &buf),
+                kind: FfiConverterString.read(from: &buf),
+                fileId: FfiConverterInt64.read(from: &buf),
+                state: FfiConverterString.read(from: &buf),
+                retainedPrefixBytes: FfiConverterInt64.read(from: &buf),
+                uploadedParts: FfiConverterOptionUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiTransferCheckpoint, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.jobId, into: &buf)
+        FfiConverterString.write(value.kind, into: &buf)
+        FfiConverterInt64.write(value.fileId, into: &buf)
+        FfiConverterString.write(value.state, into: &buf)
+        FfiConverterInt64.write(value.retainedPrefixBytes, into: &buf)
+        FfiConverterOptionUInt64.write(value.uploadedParts, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTransferCheckpoint_lift(_ buf: RustBuffer) throws -> FfiTransferCheckpoint {
+    return try FfiConverterTypeFfiTransferCheckpoint.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTransferCheckpoint_lower(_ value: FfiTransferCheckpoint) -> RustBuffer {
+    return FfiConverterTypeFfiTransferCheckpoint.lower(value)
+}
+
+
+/**
+ * Honest progress snapshot. Byte counts are absent until known, never estimated from elapsed time.
+ */
+public struct FfiTransferProgress: Equatable, Hashable {
+    public var phase: FfiTransferPhase
+    public var cancellationRequested: Bool
+    public var completedBytes: UInt64?
+    public var totalBytes: UInt64?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(phase: FfiTransferPhase, cancellationRequested: Bool, completedBytes: UInt64?, totalBytes: UInt64?) {
+        self.phase = phase
+        self.cancellationRequested = cancellationRequested
+        self.completedBytes = completedBytes
+        self.totalBytes = totalBytes
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiTransferProgress: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiTransferProgress: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTransferProgress {
+        return
+            try FfiTransferProgress(
+                phase: FfiConverterTypeFfiTransferPhase.read(from: &buf),
+                cancellationRequested: FfiConverterBool.read(from: &buf),
+                completedBytes: FfiConverterOptionUInt64.read(from: &buf),
+                totalBytes: FfiConverterOptionUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiTransferProgress, into buf: inout [UInt8]) {
+        FfiConverterTypeFfiTransferPhase.write(value.phase, into: &buf)
+        FfiConverterBool.write(value.cancellationRequested, into: &buf)
+        FfiConverterOptionUInt64.write(value.completedBytes, into: &buf)
+        FfiConverterOptionUInt64.write(value.totalBytes, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTransferProgress_lift(_ buf: RustBuffer) throws -> FfiTransferProgress {
+    return try FfiConverterTypeFfiTransferProgress.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTransferProgress_lower(_ value: FfiTransferProgress) -> RustBuffer {
+    return FfiConverterTypeFfiTransferProgress.lower(value)
+}
+
+
+/**
+ * Exact upload declaration. Digest absence/presence is preserved by the core upload manager.
+ */
+public struct FfiUploadOptions: Equatable, Hashable {
+    public var idempotencyKey: String
+    public var fileName: String?
+    public var mimeType: String?
+    public var sha256: Data?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(idempotencyKey: String, fileName: String?, mimeType: String?, sha256: Data?) {
+        self.idempotencyKey = idempotencyKey
+        self.fileName = fileName
+        self.mimeType = mimeType
+        self.sha256 = sha256
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiUploadOptions: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiUploadOptions: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiUploadOptions {
+        return
+            try FfiUploadOptions(
+                idempotencyKey: FfiConverterString.read(from: &buf),
+                fileName: FfiConverterOptionString.read(from: &buf),
+                mimeType: FfiConverterOptionString.read(from: &buf),
+                sha256: FfiConverterOptionData.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiUploadOptions, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.idempotencyKey, into: &buf)
+        FfiConverterOptionString.write(value.fileName, into: &buf)
+        FfiConverterOptionString.write(value.mimeType, into: &buf)
+        FfiConverterOptionData.write(value.sha256, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiUploadOptions_lift(_ buf: RustBuffer) throws -> FfiUploadOptions {
+    return try FfiConverterTypeFfiUploadOptions.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiUploadOptions_lower(_ value: FfiUploadOptions) -> RustBuffer {
+    return FfiConverterTypeFfiUploadOptions.lower(value)
+}
+
+
+/**
+ * The fixed limits of this invocation, not a host-selected expansion of SDK budgets.
+ */
+public struct FfiVideoDecodeLimits: Equatable, Hashable {
+    public var maxInputBytes: UInt64
+    public var maxPixels: UInt64
+    public var maxFrames: UInt32
+    public var maxDurationMs: UInt64
+    public var thumbnailEdge: UInt32
+    public var deadlineMs: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(maxInputBytes: UInt64, maxPixels: UInt64, maxFrames: UInt32, maxDurationMs: UInt64, thumbnailEdge: UInt32, deadlineMs: UInt32) {
+        self.maxInputBytes = maxInputBytes
+        self.maxPixels = maxPixels
+        self.maxFrames = maxFrames
+        self.maxDurationMs = maxDurationMs
+        self.thumbnailEdge = thumbnailEdge
+        self.deadlineMs = deadlineMs
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiVideoDecodeLimits: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiVideoDecodeLimits: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiVideoDecodeLimits {
+        return
+            try FfiVideoDecodeLimits(
+                maxInputBytes: FfiConverterUInt64.read(from: &buf),
+                maxPixels: FfiConverterUInt64.read(from: &buf),
+                maxFrames: FfiConverterUInt32.read(from: &buf),
+                maxDurationMs: FfiConverterUInt64.read(from: &buf),
+                thumbnailEdge: FfiConverterUInt32.read(from: &buf),
+                deadlineMs: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiVideoDecodeLimits, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.maxInputBytes, into: &buf)
+        FfiConverterUInt64.write(value.maxPixels, into: &buf)
+        FfiConverterUInt32.write(value.maxFrames, into: &buf)
+        FfiConverterUInt64.write(value.maxDurationMs, into: &buf)
+        FfiConverterUInt32.write(value.thumbnailEdge, into: &buf)
+        FfiConverterUInt32.write(value.deadlineMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiVideoDecodeLimits_lift(_ buf: RustBuffer) throws -> FfiVideoDecodeLimits {
+    return try FfiConverterTypeFfiVideoDecodeLimits.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiVideoDecodeLimits_lower(_ value: FfiVideoDecodeLimits) -> RustBuffer {
+    return FfiConverterTypeFfiVideoDecodeLimits.lower(value)
 }
 
 
@@ -6853,6 +11349,11 @@ enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
 
 
+    /**
+     * Exact terminal RPC status. Unknown outcome is not rollback, even for a received result.
+     */
+    case Rpc(code: Int32, rawCode: Int32?, diagnostic: String, unknownOutcome: Bool, recovery: FfiRpcRecovery
+    )
     case Network(String
     )
     case NotConnected
@@ -6874,8 +11375,7 @@ enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
     case Auth(String
     )
     /**
-     * Transient failure: bounded retry with backoff is safe. Reconciliation
-     * reads are idempotent; sends still require their `random_id` policy.
+     * Local transient failure. Retry policy still depends on operation identity and uncertainty.
      */
     case Retryable(String
     )
@@ -6908,29 +11408,36 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
 
 
 
-        case 1: return .Network(
+        case 1: return .Rpc(
+            code: try FfiConverterInt32.read(from: &buf),
+            rawCode: try FfiConverterOptionInt32.read(from: &buf),
+            diagnostic: try FfiConverterString.read(from: &buf),
+            unknownOutcome: try FfiConverterBool.read(from: &buf),
+            recovery: try FfiConverterTypeFfiRpcRecovery.read(from: &buf)
+            )
+        case 2: return .Network(
             try FfiConverterString.read(from: &buf)
             )
-        case 2: return .NotConnected
-        case 3: return .Timeout
-        case 4: return .Cancelled
-        case 5: return .Sync(
+        case 3: return .NotConnected
+        case 4: return .Timeout
+        case 5: return .Cancelled
+        case 6: return .Sync(
             try FfiConverterString.read(from: &buf)
             )
-        case 6: return .Codec(
+        case 7: return .Codec(
             try FfiConverterString.read(from: &buf)
             )
-        case 7: return .Storage(
+        case 8: return .Storage(
             try FfiConverterString.read(from: &buf)
             )
-        case 8: return .ReconnectExhausted
-        case 9: return .Internal(
+        case 9: return .ReconnectExhausted
+        case 10: return .Internal(
             try FfiConverterString.read(from: &buf)
             )
-        case 10: return .Auth(
+        case 11: return .Auth(
             try FfiConverterString.read(from: &buf)
             )
-        case 11: return .Retryable(
+        case 12: return .Retryable(
             try FfiConverterString.read(from: &buf)
             )
 
@@ -6945,54 +11452,63 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
 
 
 
-        case let .Network(v1):
+        case let .Rpc(code,rawCode,diagnostic,unknownOutcome,recovery):
             writeInt(&buf, Int32(1))
+            FfiConverterInt32.write(code, into: &buf)
+            FfiConverterOptionInt32.write(rawCode, into: &buf)
+            FfiConverterString.write(diagnostic, into: &buf)
+            FfiConverterBool.write(unknownOutcome, into: &buf)
+            FfiConverterTypeFfiRpcRecovery.write(recovery, into: &buf)
+
+
+        case let .Network(v1):
+            writeInt(&buf, Int32(2))
             FfiConverterString.write(v1, into: &buf)
 
 
         case .NotConnected:
-            writeInt(&buf, Int32(2))
-
-
-        case .Timeout:
             writeInt(&buf, Int32(3))
 
 
-        case .Cancelled:
+        case .Timeout:
             writeInt(&buf, Int32(4))
 
 
-        case let .Sync(v1):
+        case .Cancelled:
             writeInt(&buf, Int32(5))
-            FfiConverterString.write(v1, into: &buf)
 
 
-        case let .Codec(v1):
+        case let .Sync(v1):
             writeInt(&buf, Int32(6))
             FfiConverterString.write(v1, into: &buf)
 
 
-        case let .Storage(v1):
+        case let .Codec(v1):
             writeInt(&buf, Int32(7))
             FfiConverterString.write(v1, into: &buf)
 
 
-        case .ReconnectExhausted:
+        case let .Storage(v1):
             writeInt(&buf, Int32(8))
-
-
-        case let .Internal(v1):
-            writeInt(&buf, Int32(9))
             FfiConverterString.write(v1, into: &buf)
 
 
-        case let .Auth(v1):
+        case .ReconnectExhausted:
+            writeInt(&buf, Int32(9))
+
+
+        case let .Internal(v1):
             writeInt(&buf, Int32(10))
             FfiConverterString.write(v1, into: &buf)
 
 
-        case let .Retryable(v1):
+        case let .Auth(v1):
             writeInt(&buf, Int32(11))
+            FfiConverterString.write(v1, into: &buf)
+
+
+        case let .Retryable(v1):
+            writeInt(&buf, Int32(12))
             FfiConverterString.write(v1, into: &buf)
 
         }
@@ -7087,6 +11603,409 @@ public func FfiConverterTypeFfiLoadPolicy_lift(_ buf: RustBuffer) throws -> FfiL
 #endif
 public func FfiConverterTypeFfiLoadPolicy_lower(_ value: FfiLoadPolicy) -> RustBuffer {
     return FfiConverterTypeFfiLoadPolicy.lower(value)
+}
+
+
+
+/**
+ * Typed authoring/preparation failures, including unsupported non-document media.
+ */
+public
+enum FfiMediaError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+
+
+
+    case Budget
+    case Invalid
+    case Io
+    case SourceChanged
+    case Cancelled
+    case Busy
+    case Unsupported
+    case Codec
+
+
+
+
+
+
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+
+}
+
+#if compiler(>=6)
+extension FfiMediaError: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiMediaError: FfiConverterRustBuffer {
+    typealias SwiftType = FfiMediaError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiMediaError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+
+
+
+        case 1: return .Budget
+        case 2: return .Invalid
+        case 3: return .Io
+        case 4: return .SourceChanged
+        case 5: return .Cancelled
+        case 6: return .Busy
+        case 7: return .Unsupported
+        case 8: return .Codec
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiMediaError, into buf: inout [UInt8]) {
+        switch value {
+
+
+
+
+
+        case .Budget:
+            writeInt(&buf, Int32(1))
+
+
+        case .Invalid:
+            writeInt(&buf, Int32(2))
+
+
+        case .Io:
+            writeInt(&buf, Int32(3))
+
+
+        case .SourceChanged:
+            writeInt(&buf, Int32(4))
+
+
+        case .Cancelled:
+            writeInt(&buf, Int32(5))
+
+
+        case .Busy:
+            writeInt(&buf, Int32(6))
+
+
+        case .Unsupported:
+            writeInt(&buf, Int32(7))
+
+
+        case .Codec:
+            writeInt(&buf, Int32(8))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMediaError_lift(_ buf: RustBuffer) throws -> FfiMediaError {
+    return try FfiConverterTypeFfiMediaError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMediaError_lower(_ value: FfiMediaError) -> RustBuffer {
+    return FfiConverterTypeFfiMediaError.lower(value)
+}
+
+
+/**
+ * Explicit preparation intent. Video without a qualified native codec is Unsupported, not a document.
+ */
+
+public enum FfiMediaKind: Equatable, Hashable {
+
+    case document
+    case image
+    case voice(sampleRate: UInt32, channels: UInt8, bitsPerSample: UInt8
+    )
+    case video
+    case audio
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiMediaKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiMediaKind: FfiConverterRustBuffer {
+    typealias SwiftType = FfiMediaKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiMediaKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .document
+
+        case 2: return .image
+
+        case 3: return .voice(sampleRate: try FfiConverterUInt32.read(from: &buf), channels: try FfiConverterUInt8.read(from: &buf), bitsPerSample: try FfiConverterUInt8.read(from: &buf)
+        )
+
+        case 4: return .video
+
+        case 5: return .audio
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiMediaKind, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .document:
+            writeInt(&buf, Int32(1))
+
+
+        case .image:
+            writeInt(&buf, Int32(2))
+
+
+        case let .voice(sampleRate,channels,bitsPerSample):
+            writeInt(&buf, Int32(3))
+            FfiConverterUInt32.write(sampleRate, into: &buf)
+            FfiConverterUInt8.write(channels, into: &buf)
+            FfiConverterUInt8.write(bitsPerSample, into: &buf)
+
+
+        case .video:
+            writeInt(&buf, Int32(4))
+
+
+        case .audio:
+            writeInt(&buf, Int32(5))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMediaKind_lift(_ buf: RustBuffer) throws -> FfiMediaKind {
+    return try FfiConverterTypeFfiMediaKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMediaKind_lower(_ value: FfiMediaKind) -> RustBuffer {
+    return FfiConverterTypeFfiMediaKind.lower(value)
+}
+
+
+
+/**
+ * Local processing purpose, independent of a filename, MIME guess or upload intent.
+ */
+
+public enum FfiNativeMediaKind: Equatable, Hashable {
+
+    case image
+    case video
+    case audio
+    case voice(sampleRate: UInt32, channels: UInt8, bitsPerSample: UInt8
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiNativeMediaKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiNativeMediaKind: FfiConverterRustBuffer {
+    typealias SwiftType = FfiNativeMediaKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiNativeMediaKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .image
+
+        case 2: return .video
+
+        case 3: return .audio
+
+        case 4: return .voice(sampleRate: try FfiConverterUInt32.read(from: &buf), channels: try FfiConverterUInt8.read(from: &buf), bitsPerSample: try FfiConverterUInt8.read(from: &buf)
+        )
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiNativeMediaKind, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .image:
+            writeInt(&buf, Int32(1))
+
+
+        case .video:
+            writeInt(&buf, Int32(2))
+
+
+        case .audio:
+            writeInt(&buf, Int32(3))
+
+
+        case let .voice(sampleRate,channels,bitsPerSample):
+            writeInt(&buf, Int32(4))
+            FfiConverterUInt32.write(sampleRate, into: &buf)
+            FfiConverterUInt8.write(channels, into: &buf)
+            FfiConverterUInt8.write(bitsPerSample, into: &buf)
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiNativeMediaKind_lift(_ buf: RustBuffer) throws -> FfiNativeMediaKind {
+    return try FfiConverterTypeFfiNativeMediaKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiNativeMediaKind_lower(_ value: FfiNativeMediaKind) -> RustBuffer {
+    return FfiConverterTypeFfiNativeMediaKind.lower(value)
+}
+
+
+
+/**
+ * Retained state, independent of whether the foreign waiter remains alive.
+ */
+
+public enum FfiOutgoingState: Equatable, Hashable {
+
+    case prepared
+    case dispatching
+    case unconfirmed
+    case accepted
+    case rejected
+    case transient
+    case acceptedPending
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiOutgoingState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiOutgoingState: FfiConverterRustBuffer {
+    typealias SwiftType = FfiOutgoingState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiOutgoingState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .prepared
+
+        case 2: return .dispatching
+
+        case 3: return .unconfirmed
+
+        case 4: return .accepted
+
+        case 5: return .rejected
+
+        case 6: return .transient
+
+        case 7: return .acceptedPending
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiOutgoingState, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .prepared:
+            writeInt(&buf, Int32(1))
+
+
+        case .dispatching:
+            writeInt(&buf, Int32(2))
+
+
+        case .unconfirmed:
+            writeInt(&buf, Int32(3))
+
+
+        case .accepted:
+            writeInt(&buf, Int32(4))
+
+
+        case .rejected:
+            writeInt(&buf, Int32(5))
+
+
+        case .transient:
+            writeInt(&buf, Int32(6))
+
+
+        case .acceptedPending:
+            writeInt(&buf, Int32(7))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiOutgoingState_lift(_ buf: RustBuffer) throws -> FfiOutgoingState {
+    return try FfiConverterTypeFfiOutgoingState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiOutgoingState_lower(_ value: FfiOutgoingState) -> RustBuffer {
+    return FfiConverterTypeFfiOutgoingState.lower(value)
 }
 
 
@@ -7267,6 +12186,302 @@ public func FfiConverterTypeFfiReconcileStatus_lower(_ value: FfiReconcileStatus
 
 
 /**
+ * Recovery guidance does not authorize replay of an uncertain mutation.
+ */
+
+public enum FfiRpcRecovery: Equatable, Hashable {
+
+    /**
+     * Refetch the current revision and reconcile user intent before another mutation.
+     */
+    case refetch
+    /**
+     * Only an idempotent read or explicitly authorized exact-key retry may back off and retry.
+     */
+    case conditionalRetry
+    /**
+     * Correct input or authorization; do not retry the same mutation blindly.
+     */
+    case doNotRetry
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiRpcRecovery: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiRpcRecovery: FfiConverterRustBuffer {
+    typealias SwiftType = FfiRpcRecovery
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiRpcRecovery {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .refetch
+
+        case 2: return .conditionalRetry
+
+        case 3: return .doNotRetry
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiRpcRecovery, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .refetch:
+            writeInt(&buf, Int32(1))
+
+
+        case .conditionalRetry:
+            writeInt(&buf, Int32(2))
+
+
+        case .doNotRetry:
+            writeInt(&buf, Int32(3))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiRpcRecovery_lift(_ buf: RustBuffer) throws -> FfiRpcRecovery {
+    return try FfiConverterTypeFfiRpcRecovery.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiRpcRecovery_lower(_ value: FfiRpcRecovery) -> RustBuffer {
+    return FfiConverterTypeFfiRpcRecovery.lower(value)
+}
+
+
+
+/**
+ * Structured coordinator errors; RPC failures carry the ordinary FFI error, never replay advice.
+ */
+public
+enum FfiSendError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+
+
+
+    case NoStorage
+    case NoPrincipal
+    case ScopeChanged
+    case Busy
+    case NotFound
+    case Conflict
+    case Storage
+    case InvalidRequest
+    case Random
+    case Media(error: FfiMediaError
+    )
+    case Rpc(error: FfiError
+    )
+
+
+
+
+
+
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+
+}
+
+#if compiler(>=6)
+extension FfiSendError: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiSendError: FfiConverterRustBuffer {
+    typealias SwiftType = FfiSendError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSendError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+
+
+
+        case 1: return .NoStorage
+        case 2: return .NoPrincipal
+        case 3: return .ScopeChanged
+        case 4: return .Busy
+        case 5: return .NotFound
+        case 6: return .Conflict
+        case 7: return .Storage
+        case 8: return .InvalidRequest
+        case 9: return .Random
+        case 10: return .Media(
+            error: try FfiConverterTypeFfiMediaError.read(from: &buf)
+            )
+        case 11: return .Rpc(
+            error: try FfiConverterTypeFfiError.read(from: &buf)
+            )
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiSendError, into buf: inout [UInt8]) {
+        switch value {
+
+
+
+
+
+        case .NoStorage:
+            writeInt(&buf, Int32(1))
+
+
+        case .NoPrincipal:
+            writeInt(&buf, Int32(2))
+
+
+        case .ScopeChanged:
+            writeInt(&buf, Int32(3))
+
+
+        case .Busy:
+            writeInt(&buf, Int32(4))
+
+
+        case .NotFound:
+            writeInt(&buf, Int32(5))
+
+
+        case .Conflict:
+            writeInt(&buf, Int32(6))
+
+
+        case .Storage:
+            writeInt(&buf, Int32(7))
+
+
+        case .InvalidRequest:
+            writeInt(&buf, Int32(8))
+
+
+        case .Random:
+            writeInt(&buf, Int32(9))
+
+
+        case let .Media(error):
+            writeInt(&buf, Int32(10))
+            FfiConverterTypeFfiMediaError.write(error, into: &buf)
+
+
+        case let .Rpc(error):
+            writeInt(&buf, Int32(11))
+            FfiConverterTypeFfiError.write(error, into: &buf)
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSendError_lift(_ buf: RustBuffer) throws -> FfiSendError {
+    return try FfiConverterTypeFfiSendError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSendError_lower(_ value: FfiSendError) -> RustBuffer {
+    return FfiConverterTypeFfiSendError.lower(value)
+}
+
+
+/**
+ * Explicit retry selection. Never use a fresh random ID after an uncertain result.
+ */
+
+public enum FfiSendRetry: Equatable, Hashable {
+
+    case never
+    case exactKeyedRequest
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiSendRetry: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiSendRetry: FfiConverterRustBuffer {
+    typealias SwiftType = FfiSendRetry
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSendRetry {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .never
+
+        case 2: return .exactKeyedRequest
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiSendRetry, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .never:
+            writeInt(&buf, Int32(1))
+
+
+        case .exactKeyedRequest:
+            writeInt(&buf, Int32(2))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSendRetry_lift(_ buf: RustBuffer) throws -> FfiSendRetry {
+    return try FfiConverterTypeFfiSendRetry.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSendRetry_lower(_ value: FfiSendRetry) -> RustBuffer {
+    return FfiConverterTypeFfiSendRetry.lower(value)
+}
+
+
+
+/**
  * App-visible sync events.
  *
  * Journal payloads cross as protobuf bytes where noted; hosts decode with
@@ -7305,6 +12520,12 @@ public enum FfiSyncEvent: Equatable, Hashable {
     )
     case checkpointFailed(targetKey: String, acceptSeq: Int64, error: String
     )
+    /**
+     * Validated ephemeral `tinkle.v1.MessageChanged` protobuf, including original effect expiry.
+     * Check that deadline again at display time. Never hydrate, persist or replay from this event.
+     */
+    case reactionEffect(payload: Data
+    )
 
 
 
@@ -7342,6 +12563,9 @@ public struct FfiConverterTypeFfiSyncEvent: FfiConverterRustBuffer {
         )
 
         case 6: return .checkpointFailed(targetKey: try FfiConverterString.read(from: &buf), acceptSeq: try FfiConverterInt64.read(from: &buf), error: try FfiConverterString.read(from: &buf)
+        )
+
+        case 7: return .reactionEffect(payload: try FfiConverterData.read(from: &buf)
         )
 
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -7388,6 +12612,11 @@ public struct FfiConverterTypeFfiSyncEvent: FfiConverterRustBuffer {
             FfiConverterInt64.write(acceptSeq, into: &buf)
             FfiConverterString.write(error, into: &buf)
 
+
+        case let .reactionEffect(payload):
+            writeInt(&buf, Int32(7))
+            FfiConverterData.write(payload, into: &buf)
+
         }
     }
 }
@@ -7405,6 +12634,186 @@ public func FfiConverterTypeFfiSyncEvent_lift(_ buf: RustBuffer) throws -> FfiSy
 #endif
 public func FfiConverterTypeFfiSyncEvent_lower(_ value: FfiSyncEvent) -> RustBuffer {
     return FfiConverterTypeFfiSyncEvent.lower(value)
+}
+
+
+
+/**
+ * Local operation phase, not proof that a remote mutation rolled back or a message was delivered.
+ */
+
+public enum FfiTransferPhase: Equatable, Hashable {
+
+    case ready
+    case preparing
+    case uploading
+    case downloading
+    case sending
+    case complete
+    case failed
+    case interrupted
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiTransferPhase: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiTransferPhase: FfiConverterRustBuffer {
+    typealias SwiftType = FfiTransferPhase
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTransferPhase {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .ready
+
+        case 2: return .preparing
+
+        case 3: return .uploading
+
+        case 4: return .downloading
+
+        case 5: return .sending
+
+        case 6: return .complete
+
+        case 7: return .failed
+
+        case 8: return .interrupted
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiTransferPhase, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .ready:
+            writeInt(&buf, Int32(1))
+
+
+        case .preparing:
+            writeInt(&buf, Int32(2))
+
+
+        case .uploading:
+            writeInt(&buf, Int32(3))
+
+
+        case .downloading:
+            writeInt(&buf, Int32(4))
+
+
+        case .sending:
+            writeInt(&buf, Int32(5))
+
+
+        case .complete:
+            writeInt(&buf, Int32(6))
+
+
+        case .failed:
+            writeInt(&buf, Int32(7))
+
+
+        case .interrupted:
+            writeInt(&buf, Int32(8))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTransferPhase_lift(_ buf: RustBuffer) throws -> FfiTransferPhase {
+    return try FfiConverterTypeFfiTransferPhase.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTransferPhase_lower(_ value: FfiTransferPhase) -> RustBuffer {
+    return FfiConverterTypeFfiTransferPhase.lower(value)
+}
+
+
+
+/**
+ * Header probing alone is explicitly unqualified and is rejected by common Rust preparation.
+ */
+
+public enum FfiVideoEvidence: Equatable, Hashable {
+
+    case headerOnly
+    case nativeDecoded
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiVideoEvidence: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiVideoEvidence: FfiConverterRustBuffer {
+    typealias SwiftType = FfiVideoEvidence
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiVideoEvidence {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .headerOnly
+
+        case 2: return .nativeDecoded
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiVideoEvidence, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .headerOnly:
+            writeInt(&buf, Int32(1))
+
+
+        case .nativeDecoded:
+            writeInt(&buf, Int32(2))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiVideoEvidence_lift(_ buf: RustBuffer) throws -> FfiVideoEvidence {
+    return try FfiConverterTypeFfiVideoEvidence.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiVideoEvidence_lower(_ value: FfiVideoEvidence) -> RustBuffer {
+    return FfiConverterTypeFfiVideoEvidence.lower(value)
 }
 
 
@@ -7487,6 +12896,30 @@ public func FfiConverterTypeSecureEnrollmentWrite_lower(_ value: SecureEnrollmen
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt8: FfiConverterRustBuffer {
+    typealias SwiftType = UInt8?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt8.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt8.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionUInt16: FfiConverterRustBuffer {
     typealias SwiftType = UInt16?
 
@@ -7535,6 +12968,30 @@ fileprivate struct FfiConverterOptionInt32: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionInt64: FfiConverterRustBuffer {
     typealias SwiftType = Int64?
 
@@ -7551,6 +13008,30 @@ fileprivate struct FfiConverterOptionInt64: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionBool: FfiConverterRustBuffer {
+    typealias SwiftType = Bool?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterBool.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterBool.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -7647,6 +13128,126 @@ fileprivate struct FfiConverterOptionTypeAccountState: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeAccountState.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiAttachmentManifest: FfiConverterRustBuffer {
+    typealias SwiftType = FfiAttachmentManifest?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiAttachmentManifest.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiAttachmentManifest.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiDecodedVideoFrame: FfiConverterRustBuffer {
+    typealias SwiftType = FfiDecodedVideoFrame?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiDecodedVideoFrame.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiDecodedVideoFrame.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiNativeMediaOutput: FfiConverterRustBuffer {
+    typealias SwiftType = FfiNativeMediaOutput?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiNativeMediaOutput.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiNativeMediaOutput.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiOutgoingOutcome: FfiConverterRustBuffer {
+    typealias SwiftType = FfiOutgoingOutcome?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiOutgoingOutcome.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiOutgoingOutcome.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiTransferCheckpoint: FfiConverterRustBuffer {
+    typealias SwiftType = FfiTransferCheckpoint?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiTransferCheckpoint.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiTransferCheckpoint.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -7900,6 +13501,31 @@ fileprivate struct FfiConverterSequenceTypeFfiMessage: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeFfiOutgoingJobSummary: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiOutgoingJobSummary]
+
+    public static func write(_ value: [FfiOutgoingJobSummary], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiOutgoingJobSummary.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiOutgoingJobSummary] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiOutgoingJobSummary]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiOutgoingJobSummary.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeTargetSub: FfiConverterRustBuffer {
     typealias SwiftType = [TargetSub]
 
@@ -8121,6 +13747,61 @@ public func tinkleFfiInit()  {try! rustCall() {
     )
 }
 }
+public func mediaImageDimensions(width: UInt32, height: UInt32, attempt: UInt32)throws  -> FfiMediaDimensions  {
+    return try  FfiConverterTypeFfiMediaDimensions_lift(try rustCallWithError(FfiConverterTypeFfiMediaError_lift) {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_func_media_image_dimensions(
+        FfiConverterUInt32.lower(width),
+        FfiConverterUInt32.lower(height),
+        FfiConverterUInt32.lower(attempt),uniffiCallStatus
+    )
+})
+}
+public func mediaVideoDimensions(width: UInt32, height: UInt32)throws  -> FfiMediaDimensions  {
+    return try  FfiConverterTypeFfiMediaDimensions_lift(try rustCallWithError(FfiConverterTypeFfiMediaError_lift) {
+        uniffiCallStatus in
+    uniffi_tinkle_ffi_fn_func_media_video_dimensions(
+        FfiConverterUInt32.lower(width),
+        FfiConverterUInt32.lower(height),uniffiCallStatus
+    )
+})
+}
+/**
+ * LOCAL only; does not upload, create thumbnails for publication, or persist a send intent.
+ */
+public func prepareNativeMedia(path: String, kind: FfiNativeMediaKind, preparer: FfiPlatformMediaPreparer)async throws  -> FfiPreparedNativeMedia  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_func_prepare_native_media(FfiConverterString.lower(path),FfiConverterTypeFfiNativeMediaKind_lower(kind),FfiConverterTypeFfiPlatformMediaPreparer_lower(preparer)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeFfiPreparedNativeMedia_lift,
+            errorHandler: FfiConverterTypeFfiMediaError_lift
+        )
+}
+/**
+ * Local preparation in an existing absolute host-owned private writable directory.
+ * Keep the directory available through native teardown and release of the returned artifact.
+ * Use Android Context.cacheDir rather than the process-wide system temporary directory.
+ */
+public func prepareNativeMediaIn(path: String, scratchRoot: String, kind: FfiNativeMediaKind, preparer: FfiPlatformMediaPreparer)async throws  -> FfiPreparedNativeMedia  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tinkle_ffi_fn_func_prepare_native_media_in(FfiConverterString.lower(path),FfiConverterString.lower(scratchRoot),FfiConverterTypeFfiNativeMediaKind_lower(kind),FfiConverterTypeFfiPlatformMediaPreparer_lower(preparer)
+                )
+            },
+            pollFunc: ffi_tinkle_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tinkle_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tinkle_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeFfiPreparedNativeMedia_lift,
+            errorHandler: FfiConverterTypeFfiMediaError_lift
+        )
+}
 
 private enum InitializationResult {
     case ok
@@ -8147,6 +13828,18 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_func_tinkle_ffi_init() != 34048) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_func_media_image_dimensions() != 41501) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_func_media_video_dimensions() != 36053) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_func_prepare_native_media() != 532) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_func_prepare_native_media_in() != 11103) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_accountstatesubscription_next() != 38373) {
@@ -8197,16 +13890,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_get_upload_status() != 6124) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_upload_bytes() != 21989) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_upload_bytes() != 11576) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_upload_part() != 12340) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_get_messages() != 21759) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_get_target_changes() != 2168) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_is_connected() != 22480) {
@@ -8218,6 +13908,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_is_suspended() != 47511) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_list_message_changes() != 20993) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_load_dialogs() != 19225) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8227,7 +13920,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_next_event() != 1749) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_pending_len() != 35948) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_pending_len() != 21707) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_reconcile_now() != 51897) {
@@ -8242,7 +13935,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_resume() != 27994) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_send_message() != 49929) {
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_send_message() != 18827) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_set_principal_user_id() != 61488) {
@@ -8314,6 +14007,300 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_tinkleclient_unregister_push() != 33025) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_discard() != 8498) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_enqueue_album() != 35178) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_enqueue_media() != 9621) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_enqueue_message() != 8888) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_get_job() != 57367) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_jobs() != 1606) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_resume() != 40372) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_account_delete_profile_photo() != 27696) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_account_get_profile_photos() != 47137) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_account_select_profile_photo() != 16179) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_account_set_profile_photo() != 12618) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_account_update_profile() != 28862) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_account_update_username() != 62502) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_account_validate_username() != 15445) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_add_chat_participant() != 8204) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_batch_get_message_reactions() != 61640) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_cancel_scheduled_messages() != 20172) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_close_poll() != 10602) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_create_chat() != 4618) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_delete_history() != 51815) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_delete_messages() != 23741) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_edit_chat_admin() != 33862) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_edit_chat_photo() != 19446) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_edit_chat_restricted_scopes() != 12424) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_edit_chat_title() != 15322) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_edit_message() != 11941) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_chat_details() != 984) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_chats() != 18721) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_dialogs() != 32675) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_history() != 57059) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_messages() != 41539) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_poll_results() != 33627) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_poll_votes() != 10085) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_recent_reactions() != 49399) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_scheduled_messages() != 28972) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_unread_mentions() != 58965) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_get_unread_reactions() != 11478) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_list_message_changes() != 11990) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_list_message_reactions() != 43274) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_list_thread_messages() != 19993) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_mark_history_read() != 14492) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_read_mentions() != 50638) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_read_reactions() != 39658) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_read_thread() != 9439) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_remove_chat_participant() != 55899) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_search() != 3332) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_send_album() != 52907) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_send_media() != 35750) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_send_message() != 58077) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_send_reaction() != 54579) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_send_vote() != 43938) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_set_history_ttl() != 39643) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_set_message_pin() != 21876) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_set_typing() != 34149) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_start_bot() != 5196) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_unpin_all_messages() != 11815) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_messages_update_chat_description() != 27296) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_add_pack_asset() != 5997) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_clear_recent_stickers() != 23576) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_create_pack() != 9252) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_create_sticker_asset() != 40949) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_delete_pack() != 65244) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_delete_sticker_asset() != 18340) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_archived_packs() != 37827) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_favorite_stickers() != 1004) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_installed_packs() != 11627) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_owned_packs() != 54068) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_pack() != 10131) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_pack_by_short_name() != 35799) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_recent_stickers() != 27257) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_get_sticker_assets() != 42982) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_install_pack() != 42366) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_publish_pack() != 41683) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_remove_pack_asset() != 14876) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_reorder_pack_assets() != 60009) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_reorder_packs() != 38447) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_save_recent_sticker() != 64985) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_search_packs() != 42297) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_toggle_favorite_sticker() != 45579) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_uninstall_pack() != 41676) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_unpublish_pack() != 41333) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_update_pack() != 7800) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_stickers_update_sticker_asset() != 1825) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_users_get_user_complete() != 60905) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_users_get_users() != 33457) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_clear_native_media_preparer() != 64304) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_configure_native_media_preparer() != 59465) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_download_bytes_with_context() != 53980) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_download_to_path() != 57139) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_download_to_path_with_context() != 20572) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_transfer_checkpoint() != 37466) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_files_upload_path() != 10377) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_adopt_native_attachment() != 34209) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_attachment_manifest() != 56914) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_prepare_attachment() != 16702) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_sending_prepare_native_attachment() != 53044) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_clear_video_decoder() != 50839) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_tinkleclient_configure_video_decoder() != 3684) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tinkle_ffi_checksum_method_enrollmentoperation_operation_id() != 23696) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8368,7 +14355,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_list_dialogs() != 28584) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_load_journal() != 29543) {
+    if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_load_journal() != 28195) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_sqlitestorage_save_chat_proto() != 43737) {
@@ -8387,6 +14374,78 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_method_fficursorstore_clear_principal() != 37263) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_transfercontrol_cancel() != 25556) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_transfercontrol_progress() != 27320) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffinativemediainput_deadline_ms() != 64064) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffinativemediainput_is_cancelled() != 20748) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffinativemediainput_kind() != 46063) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffinativemediainput_max_duration_ms() != 12387) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffinativemediainput_max_frames() != 12522) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffinativemediainput_max_output_bytes() != 38799) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffinativemediainput_output_path() != 42252) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffinativemediainput_size_bytes() != 16470) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffinativemediainput_source_path() != 44609) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffiplatformmediapreparer_prepare() != 23362) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffiplatformvideodecoder_inspect_and_decode() != 48474) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_facts() != 49518) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_mime_type() != 21285) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_output_sha256() != 820) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_path() != 32189) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_recipe() != 47637) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_source_sha256() != 43401) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffipreparednativemedia_waveform() != 38586) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffivideoinput_is_cancelled() != 5376) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffivideoinput_size_bytes() != 45468) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffivideoinput_source_path() != 49774) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tinkle_ffi_checksum_method_ffivideoinput_source_sha256() != 63051) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tinkle_ffi_checksum_constructor_tinkleclient_new() != 45429) {
@@ -8413,8 +14472,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tinkle_ffi_checksum_constructor_inmemoryffistore_new() != 37004) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tinkle_ffi_checksum_constructor_transfercontrol_new() != 47096) {
+        return InitializationResult.apiChecksumMismatch
+    }
 
     uniffiCallbackInitFfiCursorStore()
+    uniffiCallbackInitFfiPlatformMediaPreparer()
+    uniffiCallbackInitFfiPlatformVideoDecoder()
     uniffiCallbackInitFfiSecureEnrollmentStore()
     return InitializationResult.ok
 }()

@@ -58,6 +58,16 @@ Initialization is thread-safe and idempotent. It calls
 the native contract/function checksums and registers foreign callbacks. Release
 generated object handles with `close()`/`destroy()` when their owner finishes.
 
+For standalone Android media preparation, call
+`prepareNativeMediaIn(path, context.cacheDir.absolutePath, kind, AndroidMediaPreparer())`
+after initialization, and release the returned artifact with `use`/`close`.
+Keep the app-private cache directory available until native teardown and artifact
+release finish. Do not use the process temporary-directory fallback on API 24:
+it can resolve to `/data/local/tmp`, which the app cannot write. SQLite-backed
+clients use the database's parent directory for preparation and upload snapshots;
+keep that database in app-private storage. Memory-backed clients retain the
+system temporary-directory fallback. No process-wide `TMPDIR` change is needed.
+
 Rust owns protocol handling, subscriptions, per-target journals, reconciliation,
 and persistence. Prefer `SqliteStorage.openAsync(path)` with
 `TinkleClient.newSqlite(config, trustSource, storage)` for the shared native

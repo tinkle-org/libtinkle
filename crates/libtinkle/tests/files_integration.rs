@@ -88,7 +88,6 @@ fn file_info_for(file_id: i64, bytes: &[u8]) -> tinkle_schema::proto::FileInfo {
         sha256: libtinkle::sha256(bytes).to_vec().into(),
         mime_type: None,
         file_name: None,
-        encrypted: false,
         created_at: None,
     }
 }
@@ -430,15 +429,57 @@ async fn start_mock_logged() -> (SocketAddr, Shared) {
 /// Create a fixture-pinned Bootstrap client with no alternate-port fallback.
 fn test_client(addr: SocketAddr) -> libtinkle::Client {
     let cfg = support::config(addr);
-    libtinkle::Client::new(
+    libtinkle::Client::new_sqlite(
         cfg,
         support::source(),
-        libtinkle::InMemoryCursorStore::new(),
+        Arc::new(libtinkle::Storage::open_in_memory().unwrap()),
     )
 }
 
 fn is_codec(e: &libtinkle::TinkleError) -> bool {
     matches!(e, libtinkle::TinkleError::Codec(_))
+}
+
+/// A completed attachment does not cancel sibling operations sharing the caller's token.
+#[tokio::test]
+async fn attachment_success_preserves_shared_cancellation_token() {
+    let addr = start_mock().await;
+    let client = test_client(addr);
+    client.set_principal_user_id(42).await;
+    client.connect().await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("document");
+    std::fs::write(&path, b"attachment").unwrap();
+    let token = libtinkle::CancelToken::new();
+    for key in ["first", "second"] {
+        client
+            .sending()
+            .prepare_attachment(
+                key.into(),
+                &path,
+                libtinkle::media::MediaKind::Document,
+                Some(token.clone()),
+            )
+            .await
+            .unwrap();
+        assert!(!token.is_cancelled());
+    }
+    token.cancel();
+    assert!(matches!(
+        client
+            .sending()
+            .prepare_attachment(
+                "cancelled".into(),
+                &path,
+                libtinkle::media::MediaKind::Document,
+                Some(token),
+            )
+            .await,
+        Err(libtinkle::SendError::Media(
+            libtinkle::media::MediaError::Cancelled
+        ))
+    ));
+    client.close().await;
 }
 
 // -- Validation (no transport needed: bad inputs fail before `call_raw`) --
@@ -455,7 +496,6 @@ async fn files_validation_rejects_bad_inputs() {
                 file_name: None,
                 mime_type: None,
                 sha256: None,
-                encrypted: false,
             })
             .await
             .unwrap_err()
@@ -468,7 +508,6 @@ async fn files_validation_rejects_bad_inputs() {
                 file_name: None,
                 mime_type: None,
                 sha256: None,
-                encrypted: false,
             })
             .await
             .unwrap_err()
@@ -481,7 +520,6 @@ async fn files_validation_rejects_bad_inputs() {
                 file_name: None,
                 mime_type: None,
                 sha256: Some(vec![0u8; 31].into()),
-                encrypted: false,
             })
             .await
             .unwrap_err()
@@ -583,13 +621,19 @@ async fn files_validation_rejects_bad_inputs() {
     // GetFileInfo
     assert!(is_codec(
         &c.files()
-            .get_file_info(GetFileInfoRequest { file_id: 0 })
+            .get_file_info(GetFileInfoRequest {
+                file_id: 0,
+                ..Default::default()
+            })
             .await
             .unwrap_err()
     ));
     assert!(is_codec(
         &c.files()
-            .get_file_info(GetFileInfoRequest { file_id: -3 })
+            .get_file_info(GetFileInfoRequest {
+                file_id: -3,
+                ..Default::default()
+            })
             .await
             .unwrap_err()
     ));
@@ -600,6 +644,7 @@ async fn files_validation_rejects_bad_inputs() {
                 file_id: 0,
                 offset: 0,
                 limit: 5,
+                ..Default::default()
             })
             .await
             .unwrap_err()
@@ -610,6 +655,7 @@ async fn files_validation_rejects_bad_inputs() {
                 file_id: 1,
                 offset: -1,
                 limit: 5,
+                ..Default::default()
             })
             .await
             .unwrap_err()
@@ -620,6 +666,7 @@ async fn files_validation_rejects_bad_inputs() {
                 file_id: 1,
                 offset: 0,
                 limit: 0,
+                ..Default::default()
             })
             .await
             .unwrap_err()
@@ -632,7 +679,6 @@ async fn files_validation_rejects_bad_inputs() {
             file_name: None,
             mime_type: None,
             sha256: None,
-            encrypted: false,
         })
         .await
         .unwrap_err()
@@ -642,6 +688,7 @@ async fn files_validation_rejects_bad_inputs() {
             file_id: 1,
             offset: 0,
             limit: -2,
+            ..Default::default()
         })
         .await
         .unwrap_err()
@@ -662,7 +709,6 @@ async fn files_chunked_upload_download_happy_path() {
             file_name: Some("hello.txt".into()),
             mime_type: Some("text/plain".into()),
             sha256: None,
-            encrypted: false,
         })
         .await
         .unwrap();
@@ -730,6 +776,7 @@ async fn files_chunked_upload_download_happy_path() {
     let info = c
         .get_file_info(GetFileInfoRequest {
             file_id: file.file_id,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -745,6 +792,7 @@ async fn files_chunked_upload_download_happy_path() {
                 file_id: file.file_id,
                 offset,
                 limit: MAX_DOWNLOAD,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -769,7 +817,6 @@ async fn files_chunked_upload_download_happy_path() {
             file_name: None,
             mime_type: None,
             sha256: None,
-            encrypted: false,
         })
         .await
         .unwrap();

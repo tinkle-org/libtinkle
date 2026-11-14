@@ -21,10 +21,26 @@
 uniffi::setup_scaffolding!();
 
 mod account;
+mod sending;
+mod services;
+mod transfers;
+mod video;
 pub use account::AccountEnrollmentObservation;
 pub use account::{
     AccountAuthorization, AccountCleanup, AccountNetwork, AccountSession, AccountSignOutReason,
     AccountState, AccountStateSubscription, AccountStatus,
+};
+pub use sending::{
+    FfiMediaError, FfiOutgoingJob, FfiOutgoingJobSummary, FfiOutgoingState, FfiSendError,
+    FfiSendRetry,
+};
+pub use transfers::{
+    FfiMediaKind, FfiPreparedAttachment, FfiTransferCheckpoint, FfiTransferPhase,
+    FfiTransferProgress, FfiUploadOptions, TransferControl,
+};
+pub use video::{
+    FfiDecodedVideo, FfiDecodedVideoFrame, FfiPlatformVideoDecoder, FfiVideoDecodeLimits,
+    FfiVideoEvidence, FfiVideoInput,
 };
 pub mod client;
 pub mod config;

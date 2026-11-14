@@ -7,7 +7,7 @@
 //!
 //! Vocabulary is per-target journals: `target_key` is
 //! `target:user:<id>` / `target:room:<id>` and `accept_seq` is the last
-//! applied `GetTargetChanges.last_accept_seq` (0 is the initial position).
+//! applied `ListMessageChanges.last_accept_seq` (0 is the initial position).
 
 use std::sync::Arc;
 

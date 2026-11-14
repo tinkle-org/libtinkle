@@ -65,6 +65,7 @@ dependencies {
     // JNA's Android AAR carries 16 KB-compatible libjnidispatch for all four ABIs.
     api("net.java.dev.jna:jna:5.18.1@aar") { isTransitive = true }
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    testImplementation("junit:junit:4.13.2")
 }
 
 tasks.named("preBuild") { dependsOn(prepareSdkArtifacts) }

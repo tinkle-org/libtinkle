@@ -2,14 +2,14 @@
 //!
 //! Journal checkpoints belong to one authenticated principal and one
 //! conversation target (`target:user:<id>` / `target:room:<id>`). They hold
-//! the last applied `GetTargetChanges.last_accept_seq` (0 is the initial
+//! the last applied `ListMessageChanges.last_accept_seq` (0 is the initial
 //! position) and survive connections and app restarts while history remains
 //! retained. Account switches MUST NOT reuse another account's cursor.
 //! Persistent user application state lives here, outside the generic Syntra
 //! core.
 //!
 //! Reconciliation model: notification frames are opaque hints that kick
-//! per-target `GetTargetChanges` paging; the journal cursor advances only
+//! per-target `ListMessageChanges` paging; the journal cursor advances only
 //! inside an atomic `apply_journal_page_fenced` commit (see
 //! `tinkle-storage`). Connectivity observations are ephemeral and never
 //! advance a cursor.

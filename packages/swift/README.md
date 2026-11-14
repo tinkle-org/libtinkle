@@ -67,7 +67,7 @@ The XCTest suite initializes Rust, constructs native stores and clients, checks
 typed async errors and shutdown, and uses the host Rust encrypted TCP fixture.
 Start it from the core repository with
 `python3 scripts/with-native-fixture.py <simulator test command...>`.
-The gateway decodes actual `GetTargetChanges` requests to verify that Rust awaits
+The gateway decodes actual `ListMessageChanges` requests to verify that Rust awaits
 Swift's async journal-store callbacks and uses principal- and target-specific
 `Int64` acceptance positions. Storage failures are checked through Rust target
 status and sync events. A separate smoke test writes protobuf cache data through

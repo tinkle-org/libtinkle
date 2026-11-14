@@ -32,17 +32,17 @@ from pathlib import Path
 import sys
 
 
-def apply_patch(text, name, old, replacement):
+def apply_patch(text, name, old, replacement, *, count=1, language="Swift"):
     # Accept only a single known original or an exact upstream-fixed fragment.
     # Template drift must fail in both modes before any bindings are written.
     counts = (text.count(old), text.count(replacement))
-    if counts == (1, 0):
-        return text.replace(old, replacement, 1)
-    if counts == (0, 1):
+    if counts == (count, 0):
+        return text.replace(old, replacement, count)
+    if counts == (0, count):
         return text
     raise SystemExit(
-        f"error: unexpected Swift template for {name}: expected exactly one original "
-        f"or fixed fragment, found {counts[0]} original and {counts[1]} fixed; "
+        f"error: unexpected {language} template for {name}: expected exactly {count} original "
+        f"or fixed fragments, found {counts[0]} original and {counts[1]} fixed; "
         "review scripts/generate-bindings.sh against the generated template"
     )
 
@@ -59,9 +59,8 @@ for generated, relative in files.items():
     source, destination = stage / generated, root / relative
     if not source.is_file():
         raise SystemExit(f"error: generator did not produce {generated}")
-    # Normalize only whitespace, plus two upstream UniFFI Swift template fixes
-    # (Kotlin already correct): free RustBuffer on decode failure, and read
-    # handle-map count under its lock. Patches are re-applied on every regen so
+    # Normalize whitespace and apply deliberate UniFFI runtime fixes: Swift buffer
+    # cleanup/locking, and Kotlin callback ownership before cancellation. Reapply so
     # --check passes with the fixed runtime. Unknown templates fail closed.
     text = "\n".join(line.rstrip() for line in source.read_text().splitlines()) + "\n"
     if generated == "TinkleSDK.swift":
@@ -88,6 +87,14 @@ for generated, relative in files.items():
             text, "handle-map locking",
             "var count: Int {\n        get {\n            map.count\n        }\n    }",
             "var count: Int {\n        get {\n            lock.withLock { map.count }\n        }\n    }",
+        )
+    if generated.endswith(".kt"):
+        text = apply_patch(
+            text, "async callback atomic start",
+            "val job = GlobalScope.launch coroutineBlock@ {",
+            "// Lift owned arguments and enter callback cleanup even if cancelled before dispatch.\n"
+            "    val job = GlobalScope.launch(start = kotlinx.coroutines.CoroutineStart.ATOMIC) coroutineBlock@ {",
+            count=2, language="Kotlin",
         )
     previous = destination.read_text() if destination.is_file() else ""
     if previous == text:

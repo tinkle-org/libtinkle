@@ -63,24 +63,13 @@ exit results, skips, and raw evidence paths.
 
 ## Current published schema pin
 
-The published dependency is
-`tinkle-org_schema_community_neoeinstein-prost` version
-`0.5.0-20261109202628-d85fcc4fe592.2`, with Cargo checksum
-`930fa11b428fd9354fb46ebe685fdba1f2f1d165a4a0202191aa7c848c37ba2e`.
-BSR module `buf.build/tinkle-org/schema` commit
-`d85fcc4fe5924b57a8def89284d91ed5` maps to schema Git commit
-`f5c83994172ebd8c9a9d6bcea4a095591b1579ae`.
-It includes `Session.unconfirmed`, `AccountService/ConfirmSession`, and
-`SessionChanged`, alongside enrollment disposition, initialization, and KeepAlive.
-
-The corresponding published Go schema artifacts are:
-
-| Module | Version |
-| --- | --- |
-| `buf.build/gen/go/tinkle-org/schema/protocolbuffers/go` | `v1.36.12-20261109202628-d85fcc4fe592.2` |
-| `buf.build/gen/go/tinkle-org/schema/grpc/go` | `v1.6.2-20261109202628-d85fcc4fe592.1` |
-
-`Cargo.toml` and `Cargo.lock` own the SDK's installed pin and checksum.
+`Cargo.toml` and `Cargo.lock` pin the published prost artifact
+`=0.5.0-20261112172535-6099d89af63f.2` and its checksum. BSR commit
+`6099d89af63f4813bba67870d08500ea` maps to schema Git revision
+`e0038da40641a39ee90e8d4b95a8c3f36e213044`. This baseline includes the public
+naming/field migration and scheduled-message/poll contracts used by the SDK;
+no source override or candidate generation is required. Go consumers own their
+independent published coordinates in their manifests.
 
 Required Rust CI, native packaging, binding parity and release qualification use
 the same published dependency and committed lockfile with `--locked`. They do not
@@ -106,7 +95,7 @@ SDK checks and their verification boundaries.
 
 ## Published artifact integration
 
-For a later publication, retrieve the actual prost
+For a subsequent upgrade, retrieve the actual published prost
 coordinate rather than constructing a version:
 
 ```sh

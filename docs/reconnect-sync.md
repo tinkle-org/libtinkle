@@ -10,7 +10,7 @@ survive.
 On loss, all in-flight RPCs report `UNAVAILABLE` with unknown outcome
 (`is_unknown_outcome()==true`). Retry only when no terminal `result`
 arrived AND the operation is idempotent or carries an application
-operation key (`random_id` for sends), with a fresh `request_id`, bounded
+operation key (`idempotency_key` for sends), with a fresh `request_id`, bounded
 retries, and jittered backoff (`ReconnectPolicy`: 500 ms base, ×2,
 30 s cap, 10 attempts default).
 
@@ -73,7 +73,7 @@ own mutation journal, and sync reconciles journals per target.
    means untracked, never start-live). Connectivity observations
    (`ObserveConnectivity`) are orthogonal: they observe presence, never
    sync state.
-3. Reconcile one target with `GetTargetChanges{target, after_accept_seq,
+3. Reconcile one target with `ListMessageChanges{target, after_accept_seq,
    limit}` pages over Syntra unary RPC on the encrypted native TCP connection. The journal
    keeps mutations at acceptance order; `after_accept_seq` is the
    exclusive lower bound (zero requests everything retained).
@@ -90,12 +90,13 @@ own mutation journal, and sync reconciles journals per target.
    bounded re-page from `last_accept_seq` and then stops, treating the
    journal as unreported rather than complete. A short page never implies
    completion on its own.
-6. Deduplicate by `accept_seq`: the token is conversation-local, assigned
-   once on acceptance, and stable across edits of the same message. A
-   fetched token strictly newer than the applied one is newer; strictly
-   below is duplicate-or-stale; equal tokens (normal for edits) and any
-   absent token order by `edit_date` instead (`fresher_body`). Absent
-   tokens never count as dedup votes. Retention windows may drop older journal positions
+6. Order distinct messages by conversation-local `accept_seq`, assigned once on
+    acceptance and stable across edits. Copies of one body compare `body_revision`
+    when both report it, otherwise only `edit_date`: a later date wins and absence
+    never beats a dated copy. Acceptance positions never rank body freshness.
+    Winning bodies replace their file-reference set atomically; stale bodies cannot
+    add references. Dialog touches select acceptance order, not numeric message IDs.
+    Retention windows may drop older journal positions
    entirely: a page that starts higher than the requested bound does not
    imply the skipped past was disclosed — full-history repair stays the
    responsibility of history fetches, not of the journal alone.
@@ -108,7 +109,16 @@ own mutation journal, and sync reconciles journals per target.
    token, which cannot rank copies: when two bodies for one message id
    disagree, keep the fresher by later `edit_date`; an absent `edit_date`
    never beats a dated one. Learn which edits and removals happened
-   through `GetTargetChanges`, not by diffing fetched bodies.
+   through `ListMessageChanges`, not by diffing fetched bodies.
+   An explicit `body_invalidated=true` nonterminal marker is different from an
+   omitted fetch result: it authorizes identity-only eviction at its positive
+   `message_revision`, with no body or new presentation values. Reconciliation
+   does not fetch that withheld body. SQLite schema v9 atomically advances the
+   cursor, removes old bodies/file references, and retains a nonterminal revision
+   floor. Older or unversioned cache writes cannot restore the evicted body;
+   a later authorized same-or-newer revision may hydrate. This never inserts a
+   permanent viewer-deletion tombstone. Explicit Deleted/Revoked markers remain
+   terminal and cannot be undone by later snapshots.
 8. Journal failures are per-target, never terminal for the session: a
    failed target parks in `Failed` status and emits
    `ReconcileFailed{target_key, error}`; the supervisor keeps retrying
@@ -123,7 +133,7 @@ own mutation journal, and sync reconciles journals per target.
    (the journal cursor itself never moves on either policy).
 10. Connectivity observations are ephemeral, never checkpointed, cleared
     on disconnect.
-11. Sends persist `{request, random_id≠0}` before transmitting; lost
+11. Sends persist `{request, idempotency_key≠0}` before transmitting; lost
     results retry unchanged with fresh correlation.
 
 ## Demand-driven contract (hosts)
@@ -144,7 +154,7 @@ own mutation journal, and sync reconciles journals per target.
   means untracked, or no live manager while offline/suspended — so hosts
   must not drop tracked conversations on a status `None` during
   reconnect.
-- Journal reads (`get_messages`, `get_target_changes`) and snapshots
+- Journal reads (`get_messages`, `list_message_changes`) and snapshots
   (`load_history`, `load_dialogs`) never move accept positions. Pair
   snapshots with `HydrateCache` for offline reads; journal hydration
   (`GetMessages`) follows `accept_seq`/`edit_date` freshness, never

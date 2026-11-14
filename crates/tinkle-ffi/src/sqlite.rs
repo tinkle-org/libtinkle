@@ -128,7 +128,7 @@ impl SqliteStorage {
     }
 
     /// Durable journal cursor for one conversation: the last applied
-    /// `GetTargetChanges.last_accept_seq` (`None` when nothing applied yet).
+    /// `ListMessageChanges.last_accept_seq` (`None` when nothing applied yet).
     /// `target_key` is `target:user:<id>` / `target:room:<id>`.
     pub async fn load_journal(
         &self,

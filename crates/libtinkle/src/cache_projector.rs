@@ -6,10 +6,8 @@
 //! fetches (`GetMessages` for edited bodies) happen before this projection;
 //! this module never does I/O.
 //!
-//! Dedup: message rows carry `accept_seq` + `edit_date`. Higher `accept_seq`
-//! wins; rows with an absent token order only by `edit_date` via
-//! `fresher_body` (dated beats absent, later beats earlier, absent never
-//! beats dated).
+//! Body copies compare body revisions when both report them, otherwise only edit dates.
+//! Acceptance positions order distinct messages and never rank body freshness.
 
 use std::collections::HashSet;
 
@@ -37,6 +35,7 @@ fn edit_parts(msg: &TinkleMessage) -> (Option<i64>, Option<i32>) {
 
 /// Build cache writes for one validated `TargetChange`.
 /// - Edited with a body → message upsert (hydrated body).
+/// - Explicit nonterminal body invalidation → revision floor, no body or file refs.
 /// - Deleted/Revoked → `remove_messages` (identity + kind only, never a body).
 pub fn project_change_to_ops(
     target_key: &str,
@@ -45,8 +44,32 @@ pub fn project_change_to_ops(
     let mut ops = tinkle_storage::CacheOps::default();
     let kind = TargetChangeKind::try_from(change.kind)
         .map_err(|_| format!("unknown target change kind {}", change.kind))?;
+    if change.body_invalidated {
+        let revision = change
+            .message_revision
+            .filter(|r| *r > 0)
+            .ok_or("body invalidation requires a positive revision")?;
+        if change.message_id <= 0
+            || change.message.is_some()
+            || matches!(
+                kind,
+                TargetChangeKind::Deleted
+                    | TargetChangeKind::Revoked
+                    | TargetChangeKind::Unspecified
+            )
+        {
+            return Err("invalid nonterminal body invalidation".into());
+        }
+        ops.body_invalidations
+            .push((target_key.to_owned(), change.message_id, revision));
+        return Ok(ops);
+    }
     match kind {
-        TargetChangeKind::Edited => {
+        TargetChangeKind::Edited
+        | TargetChangeKind::Pin
+        | TargetChangeKind::Reaction
+        | TargetChangeKind::Poll
+        | TargetChangeKind::Ack => {
             let msg = change.message.as_ref().ok_or_else(|| {
                 format!(
                     "edited change for message {} must carry a body",
@@ -85,9 +108,8 @@ pub fn project_change_to_ops(
 }
 
 /// Build cache writes for one fetched `Message` body (e.g. from
-/// `GetMessages` hydration of edited ids). Upserts carry `accept_seq` /
-/// `edit_date` so storage dedup (`higher accept_seq wins`, else
-/// `fresher_body`) applies; absent tokens never vote on dedup.
+/// `GetMessages` hydration of edited ids). Upserts carry body revisions and edit dates
+/// for storage freshness checks, independently of message acceptance positions.
 pub fn project_message_to_ops(
     target_key: &str,
     msg: &TinkleMessage,
@@ -104,6 +126,12 @@ fn push_message(
 ) -> Result<(), String> {
     if msg.message_id <= 0 {
         return Err("message_id must be positive".into());
+    }
+    if let Some(revision) = msg.body_revision {
+        if revision <= 0 {
+            return Err("message body_revision must be positive".into());
+        }
+        ops.message_body_revisions.push((msg.message_id, revision));
     }
     if target_key.is_empty() {
         return Err("target_key must not be empty".into());
@@ -159,21 +187,74 @@ fn push_message(
 /// conversation peer) commits a single dialog row instead of tripping the
 /// SQLite 256-dialog batch limit.
 pub fn merge_ops(base: &mut tinkle_storage::CacheOps, extra: tinkle_storage::CacheOps) {
-    base.messages.extend(extra.messages);
+    // Coalesce repeated message IDs before pairing rows with revision metadata.
+    // A newer journal marker can carry the same or an older fetched body.
+    let mut winners = HashSet::new();
+    for message in extra.messages {
+        let revision = extra
+            .message_body_revisions
+            .iter()
+            .find(|(id, _)| *id == message.message_id)
+            .map(|(_, r)| *r);
+        let index = base
+            .messages
+            .iter()
+            .position(|m| m.message_id == message.message_id);
+        let replace = index.is_none_or(|index| {
+            let old = &base.messages[index];
+            let old_revision = base
+                .message_body_revisions
+                .iter()
+                .find(|(id, _)| *id == message.message_id)
+                .map(|(_, r)| *r);
+            match (old_revision, revision) {
+                (Some(a), Some(b)) => b > a,
+                _ => match (old.edit_date_secs, message.edit_date_secs) {
+                    (None, Some(_)) => true,
+                    (Some(a), Some(b)) => {
+                        (b, message.edit_date_nanos.unwrap_or(0))
+                            > (a, old.edit_date_nanos.unwrap_or(0))
+                    }
+                    _ => false,
+                },
+            }
+        });
+        if replace {
+            winners.insert(message.message_id);
+            base.message_files
+                .retain(|r| r.message_id != message.message_id);
+            base.message_body_revisions
+                .retain(|(id, _)| *id != message.message_id);
+            if let Some(r) = revision {
+                base.message_body_revisions.push((message.message_id, r));
+            }
+            if let Some(index) = index {
+                base.messages[index] = message;
+            } else {
+                base.messages.push(message);
+            }
+        }
+    }
     base.dialogs.extend(extra.dialogs);
     base.users.extend(extra.users);
     base.chats.extend(extra.chats);
     base.read_state_scopes.extend(extra.read_state_scopes);
     base.remove_messages.extend(extra.remove_messages);
+    base.body_invalidations.extend(extra.body_invalidations);
     base.files.extend(extra.files);
-    base.message_files.extend(extra.message_files);
+    base.message_files.extend(
+        extra
+            .message_files
+            .into_iter()
+            .filter(|r| winners.contains(&r.message_id)),
+    );
     base.entity_files.extend(extra.entity_files);
     base.replace_entity_files.extend(extra.replace_entity_files);
     coalesce_dialog_touches(base);
 }
 
 /// Coalesce dialog touches to one row per `(peer_kind, peer_id)`, keeping
-/// the greatest `top_message` (and its proto/origin). Journal pages batch
+/// the greatest known message acceptance position (and its proto/origin). Journal pages batch
 /// one dialog touch per change; without this a 500-change page for one
 /// conversation would exceed the SQLite 256-dialog
 /// `apply_journal_page_fenced` batch limit even though every touch targets
@@ -188,7 +269,14 @@ pub fn coalesce_dialog_touches(ops: &mut tinkle_storage::CacheOps) {
     for d in ops.dialogs.drain(..) {
         let key = (d.peer_kind.clone(), d.peer_id);
         if let Some(&idx) = best.get(&key) {
-            if d.top_message > out[idx].top_message {
+            let position = |id| {
+                ops.messages
+                    .iter()
+                    .find(|m| m.message_id == id)
+                    .and_then(|m| m.accept_seq)
+            };
+            if matches!((position(out[idx].top_message),position(d.top_message)),(Some(a),Some(b)) if b>a)
+            {
                 out[idx] = d;
             }
             continue;
@@ -239,25 +327,36 @@ pub fn encode_chat_row(chat: &TinkleChat) -> Option<tinkle_storage::ChatRow> {
 /// File refs (user avatars) are projected alongside entities: same `file_id`
 /// across users/messages shares one `files` row (scope `""`), with
 /// per-entity refs. Chat photos carry no `file_id` today, so chats
-/// contribute no refs (hook retained for future shapes).
+/// contribute no refs (hook retained for future shapes). Repeated unversioned entities
+/// keep the first complete snapshot and its refs, never a union of conflicting copies.
 pub fn project_entities_to_ops(
     users: &[TinkleUser],
     chats: &[TinkleChat],
 ) -> tinkle_storage::CacheOps {
     let mut ops = tinkle_storage::CacheOps::default();
+    let mut seen_users = HashSet::new();
+    let mut selected_users = Vec::new();
     for u in users {
         if let Some(row) = encode_user_row(u) {
-            ops.users.push(row);
+            if seen_users.insert(row.user_id) {
+                ops.users.push(row);
+                selected_users.push(u.clone());
+            }
         }
     }
+    let mut seen_chats = HashSet::new();
+    let mut selected_chats = Vec::new();
     for c in chats {
         if let Some(row) = encode_chat_row(c) {
-            ops.chats.push(row);
+            if seen_chats.insert(row.chat_id) {
+                ops.chats.push(row);
+                selected_chats.push(c.clone());
+            }
         }
     }
     // Shared file refs alongside entities (origin "" = global pin; journal
     // callers rewrite to the page target via `rebase_file_origins`).
-    let file_ops = crate::files::project_entity_files_to_ops(users, chats);
+    let file_ops = crate::files::project_entity_files_to_ops(&selected_users, &selected_chats);
     ops.files.extend(file_ops.files);
     ops.entity_files.extend(file_ops.entity_files);
     ops.replace_entity_files
@@ -294,9 +393,7 @@ pub fn project_stickers_to_ops(
 /// catch-up (`reconcile_new_messages`). Messages whose ids appear in
 /// `exclude` (deletions/revocations from the same run) are skipped so a
 /// delayed body fetch can never resurrect a deleted row. Freshness
-/// (`accept_seq` / `edit_date`) travels on the row and is enforced by
-/// storage dedup (`higher accept_seq wins`, ties fall back to `edit_date`,
-/// absent tokens order only by `edit_date`).
+/// (body revision / edit date) travels with the row and is enforced atomically by storage.
 pub fn project_messages_to_ops(
     target_key: &str,
     messages: &[TinkleMessage],
@@ -325,10 +422,13 @@ fn build_dialog_proto(peer_kind: &str, peer_id: i64, top_message: i64) -> Vec<u8
         top_message,
         unread_count: 0,
         read_inbox_max_id: 0,
-        read_outbox_max_id: 0,
+        read_outbox_max_id: None,
         pinned: false,
         space_id: 0,
         draft: None,
+        draft_dialog_id: None,
+        draft_revision: None,
+        ..Default::default()
     };
     let mut buf = Vec::new();
     let _ = dialog.encode(&mut buf);
@@ -368,6 +468,30 @@ mod tests {
         assert_eq!(target_key_for(&Kind::ChatId(7)), "target:room:7");
     }
 
+    /// Invalidation projects a durable revision floor without a terminal tombstone.
+    #[test]
+    fn body_invalidation_projects_nonterminal_floor() {
+        let c = TargetChange {
+            message_id: 10,
+            kind: TargetChangeKind::Edited as i32,
+            accept_seq: 100,
+            message_revision: Some(2),
+            body_invalidated: true,
+            ..Default::default()
+        };
+        let ops = project_change_to_ops("target:room:7", &c).unwrap();
+        assert_eq!(
+            ops.body_invalidations,
+            vec![("target:room:7".into(), 10, 2)]
+        );
+        assert!(ops.remove_messages.is_empty());
+        assert!(ops.messages.is_empty());
+        assert!(ops.message_files.is_empty());
+        let mut merged = tinkle_storage::CacheOps::default();
+        merge_ops(&mut merged, ops);
+        assert_eq!(merged.body_invalidations.len(), 1);
+    }
+
     #[test]
     fn edited_projects_upsert_with_token() {
         let change = TargetChange {
@@ -375,6 +499,7 @@ mod tests {
             kind: TargetChangeKind::Edited as i32,
             message: Some(message(10, Some(4), None)),
             accept_seq: 4,
+            ..Default::default()
         };
         let ops = project_change_to_ops("target:room:7", &change).unwrap();
         assert_eq!(ops.messages.len(), 1);
@@ -391,6 +516,7 @@ mod tests {
                 kind: kind as i32,
                 message: None,
                 accept_seq: 5,
+                ..Default::default()
             };
             let ops = project_change_to_ops("target:room:7", &change).unwrap();
             assert!(ops.messages.is_empty());
@@ -405,6 +531,7 @@ mod tests {
             kind: TargetChangeKind::Edited as i32,
             message: None,
             accept_seq: 4,
+            ..Default::default()
         };
         assert!(project_change_to_ops("target:room:7", &change).is_err());
     }
@@ -416,6 +543,7 @@ mod tests {
             kind: TargetChangeKind::Deleted as i32,
             message: Some(message(10, Some(4), None)),
             accept_seq: 4,
+            ..Default::default()
         };
         assert!(project_change_to_ops("target:room:7", &change).is_err());
     }
@@ -426,6 +554,35 @@ mod tests {
         assert_eq!(ops.messages.len(), 1);
         assert_eq!(ops.messages[0].accept_seq, None);
         assert_eq!(ops.messages[0].edit_date_secs, Some(20));
+    }
+
+    /// Coalescing several metadata markers preserves the freshest body's own revision and bytes.
+    #[test]
+    fn metadata_projection_coalesces_without_mislabeling_old_bodies() {
+        let mut base = tinkle_storage::CacheOps::default();
+        for revision in [2, 5, 3, 5] {
+            let mut body = message(10, Some(1), None);
+            body.body_revision = Some(revision);
+            body.pinned = revision == 5;
+            let change = TargetChange {
+                message_id: 10,
+                kind: TargetChangeKind::Pin as i32,
+                message: Some(body),
+                message_revision: Some(2),
+                accept_seq: revision,
+                body_invalidated: false,
+            };
+            merge_ops(
+                &mut base,
+                project_change_to_ops("target:room:7", &change).unwrap(),
+            );
+        }
+        assert_eq!(base.messages.len(), 1);
+        assert_eq!(base.message_body_revisions, vec![(10, 5)]);
+        let body = TinkleMessage::decode(base.messages[0].proto.as_slice()).unwrap();
+        assert!(body.pinned);
+        assert_eq!(body.body_revision, Some(5));
+        assert_eq!(body.edit_date, None);
     }
 
     #[test]
@@ -443,7 +600,7 @@ mod tests {
         let mut ops = tinkle_storage::CacheOps::default();
         for id in [10, 11, 12] {
             let extra =
-                project_message_to_ops("target:room:7", &message(id, Some(4), None)).unwrap();
+                project_message_to_ops("target:room:7", &message(id, Some(id), None)).unwrap();
             merge_ops(&mut ops, extra);
         }
         assert_eq!(ops.messages.len(), 3);
@@ -452,5 +609,60 @@ mod tests {
         // dialog batch limit.
         assert_eq!(ops.dialogs.len(), 1);
         assert_eq!(ops.dialogs[0].top_message, 12);
+    }
+
+    /// Chunked hydration may repeat unversioned entities. Select one entire snapshot,
+    /// including its refs, rather than attaching stale avatar IDs to the selected body.
+    #[test]
+    fn repeated_entities_keep_one_body_and_matching_file_refs() {
+        let users: Vec<_> = [10, 20]
+            .into_iter()
+            .map(|file_id| TinkleUser {
+                user_type: Some(tinkle_schema::proto::user::UserType::Data(
+                    tinkle_schema::proto::user::UserData {
+                        id: 9,
+                        photo: Some(tinkle_schema::proto::UserPhoto {
+                            file_id,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                )),
+            })
+            .collect();
+        let chats = [
+            TinkleChat {
+                chat_id: 7,
+                title: "first".into(),
+                ..Default::default()
+            },
+            TinkleChat {
+                chat_id: 7,
+                title: "unranked".into(),
+                ..Default::default()
+            },
+        ];
+        let ops = project_entities_to_ops(&users, &chats);
+        assert_eq!(ops.users.len(), 1);
+        assert_eq!(ops.chats.len(), 1);
+        assert_eq!(
+            TinkleUser::decode(ops.users[0].proto.as_slice()).unwrap(),
+            users[0]
+        );
+        assert_eq!(
+            TinkleChat::decode(ops.chats[0].proto.as_slice()).unwrap(),
+            chats[0]
+        );
+        assert_eq!(
+            ops.entity_files
+                .iter()
+                .map(|r| r.file_id)
+                .collect::<Vec<_>>(),
+            vec![10]
+        );
+        assert_eq!(
+            ops.files.iter().map(|r| r.file_id).collect::<Vec<_>>(),
+            vec![10]
+        );
     }
 }

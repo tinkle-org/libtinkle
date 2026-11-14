@@ -42,6 +42,11 @@ FIXED_COUNT = """var count: Int {
             lock.withLock { map.count }
         }
     }"""
+OLD_LAUNCH = "val job = GlobalScope.launch coroutineBlock@ {"
+FIXED_LAUNCH = (
+    "// Lift owned arguments and enter callback cleanup even if cancelled before dispatch.\n"
+    "    val job = GlobalScope.launch(start = kotlinx.coroutines.CoroutineStart.ATOMIC) coroutineBlock@ {"
+)
 FRAGMENTS = (
     ("RustBuffer cleanup", OLD_LIFT, FIXED_LIFT),
     ("handle-map locking", OLD_COUNT, FIXED_COUNT),
@@ -50,6 +55,20 @@ FRAGMENTS = (
 
 def swift(lift=FIXED_LIFT, count=FIXED_COUNT):
     return f"{lift}\n    }}\n\n{count}\n"
+
+
+def kotlin(launch=FIXED_LAUNCH):
+    """Represent both shared callback runtime helpers, with and without typed errors."""
+    return f"{launch}\n}}\n{launch}\n}}\n"
+
+
+def binding(generated):
+    """Provide known runtime templates for both generated languages."""
+    if generated.endswith(".swift"):
+        return swift()
+    if generated.endswith(".kt"):
+        return kotlin()
+    return f"generated {generated}\n"
 
 
 class BindingPatchTests(unittest.TestCase):
@@ -63,7 +82,7 @@ class BindingPatchTests(unittest.TestCase):
             destination = self.root / relative
             source.parent.mkdir(parents=True, exist_ok=True)
             destination.parent.mkdir(parents=True, exist_ok=True)
-            source.write_text(swift() if generated.endswith(".swift") else f"generated {generated}\n")
+            source.write_text(binding(generated))
             destination.write_text("previous binding\n")
 
     def generate(self, text, mode):
@@ -94,8 +113,7 @@ class BindingPatchTests(unittest.TestCase):
         result = self.generate(original, "--write")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.bindings(), {
-            relative: (swift() if generated == "TinkleSDK.swift"
-                       else f"generated {generated}\n").encode()
+            relative: binding(generated).encode()
             for generated, relative in FILES.items()
         })
         result = self.generate(original, "--check")
@@ -152,6 +170,31 @@ class BindingPatchTests(unittest.TestCase):
         result = self.generate(text, "--write")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / FILES["TinkleSDK.swift"]).read_text(), swift())
+
+    def test_kotlin_atomic_start_is_reapplied_and_check_is_non_mutating(self):
+        """Both callback helpers must start ownership cleanup despite pre-start cancellation."""
+        source = self.stage / "com/tinkle/sdk/tinkle_ffi.kt"
+        source.write_text(kotlin(OLD_LAUNCH))
+        result = self.generate(swift(), "--write")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / FILES["com/tinkle/sdk/tinkle_ffi.kt"]).read_text(), kotlin())
+        before = self.bindings()
+        result = self.generate(swift(), "--check")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.bindings(), before)
+
+    def test_kotlin_missing_duplicate_or_mixed_helpers_fail_closed(self):
+        """Template drift cannot silently remove the shared callback ownership fix."""
+        source = self.stage / "com/tinkle/sdk/tinkle_ffi.kt"
+        for text in ("", OLD_LAUNCH, OLD_LAUNCH * 3, OLD_LAUNCH + FIXED_LAUNCH):
+            with self.subTest(text=text):
+                self.install_generated()
+                before = self.bindings()
+                source.write_text(text)
+                result = self.generate(swift(), "--check")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unexpected Kotlin template", result.stderr)
+                self.assertEqual(self.bindings(), before)
 
 
 if __name__ == "__main__":

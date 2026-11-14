@@ -18,17 +18,19 @@ async fn main() -> anyhow::Result<()> {
     client.connect().await?;
     println!("connected: id={:?}", client.connection_id().await);
 
-    // Persist random_id before sending; retry unchanged on unknown outcome.
+    // Persist idempotency_key before sending; retry unchanged on unknown outcome.
     let req = SendMessageRequest {
         target: Some(Target {
             kind: Some(target::Kind::UserId(peer_id)),
         }),
         message: text,
-        random_id: rand::random::<i64>().abs().max(1),
+        idempotency_key: rand::random::<i64>().abs().max(1),
         reply_to: None,
         silent: None,
-        no_forward: None,
+        forwarding_restricted: None,
         clear_draft: None,
+        clear_draft_dialog_id: None,
+        clear_draft_revision: None,
         entities: vec![],
         schedule_date: None,
     };
@@ -38,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
             println!("sent: message_id={} text={:?}", m.message_id, m.message);
         }
         Err(e) if e.is_unknown_outcome() => {
-            println!("unknown outcome (transport loss/timeout): retry unchanged random_id with fresh correlation");
+            println!("unknown outcome (transport loss/timeout): retry unchanged idempotency_key with fresh correlation");
             return Err(anyhow::anyhow!("unknown outcome: {e}"));
         }
         Err(e) => return Err(anyhow::anyhow!("send failed: {e}")),

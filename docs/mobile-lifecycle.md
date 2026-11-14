@@ -42,7 +42,7 @@ explicitly closing children must join before replacement.
   durable cursors; supervisor blocked until `resume()`). The OS will
   suspend/kill the socket anyway; explicit close avoids half-open id reuse
   and delivers `UNAVAILABLE` locally instead of silent stall.
-- **Process termination**: durable cursors + pending-send `random_id`s
+- **Process termination**: durable cursors + pending-send `idempotency_key`s
   survive (store + outbox). `request_id`s, subscriptions, in-flight RPCs
   do not — they die with the connection by design.
 - **Network change** (WiFi ↔ cellular, captive portal, airplane):
@@ -226,7 +226,7 @@ Example (Additional Data value):
 - Do not assume a background socket survives (iOS suspends, Android
   Dozes).
 - Do not treat transport receipt as application commit.
-- Do not retry non-idempotent sends without the persisted `random_id`
+- Do not retry non-idempotent sends without the persisted `idempotency_key`
   and unchanged payload.
 - Do not reuse `request_id`s across connections.
 - Do not checkpoint presence.

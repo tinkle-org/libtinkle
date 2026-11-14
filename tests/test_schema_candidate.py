@@ -33,7 +33,7 @@ class CandidateBindingsTests(unittest.TestCase):
         self.output = self.root.parent / "candidate"
         self.schema = self.root.parent / "schema"
         self.schema.mkdir()
-        for name in ("scripts", "crates", ".cargo", "bindings"):
+        for name in ("scripts", "crates", ".cargo", "bindings", "packages"):
             (self.root / name).mkdir(parents=True)
         self.script = self.root / "scripts/schema-candidate.py"
         shutil.copy2(ROOT / "scripts/schema-candidate.py", self.script)
@@ -64,6 +64,8 @@ class CandidateBindingsTests(unittest.TestCase):
             elif command[:2] == ["bash", "scripts/generate-bindings.sh"]:
                 if bindings_runner is not None:
                     return bindings_runner(command, **kwargs)
+                if command[-1] == "--check":
+                    return subprocess.CompletedProcess(command, 0)
                 for relative in BINDINGS:
                     path = self.output / "workspace/bindings" / relative
                     path.write_text("candidate " + relative)
@@ -106,6 +108,23 @@ class CandidateBindingsTests(unittest.TestCase):
         self.generate()
         self.assertEqual(self.bindings(), {name: ("candidate " + name).encode() for name in BINDINGS})
         for name, content in originals.items():
+            self.assertEqual((self.root / name).read_bytes(), content)
+
+    def test_successful_check_without_generation_leaves_bindings_and_pins_unchanged(self):
+        """A successful no-op stub checks existing workspace copies; it produces no new bytes."""
+        original = self.bindings()
+        pins = {name: (self.root / name).read_bytes() for name in ("Cargo.toml", "Cargo.lock")}
+        modes = []
+
+        def no_generation(command, **kwargs):
+            """Record verification modes without claiming to generate or remove any file."""
+            modes.append(command[-1])
+            return subprocess.CompletedProcess(command, 0)
+
+        self.generate(bindings_runner=no_generation)
+        self.assertEqual(modes, ["--write", "--check"])
+        self.assertEqual(self.bindings(), original)
+        for name, content in pins.items():
             self.assertEqual((self.root / name).read_bytes(), content)
 
     def test_real_generator_missing_staged_binding_rejects_existing_destination(self):
@@ -157,6 +176,21 @@ elif sys.argv[1] != "rustc":
 
 
 class CandidateCiTests(unittest.TestCase):
+    def test_output_cannot_overwrite_packages_or_repository_ancestors(self):
+        """Reject output overlapping owned package sources or an ancestor of the repo."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            script = root / "scripts/schema-candidate.py"
+            script.parent.mkdir(parents=True)
+            shutil.copy2(ROOT / "scripts/schema-candidate.py", script)
+            for output in (root / "packages", root / "packages/swift", root.parent):
+                with self.subTest(output=output), patch.object(sys, "argv", [
+                    str(script), "--output", str(output)
+                ]), patch("subprocess.run") as invoke:
+                    with self.assertRaisesRegex(SystemExit, "separate temporary/build directory"):
+                        runpy.run_path(str(script), run_name="__main__")
+                    invoke.assert_not_called()
+
     def test_missing_or_mutable_schema_ref_is_rejected_before_any_commands(self):
         """Reject absent, mutable, or malformed schema revisions before invoking tools."""
         for revision in ("", "main", "v1", "a" * 39, "a" * 40 + "\n", "a" * 40 + ",branch=other"):
