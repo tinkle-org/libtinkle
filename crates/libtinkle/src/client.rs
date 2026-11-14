@@ -412,6 +412,21 @@ mod sending_scope_capture_regressions {
     }
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+struct CacheWritePause {
+    entered: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+impl CacheWritePause {
+    fn wait(self) {
+        let _ = self.entered.send(());
+        // Dropping the release sender also unblocks the worker on test failure.
+        let _ = self.release.blocking_recv();
+    }
+}
+
 /// Typed Tinkle client over encrypted native Syntra TCP.
 ///
 /// Cheap to clone (shares connection + cursors). The same logical runtime
@@ -499,6 +514,8 @@ pub struct Client {
     /// manager remains to fence pending work.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) checkpoint_save: Arc<tokio::sync::Mutex<()>>,
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    cache_write_pause: Arc<std::sync::Mutex<Option<CacheWritePause>>>,
     /// Client-level reconcile epoch, shared by every `SyncManager`
     /// instance (a fresh one is built per connection). Bumped on logout
     /// and principal change; commits capture it at run start and re-check
@@ -553,6 +570,28 @@ fn parse_target_key(target_key: &str) -> Result<tinkle_schema::proto::Target, Ti
 }
 
 impl Client {
+    /// Pause the next cache worker after it owns the commit gate, independent of SQLite contention.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn pause_cache_write(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered, arrived) = tokio::sync::oneshot::channel();
+        let (release, resume) = tokio::sync::oneshot::channel();
+        assert!(self
+            .cache_write_pause
+            .lock()
+            .unwrap()
+            .replace(CacheWritePause {
+                entered,
+                release: resume
+            })
+            .is_none());
+        (arrived, release)
+    }
+
     /// Non-destructive admission must not interrupt another live provisioning operation.
     pub(crate) fn active_provisioning_child(&self) -> bool {
         self.connect_lock
@@ -991,6 +1030,8 @@ impl Client {
             resume_task: Arc::new(tokio::sync::Mutex::new(None)),
             #[cfg(not(target_arch = "wasm32"))]
             checkpoint_save: Arc::new(tokio::sync::Mutex::new(())),
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            cache_write_pause: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             reconcile_epoch: Arc::new(AtomicU64::new(0)),
             #[cfg(not(target_arch = "wasm32"))]
@@ -1054,6 +1095,8 @@ impl Client {
             resume_task: Arc::new(tokio::sync::Mutex::new(None)),
             #[cfg(not(target_arch = "wasm32"))]
             checkpoint_save: Arc::new(tokio::sync::Mutex::new(())),
+            #[cfg(test)]
+            cache_write_pause: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             reconcile_epoch: Arc::new(AtomicU64::new(0)),
             catchup_pending: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -1330,8 +1373,14 @@ impl Client {
             if let Some(storage) = self.sqlite_storage() {
                 let p = principal.to_string();
                 let commit_guard = _client_guard.clone();
+                #[cfg(test)]
+                let pause = self.cache_write_pause.lock().unwrap().take();
                 wipe_result = tokio::task::spawn_blocking(move || {
                     let _guard = commit_guard;
+                    #[cfg(test)]
+                    if let Some(pause) = pause {
+                        pause.wait();
+                    }
                     storage.clear_principal(&p)
                 })
                 .await
@@ -2912,8 +2961,14 @@ impl Client {
         let pr = principal.to_string();
         let commit_guard = _commit_guard.clone();
         let cache_fence = fence.cache.clone();
+        #[cfg(test)]
+        let pause = self.cache_write_pause.lock().unwrap().take();
         let result = tokio::task::spawn_blocking(move || {
             let _guard = commit_guard;
+            #[cfg(test)]
+            if let Some(pause) = pause {
+                pause.wait();
+            }
             storage.hydrate_messages_fenced(&pr, &tk, &ops, &cache_fence)
         })
         .await;
@@ -5248,8 +5303,12 @@ impl Client {
         let commit_guard = self.checkpoint_save.clone().lock_owned().await;
         let current_epoch = self.reconcile_epoch.clone();
         let authorization = self.authorization.clone();
+        let pause = self.cache_write_pause.lock().unwrap().take();
         let result = tokio::task::spawn_blocking(move || {
             let _guard = commit_guard;
+            if let Some(pause) = pause {
+                pause.wait();
+            }
             if current_epoch.load(Ordering::SeqCst) != epoch || authorization.is_signed_out() {
                 return;
             }
@@ -5317,8 +5376,12 @@ impl Client {
         let commit_guard = self.checkpoint_save.clone().lock_owned().await;
         let current_epoch = self.reconcile_epoch.clone();
         let authorization = self.authorization.clone();
+        let pause = self.cache_write_pause.lock().unwrap().take();
         let result = tokio::task::spawn_blocking(move || {
             let _guard = commit_guard;
+            if let Some(pause) = pause {
+                pause.wait();
+            }
             if current_epoch.load(Ordering::SeqCst) != epoch || authorization.is_signed_out() {
                 return;
             }
@@ -6766,8 +6829,7 @@ mod tests {
             .unwrap()
             .store(&client, store.clone(), None, None)
             .unwrap();
-        let blocker = rusqlite::Connection::open(&path).unwrap();
-        blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let (entered, release) = client.pause_cache_write();
         let chats = [tinkle_schema::proto::Chat {
             chat_id: 42,
             ..Default::default()
@@ -6776,7 +6838,12 @@ mod tests {
             let write =
                 client.ingest_snapshot_entities("user:1", client.reconcile_epoch(), &[], &chats);
             tokio::pin!(write);
-            assert!(futures_util::poll!(&mut write).is_pending());
+            tokio::select! {
+                result = &mut write => panic!("cache writer completed before release: {result:?}"),
+                entered = tokio::time::timeout(Duration::from_secs(2), entered) => {
+                    entered.expect("cache worker did not start").unwrap();
+                }
+            }
         }
         assert!(client.checkpoint_save.try_lock().is_err());
         let caller = client.clone();
@@ -6791,7 +6858,7 @@ mod tests {
         store.released.notify_one();
         first.abort();
         let _ = first.await;
-        blocker.execute_batch("COMMIT").unwrap();
+        release.send(()).unwrap();
         // Setting the cache principal retired the unbound Returning fixture;
         // offline logout still owes the same ordered local invalidation.
         assert!(!client.logout().await.unwrap());
@@ -6906,11 +6973,12 @@ mod tests {
         client.close().await;
     }
 
-    /// Cancel a real SQLite writer while it waits behind another transaction.
+    /// Cancel a cache waiter while its blocking worker is explicitly paused.
     /// The blocking closure, not its dropped async waiter, must own the commit gate.
     #[tokio::test]
     async fn review_cancelled_snapshot_writers_drain_before_wipe_and_reject_stale_pages() {
         use super::*;
+        use std::time::Duration;
         for entities in [false, true] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("review-cache.db");
@@ -6946,8 +7014,7 @@ mod tests {
                 }),
                 ..Default::default()
             }];
-            let blocker = rusqlite::Connection::open(&path).unwrap();
-            blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+            let (entered, release) = client.pause_cache_write();
             {
                 let write = async {
                     if entities {
@@ -6961,7 +7028,12 @@ mod tests {
                     }
                 };
                 tokio::pin!(write);
-                assert!(futures_util::poll!(&mut write).is_pending());
+                tokio::select! {
+                    result = &mut write => panic!("cache writer completed before release: {result:?}"),
+                    entered = tokio::time::timeout(Duration::from_secs(2), entered) => {
+                        entered.expect("cache worker did not start").unwrap();
+                    }
+                }
             }
             assert!(
                 client.checkpoint_save.try_lock().is_err(),
@@ -6971,7 +7043,7 @@ mod tests {
             let wipe = client.logout_wipe_and_reset("user:1");
             tokio::pin!(wipe);
             assert!(futures_util::poll!(&mut wipe).is_pending());
-            blocker.execute_batch("COMMIT").unwrap();
+            release.send(()).unwrap();
             wipe.await.unwrap();
             // Old fetched data cannot recreate rows, even after the logout waiter completed.
             client
@@ -6983,17 +7055,22 @@ mod tests {
             assert!(storage.get_chat("user:1", 42).unwrap().is_none());
             assert!(storage.list_dialogs("user:1", 10).unwrap().is_empty());
 
-            blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+            let (entered, release) = client.pause_cache_write();
             {
                 let wipe = client.logout_wipe_and_reset("user:1");
                 tokio::pin!(wipe);
-                assert!(futures_util::poll!(&mut wipe).is_pending());
+                tokio::select! {
+                    result = &mut wipe => panic!("cache wipe completed before release: {result:?}"),
+                    entered = tokio::time::timeout(Duration::from_secs(2), entered) => {
+                        entered.expect("cache wipe worker did not start").unwrap();
+                    }
+                }
             }
             assert!(
                 client.checkpoint_save.try_lock().is_err(),
                 "cancelled wipe released exclusion before SQLite finished"
             );
-            blocker.execute_batch("COMMIT").unwrap();
+            release.send(()).unwrap();
             let _drained = client.checkpoint_save.lock().await;
         }
     }
