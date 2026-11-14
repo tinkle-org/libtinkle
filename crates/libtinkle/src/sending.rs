@@ -1317,8 +1317,9 @@ fn accepted_messages(job: &OutgoingJob, response: &[u8]) -> Result<AcceptedBodie
     let expected = album.as_ref().map_or(1, |r| r.items.len());
     if let Some(request) = &album {
         let album_id = messages.first().and_then(|m| m.album_id);
+        // Missing identity is invalid too; agreement between items alone is insufficient.
         if !(2..=10).contains(&expected)
-            || !album_id.is_some_and(|id| id > 0)
+            || album_id.is_none_or(|id| id <= 0)
             || messages.iter().any(|m| m.album_id != album_id)
             || messages.windows(2).any(|pair| {
                 pair[0].scheduled_state != pair[1].scheduled_state
@@ -1483,6 +1484,25 @@ mod completion_tests {
     fn album_completion_rejects_empty_mismatched_and_reordered_shapes() {
         let (job, response) = album();
         assert!(accepted_messages(&job, &response.encode_to_vec()).is_ok());
+        // All items agree, so missing/nonpositive IDs cannot hide behind the mismatch check.
+        for album_id in [
+            None,
+            Some(i64::MIN),
+            Some(-1),
+            Some(0),
+            Some(1),
+            Some(i64::MAX),
+        ] {
+            let mut candidate = response.clone();
+            for message in &mut candidate.messages {
+                message.album_id = album_id;
+            }
+            assert_eq!(
+                accepted_messages(&job, &candidate.encode_to_vec()).is_ok(),
+                matches!(album_id, Some(id) if id > 0),
+                "album ID {album_id:?}"
+            );
+        }
         for mode in 0..7 {
             let mut bad = response.clone();
             match mode {
