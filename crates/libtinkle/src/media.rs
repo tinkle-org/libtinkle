@@ -1241,8 +1241,8 @@ pub struct DecodedVideo {
 }
 
 /// Narrow platform integration contract, NOT an implemented iOS/Android codec.
-/// Swift owns AVFoundation scheduling/retention; Kotlin owns MediaExtractor/
-/// MediaCodec resources and API-24 fallbacks. Implementations must fully validate
+/// The host owns codec scheduling, resource retention and platform API selection.
+/// Implementations must fully validate
 /// the source before HostDecoded, join/cancel native work, retain VideoInput
 /// through native completion, and marshal thread-affine objects on their owner.
 /// Do not remux/re-encode here: common Rust returns the original snapshot exactly.

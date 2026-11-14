@@ -46,13 +46,12 @@ cargo fmt --all -- --check
 cargo check --locked --workspace --all-targets --all-features
 cargo test --locked --workspace --all-features --verbose
 cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings
-bash scripts/generate-bindings.sh --check
 cargo check --locked -p libtinkle-web -p tinkle-schema --target wasm32-unknown-unknown
 python3 scripts/with-native-fixture.py --port 0 cargo test --locked -p libtinkle --test mobile_fixture -- --ignored
 ```
 
-SDK unit tests, encrypted TCP interoperability fixtures, and mobile consumer
-checks are separate from externally orchestrated production-server acceptance
+Rust unit tests and encrypted TCP interoperability fixtures are separate from
+consumer-owned ABI execution and externally orchestrated production-server acceptance
 for enrollment, Logout, session review, and retained state. Changed pins or
 budgets require fresh scoped qualification in each applicable lane. Keep exact
 execution results with the run's evidence; do not transfer an older result to
@@ -71,9 +70,9 @@ naming/field migration and scheduled-message/poll contracts used by the SDK;
 no source override or candidate generation is required. Go consumers own their
 independent published coordinates in their manifests.
 
-Required Rust CI, native packaging, binding parity and release qualification use
+Required Rust CI and source qualification use
 the same published dependency and committed lockfile with `--locked`. They do not
-depend on a schema checkout, a Cargo registry patch or `SCHEMA_CANDIDATE_REF`.
+depend on a schema checkout or a Cargo registry patch.
 The descriptor tests check the complete method inventory and exact message shapes.
 
 ## Optional future-schema development
@@ -87,7 +86,6 @@ assigned or published. This is an opt-in integration aid, not release qualificat
 
 ```sh
 ./scripts/test-schema-candidate.sh --output /absolute/temp/candidate
-./scripts/test-schema-candidate.sh --output /absolute/temp/candidate --bindings
 ```
 
 See [device enrollment](docs/device-enrollment.md#published-schema-checks) for
@@ -103,8 +101,8 @@ buf registry sdk version --module=buf.build/tinkle-org/schema --plugin=buf.build
 ```
 
 Update the workspace dependency with that returned coordinate, update Cargo.lock,
-and run ordinary workspace checks plus binding parity against the released
-artifact. Descriptor tests must match the full method inventory and exact
+and run ordinary workspace checks against the released artifact.
+Descriptor tests must match the full method inventory and exact
 SignIn/enrollment/InitConnect fields.
 
 Keep the three Syntra dependencies aligned with the
@@ -114,6 +112,5 @@ storage, network/trust distribution, capacity, deployment, and server-side
 admission, revocation, and restore safety require separate qualification. The SDK
 expects authoritative [retirement evidence](docs/device-enrollment.md#permanent-retirement-observation);
 its checks do not establish server-side rollback protection.
-Swift simulator execution, Kotlin compilation, and installed
-Android execution have distinct evidence scopes; see
-[platform verification](docs/platform-ios-android-wasm.md#native-consumer-fixtures).
+Rust host tests and consumer application execution have distinct evidence scopes;
+see [integration verification](docs/platform-ios-android-wasm.md#consumer-qualification).

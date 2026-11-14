@@ -150,37 +150,22 @@ for retry). Cancellation-safe (dropping the wake leaves the job
 `claimed`; the next wake requeues stale claims) and deadline-aware
 (expiry persists the job and defers).
 
-UniFFI hosts use the same pipeline without touching Rust async
-(`tinkle-ffi::push`):
+Foreign hosts use the same pipeline through `tinkle-ffi::push`. Pass the raw
+provider payload to `parse_push_payload`, then call `handle_push_wake` with the
+decoded envelope and a bounded wake budget. `Committed` permits refreshing the
+conversation; `Deferred` needs a later retry; `Failed` carries a sanitized
+reason. On foreground open, use `push_target_key` for navigation and
+`open_push_notification` for authoritative refresh. The consumer's generated
+bindings own language names and async dispatch.
 
-```swift
-// iOS Notification Service Extension (after OneSignalExtension runs):
-let env = try parsePushPayload(payload: Data(userInfoJson.utf8))
-let outcome = try await client.handlePushWake(envelope: env, timeoutSecs: 25)
-// Foreground open: navigate, then refresh.
-if let key = pushTargetKey(envelope: env) { showConversation(key) }
-try await client.reconcileNow()
-let _ = try await client.openPushNotification(envelope: env)
-```
-
-```kotlin
-// Android: OneSignal INotificationServiceExtension → WorkManager worker:
-val env = parsePushPayload(event.notification.additionalData.toString().toByteArray())
-when (val o = client.handlePushWake(env, 25uL)) {
-    is FfiPushOutcome.Committed -> refreshConversation(o.targetKey)
-    is FfiPushOutcome.Deferred -> scheduleRetry()
-    is FfiPushOutcome.Failed -> log(o.reason)
-}
-```
-
-Push-token lifecycle (typed wrappers): `registerPush(token,
-"apns"|"apns_voip"|"fcm", langCode)` after sign-in and on every rotation,
-`unregisterPush(token)` BEFORE `logout()` so a signed-out device stops
+Push-token lifecycle: `register_push(token,
+"apns"|"apns_voip"|"fcm", lang_code)` after sign-in and on every rotation,
+`unregister_push(token)` BEFORE `logout()` so a signed-out device stops
 receiving wakes; `logout()` then wipes the principal's SQLite rows and
 fences in-flight work. Cold start calls `tinkle_ffi_init()` once, opens
 the shared database (iOS: App Group container path shared by the app and
 the NSE; Android: app-private file shared with the worker), then
-`pushRecoverStaleJobs` to requeue leases leaked by a killed extension.
+`push_recover_stale_jobs` to requeue leases left by a killed extension.
 
 ### Backend handoff envelope spec
 

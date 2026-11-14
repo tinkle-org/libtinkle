@@ -57,7 +57,7 @@ pub struct ProtectedEnrollmentNamespace {
 /// provided. Failures are sanitized before they return to the Rust coordinator.
 /// clear is a full durable namespace invalidation, including all pending
 /// capabilities; it must prevent earlier writes from publishing afterward.
-#[uniffi::export(rust, foreign)]
+#[uniffi::export(with_foreign)]
 #[async_trait::async_trait]
 pub trait FfiSecureEnrollmentStore: Send + Sync {
     /// Atomically compare incarnation/revision and the entire ACTIVE record,

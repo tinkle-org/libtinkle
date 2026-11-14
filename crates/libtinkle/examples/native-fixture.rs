@@ -35,7 +35,7 @@ struct Gateway {
     hosts: Arc<Mutex<Vec<std::sync::Weak<syntra_runtime::Host>>>>,
 }
 
-/// Fixed synthetic key matching the Swift ACTIVE vector, not an account authority store.
+/// Fixed synthetic key matching the Rust ACTIVE fixture, not an account authority store.
 struct SessionReviewKeys;
 
 impl syntra_core::secure_channel::KeyStore for SessionReviewKeys {
@@ -109,13 +109,13 @@ async fn serve_control(control: TcpListener) -> anyhow::Result<()> {
             Some("create") => {
                 let listener = TcpListener::bind("127.0.0.1:0").await?;
                 let port = listener.local_addr()?.port();
-                // Explicit opt-in matches the Rust-validated Swift enrollment vector.
+                // Explicit opt-in matches the Rust-validated enrollment vector.
                 // Synthetic test key only; ordinary fixtures retain fresh random keys.
                 let enrollment_review = request["enrollment_review"].as_bool() == Some(true);
                 // Returning is a separate explicit projection-test mode. It must not
                 // weaken the Bootstrap-only restore-denial fixture's admission.
                 let session_review = request["session_review"].as_bool() == Some(true);
-                // Separate opt-in keeps the Swift confirmation fixture's empty snapshot unchanged.
+                // Targeted revocation uses an explicit session-list fixture.
                 let targeted_revocation =
                     session_review && request["targeted_revocation"].as_bool() == Some(true);
                 let sessions = Arc::new(Mutex::new(if targeted_revocation {
@@ -496,7 +496,7 @@ mod tests {
             );
             config.primary_port = fixture["port"].as_u64().unwrap().try_into().unwrap();
             config.fallback_port = None;
-            // The same synthetic ACTIVE material is already encoded in the Swift vector.
+            // These synthetic ACTIVE values match the Rust-owned enrollment vector.
             let status = tinkle_schema::proto::DeviceEnrollmentStatus {
                 operation_id: "11111111-1111-4111-8111-111111111111".into(),
                 session_id: "22222222-2222-4222-8222-222222222222".into(),

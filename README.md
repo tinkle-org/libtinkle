@@ -1,6 +1,6 @@
 # libtinkle
 
-Native Rust client runtime for Tinkle, with Swift/Kotlin bindings. Application
+Native Rust client runtime for Tinkle, with a UniFFI C ABI bridge. Application
 RPCs, history, cache hydration, journal reconciliation and file transfers use
 encrypted Syntra TCP. The SDK uses exact rc.5 pins for
 `syntra-core`, `syntra-runtime`, and TCP-only `syntra-net`; see
@@ -136,19 +136,28 @@ and bounded catch-up. Consume `next_event()` and inspect `target_cursor`,
 `target_status` and `tracked_targets`. Unsafe mutations are never auto-replayed.
 See [reconnect/sync](docs/reconnect-sync.md) and [mobile lifecycle](docs/mobile-lifecycle.md).
 
-## Swift and Kotlin
+## Native C ABI
+
+`crates/tinkle-ffi` exposes the shared core through UniFFI `0.31.2`.
+This repository provides Rust source. Consumer repositories own native builds,
+language binding generation, packaging, and application integration.
+
+Consumers pin the source revision and matching UniFFI generator, build an
+unstripped library for metadata extraction, and generate their bindings from
+that exact build. Their generated runtime handles UniFFI record serialization,
+object ownership, async operations, and callbacks.
 
 `ClientConfigFfi { client_info, host, primary_port, fallback_port }` uses bare TCP addresses.
 `ServerTrustFfi { server_public_key, server_key_id, scope }` carries public trust.
 `TrustSourceFfi.bootstrap(trust)` produces the one-use provisioning source.
 `FfiSecureEnrollmentStore` supplies acknowledged atomic platform persistence;
 opaque `EnrollmentOperation` and `StoredEnrollment` objects guard the staged
-flow. Activation or `restoreActiveEnrollment` installs Returning only from
+flow. Activation or `restore_active_enrollment` installs Returning only from
 validated ACTIVE records. Hosts must erase their foreign secret byte copies.
 
-Check binding parity with `bash scripts/generate-bindings.sh --check`; regenerate
-with `bash scripts/generate-bindings.sh --write` against the published schema pin.
-See [platform integration](docs/platform-ios-android-wasm.md).
+Run `cargo test --locked -p tinkle-ffi` for the Rust adapter tests. Generated
+bindings and ABI execution are verified by consumers against their own builds.
+See [native integration](docs/platform-ios-android-wasm.md).
 
 ## Logout
 
@@ -183,32 +192,17 @@ checks remain available in `tinkle-schema`.
 cargo test --locked --workspace --all-features --verbose
 cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings
 cargo fmt --all -- --check
-bash scripts/generate-bindings.sh --check
+python3 -m unittest discover -s tests -p 'test_*.py' -v
 cargo check --locked -p libtinkle-web -p tinkle-schema --target wasm32-unknown-unknown
 ```
 
 `scripts/test-schema-candidate.sh` is optional tooling for future-schema
 development, not release qualification. See [public pinning](PROTO_PINNING.md).
 
-The public naming/field migration uses the published schema dependency
-`=0.5.0-20261112172535-6099d89af63f.2`, without a source override or candidate
-generation. Normal locked checks and binding parity qualify this baseline only
-for their executed lanes; production-server acceptance and Swift/Kotlin native
-consumer execution remain separate requirements.
-
-Public method names now include `SendAlbum`, `GetChatDetails`,
-`ListThreadMessages`, `BatchGetMessageReactions`, `ListMessageReactions`,
-`ListMessageChanges`, `MarkHistoryRead`, `StartBot`, `UpdateChatDescription` and
-`SetMessagePin`; Rust facades and mobile adapters use their corresponding names
-without aliases. Album requests carry `AlbumItem` under `items`. Send keys are
-signed nonzero `idempotency_key` values (including the mobile convenience method).
-File-upload options no longer expose unsupported file encryption. Pin scope
-omission is shared; explicit zero/unknown is invalid. Favorite true adds and false
-removes. Chat-photo file contexts retain exact positive chat/photo identities in
-authorization and cache keys. Existing durable jobs using the removed album
-method name are not auto-rewritten; callers must reconcile their
-outcome before replacing intent. DeleteHistory operation/progress fields are passed
-through only; this migration adds no automatic delete recovery.
+The published schema dependency is
+`=0.5.0-20261112172535-6099d89af63f.2`. Locked Rust checks and host transport
+fixtures qualify only their executed lanes.
+Production-server acceptance and consumer application execution require separate evidence.
 
 `Messages::get_scheduled_messages`, `cancel_scheduled_messages`, and
 `close_poll` have corresponding named mobile protobuf-byte adapters. Scheduled
@@ -221,17 +215,17 @@ follow partial effects. Neither a timeout nor an empty canceled set proves rollb
 These facades do not automatically replay cancellation or close mutations.
 
 Rust integration fixtures use the published SDK for encrypted native TCP,
-including trust failures and configurable primary/fallback ports. Swift/Kotlin
-consumer tests use the host-only `native-fixture` example, also built on that
-SDK. `scripts/with-native-fixture.py <consumer command...>` starts it on the host
+including trust failures and configurable primary/fallback ports. The host-only
+`native-fixture` example is also built on that SDK.
+`scripts/with-native-fixture.py <consumer command...>` starts it on the host
 and cleans it up. Its separate loopback JSON control socket allocates fixtures
 and reads application request logs; it is test harness code only.
 
 For host tests, use `--port 0` to avoid fixed-port collisions in Linux's ephemeral
 range. The wrapper passes the OS-assigned control port to the consumer through
 `TINKLE_NATIVE_FIXTURE_CONTROL_PORT`, which `crates/libtinkle/tests/mobile_fixture.rs`
-reads. Omit `--port` for Swift/Kotlin native-distribution consumers, which retain
-the fixed default 48080; see [native consumer fixtures](docs/platform-ios-android-wasm.md#native-consumer-fixtures).
+reads. The default control port is 48080; see
+[Rust transport fixtures](docs/platform-ios-android-wasm.md#rust-transport-fixtures).
 
 ```sh
 python3 scripts/with-native-fixture.py --port 0 cargo test --locked -p libtinkle --test mobile_fixture -- --ignored

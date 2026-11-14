@@ -1,6 +1,6 @@
 //! Journal cursor-store bridge.
 //!
-//! The durable store is implemented on the foreign side (Swift/Kotlin) via
+//! The durable store is implemented by the foreign host via
 //! the [`FfiCursorStore`] callback interface, or with the in-memory
 //! [`InMemoryFfiStore`] in tests. [`FfiStoreAdapter`] adapts either into
 //! the [`libtinkle::CursorStore`] expected by [`libtinkle::Client`].
@@ -28,10 +28,7 @@ use libtinkle::CursorStore as _;
 /// Scope: `clear_principal` removes all state owned by `principal` — journal
 /// cursors plus, where applicable, cached messages/dialogs/users/chats — so
 /// logout leaves no offline bodies behind.
-// TODO(runtime-acceptance-storage): GRDB/Room acceptance — principal
-// isolation between users, no credential persistence in the cursor store,
-// crash recovery resumes reconciliation from the last persisted accept_seq.
-#[uniffi::export(rust, foreign)]
+#[uniffi::export(with_foreign)]
 #[async_trait::async_trait]
 pub trait FfiCursorStore: Send + Sync {
     async fn load_journal(

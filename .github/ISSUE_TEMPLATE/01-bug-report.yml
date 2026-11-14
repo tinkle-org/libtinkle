@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible bug in libtinkle (Rust core, iOS / Android bindings, or Web/WASM).
+description: Report a reproducible bug in the Rust core, native C ABI, or portable WASM checks.
 title: "[Bug]: "
 labels: ["bug", "triage"]
 body:
@@ -20,7 +20,7 @@ body:
         - syntra-net (encrypted native TCP)
         - tinkle-schema (methods, realtime validation)
         - libtinkle (Client, facades, CursorStore)
-        - tinkle-ffi iOS/Android (UniFFI Swift/Kotlin)
+        - tinkle-ffi (UniFFI C ABI)
         - libtinkle-web (wasm-bindgen, browser)
         - Docs / examples
         - CI / tooling
@@ -35,8 +35,8 @@ body:
       multiple: true
       options:
         - Rust core (Linux / macOS native)
-        - iOS (Swift via UniFFI)
-        - Android (Kotlin via UniFFI/JNI)
+        - iOS native library
+        - Android native library
         - Web / WASM (wasm32-unknown-unknown, browser)
         - Multiple / all
     validations:
@@ -55,7 +55,7 @@ body:
     id: repro
     attributes:
       label: Steps / code to reproduce
-      description: Minimal repro. Self-contained Rust snippet, Swift/Kotlin call, or JS/WASM steps preferred.
+      description: Provide a self-contained Rust or C ABI repro, or portable WASM check steps.
       placeholder: |
         ```rust
         async fn reproduce(
@@ -91,8 +91,8 @@ body:
         libtinkle version / git sha:
         rustc --version --verbose:
         tokio / uniffi / wasm-bindgen versions (if known):
-        iOS: Xcode + device/simulator + Swift version (if applicable):
-        Android: Android Studio / AGP / emulator device + Kotlin version (if applicable):
+        iOS: Xcode + native target + deployment target (if applicable):
+        Android: NDK + native ABI + minimum API (if applicable):
         Web: browser + version + wasm target (if applicable):
         Gateway URL (redacted host only, no tokens):
       render: shell

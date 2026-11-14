@@ -72,7 +72,7 @@ fn verify_real_native_encoder_profiles() {
 }
 
 /// The codec fixture supplies real AAC bytes; this checks shared PCM waveform/owned-path adoption,
-/// not another encoder implementation. Tone integrity is checked by the Swift native fixture.
+/// not another encoder implementation. Native codec integrity needs consumer-owned qualification.
 #[tokio::test]
 #[ignore = "requires explicitly retained native AAC output"]
 async fn native_voice_waveform_from_real_aac_fixture() {

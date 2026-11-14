@@ -19,7 +19,7 @@ pub enum FfiRpcRecovery {
     DoNotRetry,
 }
 
-/// Errors surfaced to Swift/Kotlin.
+/// Errors surfaced through the C ABI.
 ///
 /// This must not use `flat_error`: foreign `FfiCursorStore` implementations
 /// return `FfiError`, and UniFFI cannot lift flat errors back into Rust

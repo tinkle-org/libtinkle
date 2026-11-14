@@ -1,7 +1,9 @@
 # Architecture
 
 ```text
-Swift/Kotlin bindings        native configuration, platform secret/cursor stores
+Consumer-owned bindings     native configuration, platform secret/cursor stores
+        ↓
+tinkle-ffi                  UniFFI C ABI, owned records, handles and callbacks
         ↓
 libtinkle                   typed/raw application requests, one supervisor,
                             paged history, journals, cache projection, file/push sync
@@ -205,7 +207,7 @@ retained protobuf and pending in the legacy scalar cache projection.
 
 ### Shared message search
 
-`Messages::search(SearchRequest)` and the UniFFI `messagesSearch` protobuf-byte
+`Messages::search(SearchRequest)` and the UniFFI `messages_search` protobuf-byte
 adapter are the single application search surface. There is no separate public
 cache search request, snippet model or local-only search method. The shared
 `Entity`/`EntityType` and `Reaction.custom_emoji_id` are generated application
@@ -287,8 +289,8 @@ Upload checkpoints expose part counts separately from download prefix bytes; nei
 diagnostic counter authorizes skipping server verification.
 Normal `Sending::prepare_attachment` uses the host installed by
 `Client::configure_media_preparer` for image/video/audio/voice; documents retain their
-raw bytes. Swift installs `configureAVFoundationMediaPreparer()` and Kotlin installs
-`configureAndroidMediaPreparer()`. Decoder-only video configuration and FLAC convenience
+raw bytes. Foreign hosts supply `FfiPlatformMediaPreparer` through
+`TinkleClient::configure_native_media_preparer`. Decoder-only video configuration and FLAC convenience
 encoding do not satisfy this normal sending contract. Each invocation snapshots the encoder
 owner without holding its configuration lock. Callbacks must not capture the client;
 sign-out clears the configured callback without aborting retained native work.
@@ -297,7 +299,7 @@ The explicit `Sending::prepare_native_attachment` uses an invocation-supplied en
 Both paths inspect retained manifests before resolving an encoder. Native output is copied
 and hashed while its lease remains owned; the recipe, measured facts and source declaration
 commit before upload. `Sending::adopt_native_attachment` and the FFI
-`sendingAdoptNativeAttachment` entry adopt a retained `FfiPreparedNativeMedia` without
+`sending_adopt_native_attachment` entry adopt a retained `FfiPreparedNativeMedia` without
 encoding again. Durable artifacts use container-appropriate suffixes for native readers.
 Platform codec qualification is separate from durable artifact recovery tests.
 
@@ -306,7 +308,7 @@ host-configured SQLite database, outside principal artifact cleanup. In-memory
 storage retains the system temporary-directory default. Standalone
 `prepare_native_media` also retains that default; hosts without a usable system
 temporary directory (including Android below API 33) use
-`prepare_native_media_in` / UniFFI `prepareNativeMediaIn(path, scratchRoot, kind,
+`prepare_native_media_in` / UniFFI `prepare_native_media_in(path, scratch_root, kind,
 preparer)` with an existing absolute private writable root such as Android
 `Context.cacheDir`. Sources may be read-only imports; their parents never select
 scratch destinations. The host must keep this root stable and available through
@@ -322,8 +324,9 @@ ID; the durable sending coordinator supports only text, media and album sends.
 
 ## Platforms and fixtures
 
-UniFFI wraps the native client over one process-wide Tokio runtime. Generated
-Swift/Kotlin configuration uses one-use trust objects for secret inputs.
+UniFFI wraps the native client over one process-wide Tokio runtime. The C ABI
+uses one-use trust objects for secret inputs. Consumer repositories own language
+bindings, platform callback implementations, and application runtime qualification.
 `libtinkle-web` exports portable schema checks and explicit unsupported network
 status, with no native client dependency.
 

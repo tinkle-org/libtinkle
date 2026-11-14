@@ -1,5 +1,5 @@
 name: Platform issue (iOS / Android / Web)
-description: Binding, lifecycle, storage, push, TLS, or packaging issue on Swift, Kotlin, or WASM.
+description: Rust native runtime, UniFFI adapter, lifecycle, storage, push, or portable WASM issue.
 title: "[Platform]: "
 labels: ["platform", "triage"]
 body:
@@ -14,8 +14,8 @@ body:
       label: Platform
       multiple: true
       options:
-        - iOS (Swift via UniFFI)
-        - Android (Kotlin via UniFFI/JNI)
+        - Rust native runtime
+        - UniFFI adapter contract
         - Web / WASM (wasm-bindgen, browser)
     validations:
       required: true
@@ -25,13 +25,13 @@ body:
       label: Category
       multiple: true
       options:
-        - Binding generation (uniffi-bindgen / wasm-bindgen surface)
-        - Async runtime (tokio bridging, Task.cancel / coroutines / spawn_local)
-        - Lifecycle (suspend / resume / reconnect / sync_after_wake)
-        - Storage (CursorStore: GRDB / Room / IndexedDB)
+        - Boundary contract (UniFFI exports / portable WASM exports)
+        - Async runtime (Tokio, future ownership, cancellation, callbacks)
+        - Lifecycle (suspend / resume / reconnect / push wake)
+        - Storage (CursorStore / SQLite / protected-store contract)
         - Push (APNs / FCM / WorkManager / Doze)
-        - TLS / ATS / Network Security Config (wss only)
-        - Build / packaging (Xcode, Gradle/AGP/NDK, wasm-pack / target wasm32)
+        - TCP establishment / provisioned trust
+        - Rust compilation / dependency resolution / target wasm32
         - App binary size / startup / perf
     validations:
       required: true
@@ -41,23 +41,18 @@ body:
       label: What happened?
       description: Behaviour on device/simulator/emulator/browser vs expected. Include OS version, device, and lifecycle state (foreground/background/wake).
       placeholder: |
-        iOS 18 simulator, Swift 6: connect() succeeds foreground, after background suspend + APNs wake sync_after_wake misses resubscribe...
+        iOS simulator library: foreground connect succeeds, but resume after suspension does not restore subscriptions...
     validations:
       required: true
   - type: textarea
     id: repro
     attributes:
       label: Repro / build steps
-      description: Xcode/Gradle/browser steps, UniFFI regen commands, wasm build commands, minimal host-language snippet.
+      description: Include Rust repro commands and the exact source revision. Consumer integrations need separate evidence.
       placeholder: |
-        ```swift
-        let client = try TinkleClient(config: nativeTcpConfig, trustSource: provisionedTrustSource, store: store)
-        try await client.connect()
-        // background, then APNs wake...
-        ```
         ```sh
-        cargo check -p tinkle-ffi
-        cargo check -p tinkle-schema -p libtinkle-web --target wasm32-unknown-unknown
+        cargo check --locked -p tinkle-ffi
+        cargo check --locked -p tinkle-schema -p libtinkle-web --target wasm32-unknown-unknown
         ```
     validations:
       required: true
@@ -70,8 +65,8 @@ body:
         libtinkle git sha:
         rustc --version --verbose:
         uniffi version:
-        Xcode / Swift version:
-        Android Studio / AGP / NDK / Kotlin version:
+        Xcode + native target + deployment target:
+        Android NDK + ABI + minimum API:
         Browser + wasm-bindgen / wasm-pack version:
       render: shell
     validations:

@@ -1,4 +1,4 @@
-//! UniFFI client object: the single entry point for Swift/Kotlin.
+//! UniFFI client object: the entry point for foreign hosts.
 //!
 //! [`TinkleClient`] wraps [`libtinkle::Client`]. All method params are
 //! owned (`String`/`Vec`/records); no `&str`, no Syntra/prost types, and
@@ -835,9 +835,6 @@ impl TinkleClient {
         self.inner.stop().await;
     }
 
-    // Named `shutdown` instead of `close` because UniFFI generates a
-    // `Disposable`/`AutoCloseable.close()` for every object, which collides
-    // with a user-defined `close()` in Kotlin.
     /// Graceful shutdown: stop RPCs, tear down transport. Equivalent to
     /// [`Self::stop`].
     pub async fn shutdown(&self) {

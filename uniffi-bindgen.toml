@@ -1,3 +1,0 @@
-# UniFFI 0.32's global config uses Rust crate names, not Cargo package names.
-[crate-roots]
-tinkle_ffi = "crates/tinkle-ffi"

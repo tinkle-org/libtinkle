@@ -1,4 +1,4 @@
-//! `tinkle-ffi`: UniFFI facade over `libtinkle` for iOS (Swift) and Android (Kotlin).
+//! `tinkle-ffi`: UniFFI C ABI bridge over `libtinkle` for native hosts.
 //!
 //! This crate is a thin boundary adapter. It owns no protocol behavior:
 //! framing, handshake, RPC correlation, sync validation, cursors, and
