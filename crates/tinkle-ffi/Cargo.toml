@@ -3,21 +3,13 @@ name = "tinkle-ffi"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "UniFFI facade over libtinkle for iOS (Swift) and Android (Kotlin)."
+description = "UniFFI C ABI bridge over libtinkle."
 rust-version.workspace = true
 publish = false
 
 [lib]
 name = "tinkle_ffi"
 crate-type = ["lib"]
-
-[features]
-cli = ["uniffi/cli"]
-
-[[bin]]
-name = "uniffi-bindgen"
-path = "uniffi-bindgen.rs"
-required-features = ["cli"]
 
 [dependencies]
 libtinkle = { path = "../libtinkle" }

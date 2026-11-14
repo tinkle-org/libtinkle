@@ -19,7 +19,6 @@ ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--schema", type=Path, default=ROOT.parent / "schema")
 parser.add_argument("--output", type=Path)
-parser.add_argument("--bindings", action="store_true", help="regenerate owned Swift/Kotlin bindings from the candidate")
 parser.add_argument("command", nargs=argparse.REMAINDER, help="command executed in the isolated workspace (default: cargo test)")
 args = parser.parse_args()
 output = (args.output or Path(tempfile.mkdtemp(prefix="libtinkle-schema-candidate-"))).resolve()
@@ -46,9 +45,9 @@ shutil.copy2(generated, crate / "src/tinkle.v1.rs")
 (crate / "Cargo.toml").write_text(f'[package]\nname = "{package_name}"\nversion = "{pin}"\nedition = "2021"\npublish = false\n[dependencies]\nprost = "=0.14.4"\nprost-types = "=0.14.4"\nbytes = "1"\n')
 workspace = output / "workspace"
 workspace.mkdir(exist_ok=True)
-for name in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "uniffi-bindgen.toml"):
+for name in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml"):
     shutil.copy2(ROOT / name, workspace / name)
-for name in ("crates", "scripts", ".cargo", "bindings", "packages"):
+for name in ("crates", "scripts", ".cargo"):
     shutil.copytree(ROOT / name, workspace / name, dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("target", "__pycache__", ".build", ".gradle", "build", "node_modules"))
 config = workspace / ".cargo/config.toml"
@@ -78,13 +77,4 @@ command = args.command
 if command[:1] == ["--"]:
     command = command[1:]
 subprocess.run(command or ["cargo", "test", "--locked", "--workspace", "--all-features"], cwd=workspace, env=env, check=True)
-if args.bindings:
-    subprocess.run(["bash", "scripts/generate-bindings.sh", "--write"], cwd=workspace, env=env, check=True)
-    subprocess.run(["bash", "scripts/generate-bindings.sh", "--check"], cwd=workspace, env=env, check=True)
-    binding_files = ("swift/TinkleSDK.swift", "swift/TinkleSDKFFI.h", "swift/module.modulemap", "kotlin/com/tinkle/sdk/tinkle_ffi.kt")
-    for relative in binding_files:
-        if not (workspace / "bindings" / relative).is_file():
-            raise SystemExit(f"candidate generator did not produce bindings/{relative}")
-    for relative in binding_files:
-        shutil.copy2(workspace / "bindings" / relative, ROOT / "bindings" / relative)
 print(f"Unpublished schema candidate evidence: {output / 'candidate.json'}", flush=True)

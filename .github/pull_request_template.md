@@ -15,7 +15,7 @@
 - [ ] New feature (non-breaking)
 - [ ] Breaking change (major version / public API / wire behaviour)
 - [ ] Protocol change (Syntra framing, handshake, ids, reconnect, realtime grammar)
-- [ ] Platform binding change (UniFFI Swift/Kotlin, wasm-bindgen JS)
+- [ ] Boundary change (UniFFI C ABI, portable wasm-bindgen exports)
 - [ ] Docs / examples only
 - [ ] CI / tooling / deps only
 
@@ -27,7 +27,7 @@
 - [ ] `syntra-net` (encrypted native TCP)
 - [ ] `tinkle-schema` (methods, realtime validation)
 - [ ] `libtinkle` (public `Client`, facades, `CursorStore`)
-- [ ] `tinkle-ffi` (UniFFI — iOS Swift / Android Kotlin)
+- [ ] `tinkle-ffi` (UniFFI C ABI)
 - [ ] `libtinkle-web` (wasm-bindgen — browser/WASM)
 - [ ] Docs (`docs/`, `README.md`, examples)
 - [ ] CI / release (`.github/workflows`, `release-plz`, BSR pinning)
@@ -37,8 +37,7 @@
 <!-- Native networking supports iOS/Android. Browser scope is portable schema checks. -->
 
 - [ ] No platform-specific behaviour (pure Rust core)
-- [ ] iOS (Swift via UniFFI: runtime threading, `Task.cancel()`, Core Data/GRDB/Keychain store, APNs `sync_after_wake`)
-- [ ] Android (Kotlin via UniFFI/JNI: coroutines, Room/EncryptedSharedPreferences, FCM/WorkManager/Doze)
+- [ ] Rust native runtime or UniFFI adapter contract
 - [ ] Web / WASM portable schema checks (network unsupported)
 - [ ] `#[cfg(target_arch = "wasm32")]` boundary preserved (no browser APIs in native, no `std::net`/raw sockets in `wasm.rs`)
 
@@ -76,17 +75,14 @@ cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings
 cargo test --locked --workspace --all-features --verbose
 python3 -m unittest discover -s tests -p 'test_*.py' -v
-bash scripts/generate-bindings.sh --check
 cargo check --locked -p tinkle-schema -p libtinkle-web --target wasm32-unknown-unknown
 ```
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings`
 - [ ] `cargo test --locked --workspace --all-features --verbose` (incl. `client_integration` live mock gateway if touched)
-- [ ] `python3 -m unittest discover -s tests -p 'test_*.py' -v` (release, consumer preflight, and binding-patch tests)
-- [ ] `bash scripts/generate-bindings.sh --check` (bindings parity, if `tinkle-ffi` touched)
+- [ ] `python3 -m unittest discover -s tests -p 'test_*.py' -v` (Rust fixture-runner and schema-candidate tooling)
 - [ ] `cargo check --locked -p tinkle-schema -p libtinkle-web --target wasm32-unknown-unknown` (if portable schema/web touched)
-- [ ] UniFFI bindings regen / Swift+Kotlin smoke (if `tinkle-ffi` touched)
 - [ ] Portable WASM schema checks (if `libtinkle-web` touched)
 
 ### Test evidence
@@ -95,7 +91,7 @@ cargo check --locked -p tinkle-schema -p libtinkle-web --target wasm32-unknown-u
 
 ## Breaking changes / migration
 
-<!-- If none, write `None`. If yes: what breaks (Rust / Swift / Kotlin / JS), and migration steps. -->
+<!-- If none, write `None`. Otherwise describe the Rust API, C ABI, or wire contract impact. -->
 
 ## Checklist
 

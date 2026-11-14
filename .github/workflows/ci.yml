@@ -3,19 +3,13 @@ on:
   push:
     branches: [main]
   pull_request:
-  workflow_call:
-    inputs:
-      source_sha:
-        description: 'Immutable source SHA supplied by the native release workflow'
-        type: string
-        required: true
 permissions:
   contents: read
 env:
   CARGO_TERM_COLOR: always
   RUSTUP_TOOLCHAIN: 1.99.1
 concurrency:
-  group: rust-ci-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || inputs.source_sha || github.sha }}
+  group: rust-ci-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   fmt:
@@ -24,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -41,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - run: rustup toolchain install 1.99.1 --profile minimal --component clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -58,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - run: rustup toolchain install 1.99.1 --profile minimal
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -75,20 +69,17 @@ jobs:
           done
       - name: Native fixture shutdown and response delivery regressions
         run: cargo test --locked -p libtinkle --example native-fixture
-      - name: Published-SDK native mobile fixture regression
+      - name: Encrypted transport fixture regression
         run: python3 scripts/with-native-fixture.py --port 0 cargo test --locked -p libtinkle --test mobile_fixture -- --ignored
       - if: matrix.os == 'ubuntu-latest'
         run: python3 -m unittest discover -s tests -p 'test_*.py' -v
-      - if: matrix.os == 'ubuntu-latest'
-        name: Generated binding parity
-        run: bash scripts/generate-bindings.sh --check
   wasm:
     name: wasm32 check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - run: rustup toolchain install 1.99.1 --profile minimal --target wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -96,17 +87,13 @@ jobs:
           cache-on-failure: true
       - run: cargo check --locked -p libtinkle-web -p tinkle-schema --target wasm32-unknown-unknown
   msrv:
-    # Required context is still `msrv (cargo-hack)` (see branch ruleset
-    # `Protect main - require PR + CI`). Implementation checks the declared
-    # workspace MSRV with that exact compiler instead of only `cargo hack
-    # --rust-version`; keep the legacy name until the ruleset is migrated to
-    # `Declared MSRV`.
+    # This job name is a required check in the main branch ruleset.
     name: msrv (cargo-hack)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - run: rustup toolchain install 1.99.1 --profile minimal
       - name: Resolve workspace MSRV and check with the declared compiler
@@ -119,7 +106,7 @@ jobs:
           version = versions.pop()
           assert version and re.fullmatch(r'\d+\.\d+(?:\.\d+)?', version)
           # Fetch using the pinned modern Cargo. The MSRV compiler never makes
-          # registry/SSH requests, and optional CLI features stay disabled.
+          # registry/SSH requests.
           subprocess.run(['cargo', 'fetch', '--locked'], check=True)
           subprocess.run(['rustup', 'toolchain', 'install', version, '--profile', 'minimal'], check=True)
           subprocess.run(['cargo', '+' + version, 'check', '--locked', '--offline', '--workspace', '--all-targets'], check=True)

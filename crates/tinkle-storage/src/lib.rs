@@ -1,6 +1,6 @@
 //! Shared native SQLite cache + per-conversation journal cursors for libtinkle.
 //!
-//! Rust owns migrations, schema, transactions, and queries. Swift/Kotlin
+//! Rust owns migrations, schema, transactions, and queries. Foreign hosts
 //! access the same file through UniFFI (`tinkle-ffi`). This crate exposes
 //! only owned, FFI-friendly values and never leaks SQL in errors.
 //!

@@ -2,7 +2,7 @@ blank_issues_enabled: false
 contact_links:
   - name: Questions & discussions
     url: https://github.com/tinkle-org/libtinkle/discussions
-    about: Ask usage, integration (Swift/Kotlin/JS), and design questions here instead of opening an issue.
+    about: Ask Rust API, native C ABI integration, and design questions here instead of opening an issue.
   - name: Security vulnerability
     url: https://github.com/tinkle-org/libtinkle/security/policy
     about: Do not file public issues for vulnerabilities involving credentials, TLS, or E2EE. Use private reporting.

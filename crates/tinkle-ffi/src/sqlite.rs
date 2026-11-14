@@ -1,4 +1,4 @@
-//! Shared native SQLite storage for Swift/Kotlin via UniFFI.
+//! Shared native SQLite storage through the UniFFI C ABI.
 //!
 //! Rust owns migrations, transactions, and queries. One file is shared by
 //! both mobile platforms. All params are owned; errors map to
@@ -91,10 +91,7 @@ impl SqliteStorage {
     /// Blocking open: does FS I/O + PRAGMAs + schema sync on the calling
     /// thread. Do NOT call on the UI/main thread; call from a background
     /// queue, or prefer [`Self::open_async`] which moves the work to
-    /// `spawn_blocking`. A full async refactor (async constructor as the
-    /// only open path) is out of scope to avoid breaking existing
-    /// Swift/Kotlin call sites; this doc + the async alternative is the
-    /// interim guard.
+    /// `spawn_blocking`.
     #[uniffi::constructor]
     pub fn open(path: String) -> Result<Arc<Self>, FfiError> {
         if path.is_empty() {

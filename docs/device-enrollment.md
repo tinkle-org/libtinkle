@@ -62,7 +62,7 @@ session/user/account generation and a strictly greater enrollment epoch.
 ## Secure-store contract
 
 Implement `SecureEnrollmentStore` in Rust, or `FfiSecureEnrollmentStore` in
-Swift/Kotlin. There is no default memory/cache/database implementation.
+the foreign host. There is no default memory/cache/database implementation.
 
 | Transaction | Required effect before returning success |
 |---|---|
@@ -333,14 +333,14 @@ For rotation, prepare a fresh durable operation, call
 receipt. Delivery uses the current Returning connection; activation uses
 Bootstrap. The prior secure active slot is preserved through staging.
 
-## Swift/Kotlin surface
+## UniFFI surface
 
 `ClientConfigFfi` requires `ClientInfoFfi`, with all five labels and a complete
-`ClientOptionsFfi`. `TinkleClient` exports `sendCode`, `prepareEnrollment`,
-`loadEnrollmentOperation`, `signIn`, `resumeEnrollment`, `rotateEnrollment`,
-`activateEnrollment` and `restoreActiveEnrollment`. `EnrollmentOperation` and
+`ClientOptionsFfi`. `TinkleClient` exports `send_code`, `prepare_enrollment`,
+`load_enrollment_operation`, `sign_in`, `resume_enrollment`, `rotate_enrollment`,
+`activate_enrollment` and `restore_active_enrollment`. `EnrollmentOperation` and
 `StoredEnrollment` are opaque object handles. SignIn returns a user protobuf
-projection, `isNewUser`, and the stored receipt; no key/capability is returned
+projection, `is_new_user`, and the stored receipt; no key/capability is returned
 in a diagnostic-printable record. The public FFI trust constructor is Bootstrap;
 Returning is installed through validated secure-store restoration or activation.
 
@@ -436,11 +436,10 @@ Buf or schema-candidate generation:
 ```sh
 cargo test --locked --workspace --all-features --verbose
 cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings
-bash scripts/generate-bindings.sh --check
 ```
 
-Regenerate checked-in Swift/Kotlin bindings with
-`bash scripts/generate-bindings.sh --write`, then rerun `--check`.
+Consumer repositories build the native library, generate language bindings from
+the matching revision, and verify their foreign runtime integration.
 
 `scripts/test-schema-candidate.sh` remains optional for future-schema development,
 not release qualification. See [public pinning](../PROTO_PINNING.md) for that
@@ -456,8 +455,8 @@ python3 scripts/with-native-fixture.py --port 0 cargo test --locked -p libtinkle
 
 ## Verification boundaries
 
-SDK unit tests, encrypted TCP interoperability fixtures, and Swift/Kotlin consumer
-checks do not establish production-server acceptance or platform protected-storage
+Rust unit tests and encrypted TCP interoperability fixtures do not establish
+foreign ABI execution, production-server acceptance, or platform protected-storage
 security. Externally orchestrated acceptance requires separate qualification
 against the exact source and published pins. Test presence is not execution
 evidence; see [qualification requirements](../PROTO_PINNING.md#sdk-pins-and-qualification).

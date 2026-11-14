@@ -1555,9 +1555,9 @@ pub(crate) mod review_tests {
         record
     }
 
-    /// Validate the shared ACTIVE bytes and their pin against the deterministic SDK peer.
+    /// Validate synthetic ACTIVE bytes and their pin against the deterministic SDK peer.
     #[test]
-    fn review_swift_active_vector_matches_private_record_encoder_and_validates_returning() {
+    fn review_active_vector_matches_private_record_encoder_and_validates_returning() {
         use syntra_core::secure_channel::{
             self, Carrier, ClientHandshake, Mode, Secret32, ServerConfig,
         };
@@ -1623,17 +1623,8 @@ pub(crate) mod review_tests {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();
-        // Shared as Swift source so consumers need no resource-bundle or API change.
-        let asset = include_str!(
-            "../../../packages/swift/Tests/TinkleSDKTests/EnrollmentReviewVector.swift"
-        );
-        let actual = asset
-            .split("static let activeRecordHex = \"")
-            .nth(1)
-            .unwrap()
-            .split('"')
-            .next()
-            .unwrap();
+        // Fixed synthetic keys/capabilities; the fixture contains no production secrets.
+        let actual = include_str!("../tests/fixtures/enrollment-active-record.hex").trim();
         assert_eq!(actual, expected);
         let restored = Record::decode(&blob, &epoch).unwrap();
         assert_eq!(restored.status.as_ref(), Some(&status));

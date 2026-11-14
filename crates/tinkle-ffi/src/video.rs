@@ -140,7 +140,7 @@ impl From<&m::NativeMediaOutput> for FfiNativeMediaOutput {
 
 /// Real local encoder. Completion must join all native work, even after cooperative cancellation.
 /// Only the SDK destination may be written; decoder-only adapters cannot implement this contract.
-#[uniffi::export(rust, foreign)]
+#[uniffi::export(with_foreign)]
 #[async_trait::async_trait]
 pub trait FfiPlatformMediaPreparer: Send + Sync {
     async fn prepare(
@@ -332,7 +332,7 @@ pub struct FfiDecodedVideo {
 /// Implement with AVFoundation or MediaExtractor/MediaCodec on native-owned execution queues.
 /// Bound allocations/queues, observe cancellation/deadline, and retain input until actual native
 /// completion. Do not remux/re-encode the source or retain a TinkleClient cycle in this callback.
-#[uniffi::export(rust, foreign)]
+#[uniffi::export(with_foreign)]
 #[async_trait::async_trait]
 pub trait FfiPlatformVideoDecoder: Send + Sync {
     /// Decode/validate the frozen MP4 and optionally return one bounded, oriented thumbnail.

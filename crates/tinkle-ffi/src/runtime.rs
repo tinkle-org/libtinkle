@@ -26,10 +26,7 @@ pub fn init() {
     let _ = RUNTIME.get_or_init(build);
 }
 
-/// Foreign-callable init. Swift/Kotlin apps call this once at startup.
-// TODO(runtime-acceptance-init): acceptance must assert init is called once
-// at app start and cold-start recovery (reconnect+resubscribe from persisted
-// cursors) restores the session after process death.
+/// Idempotent foreign-callable init. Hosts call this at process startup.
 #[uniffi::export]
 pub fn tinkle_ffi_init() {
     init();
