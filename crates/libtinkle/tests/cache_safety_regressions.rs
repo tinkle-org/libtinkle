@@ -1,5 +1,45 @@
 //! Encrypted native races: delayed history cannot recreate removed or replacement-scope bodies.
 mod support;
+
+/// Complete ordered album receipts stay independent of current body visibility.
+#[cfg(tinkle_async_actions)]
+fn album_status(r: &p::SendAlbumRequest) -> p::SendStatus {
+    p::SendStatus {
+        target: r.target,
+        idempotency_key: r.items[0].idempotency_key,
+        state: 3,
+        revision: 1,
+        failure: 0,
+        accepted: r
+            .items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| p::SendReceipt {
+                idempotency_key: item.idempotency_key,
+                message_id: Some(i as i64 + 1),
+                album_id: Some(7),
+                reference_withheld: Some(false),
+            })
+            .collect(),
+        retain_until: Some(prost_types::Timestamp {
+            seconds: 2_000_000_000,
+            nanos: 0,
+        }),
+    }
+}
+
+#[cfg(tinkle_async_actions)]
+fn action_reply(bytes: Vec<u8>) -> syntra_core::proto::Frame {
+    syntra_core::proto::Frame {
+        version: 1,
+        request_id: 1,
+        body: Some(syntra_core::proto::frame::Body::Result(
+            syntra_core::proto::RpcResult {
+                outcome: Some(syntra_core::proto::rpc_result::Outcome::Payload(bytes)),
+            },
+        )),
+    }
+}
 use libtinkle::{Client, Storage};
 use prost::Message as _;
 use std::sync::Arc;
@@ -169,15 +209,47 @@ async fn accepted_album_rehydration_keeps_removals_out_of_offline_fts_without_rp
         let config = support::config(listener.local_addr().unwrap());
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let remote = calls.clone();
+        #[cfg(tinkle_async_actions)]
+        let retained = Arc::new(std::sync::Mutex::new((
+            None::<p::SendAlbumRequest>,
+            Vec::<p::Message>::new(),
+        )));
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let handle = support::accept(stream, move |request, _| {
                 let calls = remote.clone();
+                #[cfg(tinkle_async_actions)]
+                let retained = retained.clone();
                 async move {
+                    #[cfg(tinkle_async_actions)]
+                    if request.method.ends_with("/GetMessages")
+                        || request.method.ends_with("/GetSendStatus")
+                    {
+                        let retained = retained.lock().unwrap();
+                        let original = retained.0.as_ref().unwrap();
+                        let bytes = if request.method.ends_with("/GetMessages") {
+                            p::GetMessagesResponse {
+                                messages: retained.1.clone(),
+                                ..Default::default()
+                            }
+                            .encode_to_vec()
+                        } else {
+                            p::GetSendStatusResponse {
+                                send_status: Some(album_status(original)),
+                                ..Default::default()
+                            }
+                            .encode_to_vec()
+                        };
+                        return action_reply(bytes);
+                    }
                     assert!(request.method.ends_with("/SendAlbum"));
                     calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     let req = p::SendAlbumRequest::decode(request.payload.as_slice()).unwrap();
-                    let messages = req
+                    #[cfg(tinkle_async_actions)]
+                    let status = album_status(&req);
+                    #[cfg(tinkle_async_actions)]
+                    let original = req.clone();
+                    let messages: Vec<_> = req
                         .items
                         .into_iter()
                         .enumerate()
@@ -198,8 +270,14 @@ async fn accepted_album_rehydration_keeps_removals_out_of_offline_fts_without_rp
                             ..Default::default()
                         })
                         .collect();
+                    #[cfg(tinkle_async_actions)]
+                    {
+                        *retained.lock().unwrap() = (Some(original), messages.clone());
+                    }
                     let payload = p::SendAlbumResponse {
                         messages,
+                        #[cfg(tinkle_async_actions)]
+                        send_status: Some(status),
                         ..Default::default()
                     }
                     .encode_to_vec();

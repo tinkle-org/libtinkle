@@ -171,6 +171,17 @@ pub struct FfiUploadOptions {
     pub file_name: Option<String>,
     pub mime_type: Option<String>,
     pub sha256: Option<Vec<u8>>,
+    /// Explicit immutable image/video processing; absent for legacy/raw/audio/thumbnail uploads.
+    #[cfg(tinkle_async_actions)]
+    #[uniffi(default=None)]
+    pub processing_intent: Option<FfiMediaProcessingIntent>,
+}
+/// Only explicit supported processing requests cross the FFI boundary.
+#[cfg(tinkle_async_actions)]
+#[derive(Debug, Clone, Copy, uniffi::Enum)]
+pub enum FfiMediaProcessingIntent {
+    Image,
+    Video,
 }
 impl From<FfiUploadOptions> for libtinkle::UploadParams {
     fn from(v: FfiUploadOptions) -> Self {
@@ -179,6 +190,15 @@ impl From<FfiUploadOptions> for libtinkle::UploadParams {
             file_name: v.file_name,
             mime_type: v.mime_type,
             sha256: v.sha256,
+            #[cfg(tinkle_async_actions)]
+            processing_intent: v.processing_intent.map(|v| match v {
+                FfiMediaProcessingIntent::Image => {
+                    tinkle_schema::proto::MediaProcessingIntent::Image
+                }
+                FfiMediaProcessingIntent::Video => {
+                    tinkle_schema::proto::MediaProcessingIntent::Video
+                }
+            }),
         }
     }
 }
@@ -222,14 +242,52 @@ impl From<FfiMediaKind> for libtinkle::sending::AttachmentKind {
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct FfiPreparedAttachment {
     pub file_info: Vec<u8>,
+    #[cfg(not(tinkle_async_actions))]
     pub thumbnail_file_info: Option<Vec<u8>>,
+    #[cfg(tinkle_async_actions)]
+    pub thumbnail: Option<crate::FfiUploadedThumbnail>,
     pub media_source: Vec<u8>,
     pub source_sha256: Vec<u8>,
     pub output_sha256: Vec<u8>,
     pub preparation_profile: String,
+    /// Retained JPEG display bytes, not yet embedded in the pinned MediaSource protobuf.
+    #[uniffi(default = None)]
+    pub tiny_preview: Option<Vec<u8>>,
 }
 
-/// Durable main-only handoff; paths are SDK-owned and cleared with the principal.
+/// Bind the typed input to the ordinary completed FileInfo, never to a separate role/identity.
+#[cfg(tinkle_async_actions)]
+fn uploaded_thumbnail(
+    value: &libtinkle::sending::PreparedAttachment,
+) -> Result<Option<crate::FfiUploadedThumbnail>, FfiSendError> {
+    use tinkle_schema::proto::media_source::Media;
+    let source = match value.source.media.as_ref() {
+        Some(Media::Photo(v)) => v.thumbnail.as_ref(),
+        Some(Media::Document(v)) => v.thumbnail.as_ref(),
+        Some(Media::Video(v)) => v.thumbnail.as_ref(),
+        Some(Media::Audio(v)) => v.thumbnail.as_ref(),
+        Some(Media::Sticker(v)) => v.thumbnail.as_ref(),
+        _ => None,
+    };
+    match (value.thumbnail.as_ref(), source) {
+        (None, None) => Ok(None),
+        (Some(file), Some(t))
+            if file.file_id == t.file_id && t.file_id > 0 && t.width > 0 && t.height > 0 =>
+        {
+            Ok(Some(crate::FfiUploadedThumbnail {
+                file_info: file.encode_to_vec(),
+                source: crate::FfiThumbnailSource {
+                    file_id: t.file_id,
+                    width: t.width,
+                    height: t.height,
+                },
+            }))
+        }
+        _ => Err(FfiSendError::Storage),
+    }
+}
+
+/// Durable preparation handoff; paths are SDK-owned and cleared with the principal.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct FfiAttachmentManifest {
     pub input_path: String,
@@ -241,6 +299,23 @@ pub struct FfiAttachmentManifest {
     pub mime_type: String,
     pub media_source: Vec<u8>,
     pub native_facts: Option<crate::video::FfiNativeMediaOutput>,
+    /// Exact retained <=4096-byte JPEG, absent for older preparations or nonvisual media.
+    #[uniffi(default = None)]
+    pub tiny_preview: Option<Vec<u8>>,
+    /// Separate immutable regular PNG upload input.
+    #[uniffi(default = None)]
+    pub thumbnail: Option<FfiAttachmentThumbnail>,
+}
+
+/// Exact optional PNG upload input; independent of the main artifact and its operation key.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiAttachmentThumbnail {
+    /// Private SDK-owned file, removed with principal cleanup.
+    pub artifact_path: String,
+    /// Digest of the exact retained PNG upload bytes.
+    pub sha256: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// Durable transfer observations. Download prefix bytes are diagnostic until server metadata
@@ -295,7 +370,33 @@ impl TinkleClient {
                 mime_type: m.mime_type,
                 media_source: m.media_source,
                 native_facts: m.native_facts.as_ref().map(Into::into),
+                tiny_preview: m.tiny_preview,
+                thumbnail: m.thumbnail.map(|t| FfiAttachmentThumbnail {
+                    artifact_path: t.artifact_path,
+                    sha256: t.sha256.to_vec(),
+                    width: t.width,
+                    height: t.height,
+                }),
             }))
+    }
+    /// Retry only a retained optional PNG upload after confirmed main completion, without encoding.
+    /// Returns FileInfo protobuf bytes; unknown outcomes remain errors and never rewrite a send.
+    pub async fn sending_upload_attachment_thumbnail(
+        &self,
+        key: String,
+        control: Arc<TransferControl>,
+    ) -> Result<Option<Vec<u8>>, FfiSendError> {
+        let mut lease = control
+            .begin(FfiTransferPhase::Uploading)
+            .map_err(|error| FfiSendError::Rpc { error })?;
+        let result = self
+            .core_client()
+            .sending()
+            .upload_attachment_thumbnail(key, Some(control.token()))
+            .await
+            .map_err(FfiSendError::from);
+        lease.finish(result.is_ok(), None);
+        result.map(|file| file.map(|file| file.encode_to_vec()))
     }
     /// Download at most the core's bounded byte-convenience limit using only this exact context.
     pub async fn files_download_bytes_with_context(
@@ -428,15 +529,19 @@ impl TinkleClient {
         let v = result?;
         Ok(FfiPreparedAttachment {
             file_info: v.file.encode_to_vec(),
+            #[cfg(tinkle_async_actions)]
+            thumbnail: uploaded_thumbnail(&v)?,
+            #[cfg(not(tinkle_async_actions))]
             thumbnail_file_info: v.thumbnail.map(|f| f.encode_to_vec()),
             media_source: v.source.encode_to_vec(),
             source_sha256: v.source_sha256.to_vec(),
             output_sha256: v.output_sha256.to_vec(),
             preparation_profile: v.preparation_profile,
+            tiny_preview: v.tiny_preview,
         })
     }
 
-    /// Persist a real native encoder's main-only output before upload. Retries use the retained
+    /// Persist a real native encoder's output and display artifacts before upload. Retries use the retained
     /// artifact without invoking the callback; no client-wide callback retention is needed.
     pub async fn sending_prepare_native_attachment(
         &self,
@@ -471,11 +576,15 @@ impl TinkleClient {
         let v = result?;
         Ok(FfiPreparedAttachment {
             file_info: v.file.encode_to_vec(),
-            thumbnail_file_info: None,
+            #[cfg(tinkle_async_actions)]
+            thumbnail: uploaded_thumbnail(&v)?,
+            #[cfg(not(tinkle_async_actions))]
+            thumbnail_file_info: v.thumbnail.map(|f| f.encode_to_vec()),
             media_source: v.source.encode_to_vec(),
             source_sha256: v.source_sha256.to_vec(),
             output_sha256: v.output_sha256.to_vec(),
             preparation_profile: v.preparation_profile,
+            tiny_preview: v.tiny_preview,
         })
     }
 
@@ -512,11 +621,15 @@ impl TinkleClient {
         let v = result?;
         Ok(FfiPreparedAttachment {
             file_info: v.file.encode_to_vec(),
-            thumbnail_file_info: None,
+            #[cfg(tinkle_async_actions)]
+            thumbnail: uploaded_thumbnail(&v)?,
+            #[cfg(not(tinkle_async_actions))]
+            thumbnail_file_info: v.thumbnail.map(|f| f.encode_to_vec()),
             media_source: v.source.encode_to_vec(),
             source_sha256: v.source_sha256.to_vec(),
             output_sha256: v.output_sha256.to_vec(),
             preparation_profile: v.preparation_profile,
+            tiny_preview: v.tiny_preview,
         })
     }
     /// Read one durable transfer observation on a blocking worker, fenced to this principal.
@@ -586,6 +699,49 @@ impl From<FfiMediaError> for FfiSendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A completed ordinary FileInfo must match the single source thumbnail, including omission.
+    #[cfg(tinkle_async_actions)]
+    #[test]
+    fn uploaded_thumbnail_keeps_the_exact_file_identity() {
+        use tinkle_schema::proto as p;
+        let mut value = libtinkle::sending::PreparedAttachment {
+            file: p::FileInfo {
+                file_id: 9,
+                ..Default::default()
+            },
+            thumbnail: Some(p::FileInfo {
+                file_id: 10,
+                ..Default::default()
+            }),
+            source: p::MediaSource {
+                media: Some(p::media_source::Media::Photo(p::PhotoSource {
+                    file_id: 9,
+                    thumbnail: Some(p::ThumbnailSource {
+                        file_id: 10,
+                        width: 2,
+                        height: 1,
+                    }),
+                    ..Default::default()
+                })),
+            },
+            source_sha256: [1; 32],
+            output_sha256: [2; 32],
+            preparation_profile: "test".into(),
+            tiny_preview: None,
+        };
+        let uploaded = uploaded_thumbnail(&value).unwrap().unwrap();
+        assert_eq!(
+            p::FileInfo::decode(uploaded.file_info.as_slice())
+                .unwrap()
+                .file_id,
+            uploaded.source.file_id
+        );
+        value.thumbnail.as_mut().unwrap().file_id = 11;
+        assert!(uploaded_thumbnail(&value).is_err());
+        value.thumbnail = None;
+        assert!(uploaded_thumbnail(&value).is_err());
+    }
 
     /// Malformed/empty references fail at the FFI boundary and never become uploader reads.
     #[test]

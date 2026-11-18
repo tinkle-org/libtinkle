@@ -21,6 +21,13 @@
 uniffi::setup_scaffolding!();
 
 mod account;
+mod actions;
+mod thumbnails;
+pub use thumbnails::{
+    chat_photo_source_with_thumbnail, media_source_with_thumbnail,
+    profile_photo_source_with_thumbnail, sticker_asset_source_with_thumbnail,
+    thumbnail_from_protobuf, FfiThumbnail, FfiThumbnailSource, FfiUploadedThumbnail,
+};
 mod sending;
 mod services;
 mod transfers;

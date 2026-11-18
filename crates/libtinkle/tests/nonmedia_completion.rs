@@ -1,9 +1,12 @@
-//! Native recovery of immutable main-only preparations and typed profile/history boundaries.
+//! Native recovery of immutable preparations and typed profile/history boundaries.
 mod support;
 use libtinkle::{Client, Storage, TinkleError};
 use prost::Message as _;
 use std::sync::{Arc, Mutex};
 use tinkle_schema::proto as p;
+
+/// Native preparation tests share the production two-slot admission instead of racing each other.
+static PREPARATIONS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// A real PNG artifact isolates durable handoff from platform encoder qualification.
 struct PngPreparer(Arc<std::sync::atomic::AtomicUsize>);
@@ -17,10 +20,15 @@ impl libtinkle::media::PlatformMediaPreparer for PngPreparer {
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let file = std::fs::File::create(input.output_path()).unwrap();
         image::codecs::png::PngEncoder::new(file)
-            .write_image(&[1, 2, 3, 255], 1, 1, image::ExtendedColorType::Rgba8)
+            .write_image(
+                &[1, 2, 3, 255, 1, 2, 3, 255],
+                2,
+                1,
+                image::ExtendedColorType::Rgba8,
+            )
             .unwrap();
         Ok(libtinkle::media::NativeMediaOutput {
-            width: 1,
+            width: 2,
             height: 1,
             frame_count: 1,
             duration_ms: 0,
@@ -28,13 +36,148 @@ impl libtinkle::media::PlatformMediaPreparer for PngPreparer {
             audio_sample_rate: 0,
             audio_samples: 0,
             waveform: vec![],
+            thumbnail_frame: None,
         })
     }
+}
+
+/// A thumbnail's unknown outcome is visible, and restart retries only that exact retained upload.
+#[tokio::test]
+async fn optional_thumbnail_unknown_outcome_has_separate_exact_restart_retry() {
+    let _preparation = PREPARATIONS.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let database = dir.path().join("cache.sqlite");
+    let input = dir.path().join("input");
+    std::fs::write(&input, b"import").unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let config = support::config(listener.local_addr().unwrap());
+    let requests = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+    let recorded = requests.clone();
+    let server = tokio::spawn(async move {
+        for attempt in 0..2 {
+            let (stream, _) = listener.accept().await.unwrap();
+            let recorded = recorded.clone();
+            let handle = support::accept(stream, move |request, _| {
+                let recorded = recorded.clone();
+                async move {
+                    assert!(request.method.ends_with("/BeginUpload"));
+                    recorded.lock().unwrap().push(request.payload.clone());
+                    let r = p::BeginUploadRequest::decode(request.payload.as_slice()).unwrap();
+                    let thumbnail = r.idempotency_key.ends_with(":thumbnail");
+                    let outcome = if thumbnail && attempt == 0 {
+                        syntra_core::proto::rpc_result::Outcome::Error(
+                            syntra_core::proto::RpcError {
+                                code: 14,
+                                message: "unknown outcome".into(),
+                            },
+                        )
+                    } else {
+                        syntra_core::proto::rpc_result::Outcome::Payload(
+                            p::BeginUploadResponse {
+                                status: p::UploadStatus::Completed as i32,
+                                file: Some(p::FileInfo {
+                                    file_id: if thumbnail { 8 } else { 7 },
+                                    size_bytes: r.size_bytes,
+                                    sha256: r.sha256.unwrap(),
+                                    ..Default::default()
+                                }),
+                                ..Default::default()
+                            }
+                            .encode_to_vec(),
+                        )
+                    };
+                    syntra_core::proto::Frame {
+                        version: 1,
+                        request_id: 1,
+                        body: Some(syntra_core::proto::frame::Body::Result(
+                            syntra_core::proto::RpcResult {
+                                outcome: Some(outcome),
+                            },
+                        )),
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            while !handle.is_closed() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            handle.close().await;
+        }
+    });
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let storage = Arc::new(Storage::open(database.to_str().unwrap()).unwrap());
+    let client = Client::new_sqlite(config.clone(), support::source(), storage.clone());
+    client.set_principal_user_id(42).await;
+    client
+        .configure_media_preparer(Some(Arc::new(PngPreparer(calls.clone()))))
+        .unwrap();
+    client.connect().await.unwrap();
+    let result = client
+        .sending()
+        .prepare_attachment(
+            "two-files".into(),
+            &input,
+            libtinkle::media::NativeMediaKind::Image,
+            None,
+        )
+        .await;
+    assert!(
+        matches!(result,Err(libtinkle::SendError::Rpc(ref e)) if e.is_unknown_outcome()),
+        "{result:?}"
+    );
+    let before = client
+        .sending()
+        .attachment_manifest("two-files".into())
+        .await
+        .unwrap()
+        .unwrap();
+    let png = std::fs::read(&before.thumbnail.as_ref().unwrap().artifact_path).unwrap();
+    client.close().await;
+    drop((client, storage));
+    std::fs::remove_file(&input).unwrap();
+    let storage = Arc::new(Storage::open(database.to_str().unwrap()).unwrap());
+    let client = Client::new_sqlite(config, support::source(), storage);
+    client.set_principal_user_id(42).await;
+    client.connect().await.unwrap();
+    let file = client
+        .sending()
+        .upload_attachment_thumbnail("two-files".into(), None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(file.file_id, 8);
+    let after = client
+        .sending()
+        .attachment_manifest("two-files".into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(before.media_source, after.media_source);
+    assert_eq!(before.tiny_preview, after.tiny_preview);
+    assert_eq!(
+        png,
+        std::fs::read(&after.thumbnail.as_ref().unwrap().artifact_path).unwrap()
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    {
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 4);
+        assert!(p::BeginUploadRequest::decode(requests[0].as_slice())
+            .unwrap()
+            .idempotency_key
+            .ends_with(":main"));
+        assert_eq!(requests[1], requests[2]);
+        assert_eq!(requests[2], requests[3]);
+    }
+    client.close().await;
+    server.await.unwrap();
 }
 
 /// Client preparation gets scratch from the database, not the imported source or system default.
 #[tokio::test]
 async fn native_client_preparation_uses_database_parent_before_upload() {
+    let _preparation = PREPARATIONS.lock().await;
     let private = tempfile::tempdir().unwrap();
     let imports = tempfile::tempdir().unwrap();
     let path = imports.path().join("source.bin");
@@ -106,6 +249,7 @@ async fn native_client_preparation_uses_database_parent_before_upload() {
 /// A failed upload followed by restart reuses the frozen artifact even after input replacement.
 #[tokio::test]
 async fn preparation_manifest_survives_restart_without_reencoding_and_logout_cleans_artifact() {
+    let _preparation = PREPARATIONS.lock().await;
     for native in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let database = dir.path().join("cache.sqlite");
@@ -138,7 +282,12 @@ async fn preparation_manifest_survives_restart_without_reencoding_and_logout_cle
                                 p::BeginUploadResponse {
                                     status: p::UploadStatus::Completed as i32,
                                     file: Some(p::FileInfo {
-                                        file_id: 7,
+                                        file_id: if request.idempotency_key.ends_with(":thumbnail")
+                                        {
+                                            8
+                                        } else {
+                                            7
+                                        },
                                         size_bytes: request.size_bytes,
                                         sha256: request.sha256.unwrap(),
                                         ..Default::default()
@@ -215,6 +364,21 @@ async fn preparation_manifest_survives_restart_without_reencoding_and_logout_cle
             .await
             .unwrap()
             .unwrap();
+        let thumbnail_bytes = manifest.thumbnail.as_ref().map(|t| {
+            assert_ne!(t.artifact_path, manifest.artifact_path);
+            assert!(t.artifact_path.ends_with(".png"));
+            let bytes = std::fs::read(&t.artifact_path).unwrap();
+            assert_eq!(t.sha256, libtinkle::sha256(&bytes));
+            bytes
+        });
+        assert_eq!(manifest.tiny_preview.is_some(), native);
+        assert_eq!(manifest.thumbnail.is_some(), native);
+        let pending = p::MediaSource::decode(manifest.media_source.as_slice()).unwrap();
+        match pending.media.unwrap() {
+            p::media_source::Media::Photo(v) => assert_eq!(v.file_id, 0),
+            p::media_source::Media::Document(v) => assert_eq!(v.file_id, 0),
+            _ => panic!("unexpected pending media"),
+        }
         if !native {
             assert_eq!(
                 std::fs::read(&manifest.artifact_path).unwrap(),
@@ -252,19 +416,85 @@ async fn preparation_manifest_survives_restart_without_reencoding_and_logout_cle
         }
         .unwrap();
         assert_eq!(prepared.output_sha256, manifest.output_sha256);
-        assert!(prepared.thumbnail.is_none());
+        assert_eq!(
+            prepared.thumbnail.as_ref().map(|t| t.file_id),
+            native.then_some(8)
+        );
+        assert_eq!(prepared.tiny_preview, manifest.tiny_preview);
+        #[cfg(tinkle_async_actions)]
+        if native {
+            let Some(p::media_source::Media::Photo(photo)) = prepared.source.media.as_ref() else {
+                panic!("photo source");
+            };
+            let thumbnail = photo.thumbnail.as_ref().unwrap();
+            assert_eq!(
+                thumbnail.file_id,
+                prepared.thumbnail.as_ref().unwrap().file_id
+            );
+            assert_eq!(
+                (thumbnail.width, thumbnail.height),
+                (
+                    manifest.thumbnail.as_ref().unwrap().width,
+                    manifest.thumbnail.as_ref().unwrap().height
+                )
+            );
+            assert_eq!(
+                photo.inline_preview.as_ref().unwrap().jpeg.as_ref(),
+                prepared.tiny_preview.as_deref().unwrap()
+            );
+        }
+        let retained = client
+            .sending()
+            .attachment_manifest("attachment".into())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.media_source, manifest.media_source);
+        assert_eq!(
+            retained
+                .thumbnail
+                .as_ref()
+                .map(|t| std::fs::read(&t.artifact_path).unwrap()),
+            thumbnail_bytes
+        );
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
             usize::from(native)
         );
         {
             let requests = requests.lock().unwrap();
-            assert_eq!(requests.len(), 2);
+            assert_eq!(requests.len(), if native { 3 } else { 2 });
+            #[cfg(tinkle_async_actions)]
+            for bytes in requests.iter() {
+                assert_eq!(
+                    p::BeginUploadRequest::decode(bytes.as_slice())
+                        .unwrap()
+                        .processing_intent,
+                    native.then_some(1),
+                    "image main and regular thumbnail retain their explicit inspection intent"
+                );
+            }
             assert_eq!(requests[0], requests[1]);
+            let main = p::BeginUploadRequest::decode(requests[1].as_slice()).unwrap();
+            assert!(main.idempotency_key.ends_with(":main"));
+            if native {
+                let thumbnail = p::BeginUploadRequest::decode(requests[2].as_slice()).unwrap();
+                assert_eq!(
+                    thumbnail.idempotency_key,
+                    main.idempotency_key.trim_end_matches(":main").to_owned() + ":thumbnail"
+                );
+                assert_eq!(
+                    thumbnail.sha256.unwrap().as_ref(),
+                    manifest.thumbnail.as_ref().unwrap().sha256
+                );
+            }
         }
         client.close().await;
         storage.clear_principal("user:42").unwrap();
         assert!(!std::path::Path::new(&manifest.artifact_path).exists());
+        if let Some(t) = &manifest.thumbnail {
+            assert!(!std::path::Path::new(&t.artifact_path).exists());
+        }
         server.await.unwrap();
     }
 }
@@ -273,6 +503,7 @@ async fn preparation_manifest_survives_restart_without_reencoding_and_logout_cle
 /// invoking a codec. Restart resumes it through the normal API without any configured encoder.
 #[tokio::test]
 async fn native_adoption_persists_hash_recipe_and_facts_before_network() {
+    let _preparation = PREPARATIONS.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("cache.sqlite");
     let input = dir.path().join("source.png");
@@ -306,7 +537,7 @@ async fn native_adoption_persists_hash_recipe_and_facts_before_network() {
         .unwrap()
         .unwrap();
     assert_eq!(manifest.output_sha256, expected);
-    assert_eq!(manifest.native_facts.as_ref().unwrap().width, 1);
+    assert_eq!(manifest.native_facts.as_ref().unwrap().width, 2);
     assert_eq!(
         manifest.profile,
         libtinkle::media::NATIVE_PREPARATION_PROFILE
@@ -348,6 +579,7 @@ async fn native_adoption_persists_hash_recipe_and_facts_before_network() {
 /// Path access cannot authorize changed bytes under a retained native hash or upload key.
 #[tokio::test]
 async fn modified_native_artifact_is_rejected_before_manifest_or_upload() {
+    let _preparation = PREPARATIONS.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("input");
     std::fs::write(&source, b"input").unwrap();

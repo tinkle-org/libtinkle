@@ -25,7 +25,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use thiserror::Error;
 
 mod search;
@@ -549,6 +549,8 @@ enum CacheWrite<'a> {
     JournalFenced(i64, &'a MessageCacheFence),
     Snapshot(&'a MessageCacheFence),
     Outgoing(&'a OutgoingJob),
+    #[cfg(tinkle_async_actions)]
+    SendHydration(&'a OutgoingJob, &'a MessageCacheFence),
 }
 
 /// Bounded inventory projection; listing jobs never loads every retained payload/result into memory.
@@ -560,6 +562,15 @@ pub struct OutgoingJobSummary {
     pub state: OutgoingState,
     pub revision: i64,
 }
+
+/// Remembered identity evidence is private, bounded and deleted with its immutable parent intent.
+const ACTION_EVIDENCE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS outgoing_action_evidence_v1(
+ principal TEXT NOT NULL,source TEXT NOT NULL,job_id TEXT NOT NULL,evidence BLOB NOT NULL,
+ PRIMARY KEY(principal,source,job_id),FOREIGN KEY(principal,source,job_id)
+ REFERENCES outgoing_jobs(principal,source,job_id) ON DELETE CASCADE);";
+
+#[cfg(tinkle_async_actions)]
+mod send_hydration;
 
 /// Sending states deliberately distinguish local preparation from uncertain remote execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -574,6 +585,22 @@ pub enum OutgoingState {
     Transient = 5,
     /// Server retained a scheduled message, not yet accepted into delivered history.
     AcceptedPending = 6,
+    /// Recorded remote work without an accepted domain mutation.
+    ActionPending = 14,
+    /// Claimed remote work; cancellation cannot attest rollback.
+    ActionProcessing = 15,
+    /// Accepted identity, independently of current body disclosure.
+    ActionSucceeded = 16,
+    /// Durable domain failure fences later acceptance.
+    ActionFailed = 17,
+    /// Durable domain cancellation fenced acceptance.
+    ActionCanceled = 18,
+    /// Exact request and keys retained before first transmission.
+    ActionPrepared = 19,
+    /// Transmission admitted; interrupted waiters must query the original keys.
+    ActionDispatching = 20,
+    /// No conforming status obtained; not permission to replay or rekey.
+    ActionUnconfirmed = 21,
 }
 
 impl OutgoingState {
@@ -587,6 +614,17 @@ impl OutgoingState {
             4 => Ok(Self::Rejected),
             5 => Ok(Self::Transient),
             6 => Ok(Self::AcceptedPending),
+            7..=13 => Err(StorageError::Corrupt(
+                "incompatible candidate actions require explicit disposal".into(),
+            )),
+            14 => Ok(Self::ActionPending),
+            15 => Ok(Self::ActionProcessing),
+            16 => Ok(Self::ActionSucceeded),
+            17 => Ok(Self::ActionFailed),
+            18 => Ok(Self::ActionCanceled),
+            19 => Ok(Self::ActionPrepared),
+            20 => Ok(Self::ActionDispatching),
+            21 => Ok(Self::ActionUnconfirmed),
             _ => Err(StorageError::Corrupt("invalid outgoing state".into())),
         }
     }
@@ -631,6 +669,11 @@ type BackgroundSyncJobRow = (
 /// (Deleted/Revoked journal changes disclose identity and kind only).
 #[derive(Debug, Default, Clone)]
 pub struct CacheOps {
+    /// Narrow pure application comparison: only representations of an identical entity may advance.
+    pub entity_representation_advance: Option<EntityRepresentationAdvance>,
+    /// Application-owned pure merge under the cache transaction; storage never decodes protobufs.
+    /// Returns only the merged message/file projections, or None to retain the current body.
+    pub message_merger: Option<MessageMerger>,
     pub messages: Vec<MessageRow>,
     /// Positive authoritative body versions keyed by message ID in this single-target batch.
     /// Absent entries mean unknown; they are never synthesized from event/cursor positions.
@@ -655,6 +698,13 @@ pub struct CacheOps {
     /// stale refs instead of leaking them.
     pub replace_entity_files: Vec<(String, i64)>,
 }
+
+/// Pure schema adapter run inside the existing transaction, after scope/tombstone checks.
+/// A selected projection must contain exactly one same-identity row and its own optional positive
+/// `message_body_revisions` entry. That metadata, not the input batch's clock, must meet the floor.
+pub type MessageMerger = fn(&[u8], &MessageRow) -> Result<Option<CacheOps>, StorageError>;
+/// Schema-owned comparison under SQLite's transaction; storage keeps entity payloads opaque.
+pub type EntityRepresentationAdvance = fn(&str, &[u8], &[u8]) -> Result<bool, StorageError>;
 
 /// Durable per-conversation validity + fencing generation.
 ///
@@ -682,6 +732,66 @@ pub struct Storage {
 }
 
 impl Storage {
+    /// Reject an incompatible cache before decoding retained protobufs or admitting network work.
+    /// Unmarked populated caches are supported only by the unchanged published contract.
+    fn check_media_encoding(conn: &Connection) -> Result<(), StorageError> {
+        let has_meta: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta')",
+            [],
+            |r| r.get(0),
+        )?;
+        let encoding: Option<String> = if has_meta {
+            conn.query_row(
+                "SELECT value FROM meta WHERE key='media_encoding'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?
+        } else {
+            None
+        };
+        let expected = env!("TINKLE_SCHEMA_WIRE_ID");
+        if encoding.as_deref().is_some_and(|v| v != expected) {
+            return Err(StorageError::Corrupt(
+                "incompatible media encoding; use a fresh candidate cache".into(),
+            ));
+        }
+        #[cfg(tinkle_schema_candidate)]
+        if encoding.is_none() {
+            for table in [
+                "messages",
+                "dialogs",
+                "users",
+                "chats",
+                "files",
+                "file_cache_entries",
+                "message_files",
+                "entity_files",
+                "file_transfers",
+                "background_sync_jobs",
+                "outgoing_jobs",
+            ] {
+                let exists: bool = conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                    [table],
+                    |r| r.get(0),
+                )?;
+                if exists
+                    && conn.query_row(
+                        &format!("SELECT EXISTS(SELECT 1 FROM {table})"),
+                        [],
+                        |r| r.get::<_, bool>(0),
+                    )?
+                {
+                    return Err(StorageError::Corrupt(
+                        "unversioned media state; use a fresh candidate cache".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn open(path: &str) -> Result<Self, StorageError> {
         if path.is_empty() {
             return Err(StorageError::InvalidInput(
@@ -803,6 +913,7 @@ impl Storage {
             .inner
             .lock()
             .map_err(|_| StorageError::Corrupt("storage lock poisoned during init".into()))?;
+        Self::check_media_encoding(&conn)?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA foreign_keys=ON;
@@ -848,7 +959,15 @@ impl Storage {
                PRIMARY KEY(principal, chat_id));",
         )?;
         conn.execute_batch(Self::V4_DDL)?;
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        // Recheck unmarked state under the write lock before assigning its encoding.
+        Self::check_media_encoding(&tx)?;
+        tx.execute(
+            "INSERT OR IGNORE INTO meta(key,value) VALUES('media_encoding',?1)",
+            [env!("TINKLE_SCHEMA_WIRE_ID")],
+        )?;
+        // A competing opener may have stamped the database after the pre-DDL check.
+        Self::check_media_encoding(&tx)?;
         let version: Option<String> = tx
             .query_row(
                 "SELECT value FROM meta WHERE key='schema_version'",
@@ -951,6 +1070,13 @@ impl Storage {
                 ALTER TABLE outgoing_jobs ADD COLUMN outcome_raw INTEGER;
                 ALTER TABLE outgoing_jobs ADD COLUMN outcome_unknown INTEGER;",
             )?;
+        }
+        #[cfg(tinkle_async_actions)]
+        {
+            // Remove only the obsolete candidate cursor. Retained jobs, receipts and
+            // per-job hydration acknowledgements are independent of it.
+            tx.execute_batch("DROP TABLE IF EXISTS send_update_state;")?;
+            tx.execute_batch(send_hydration::SCHEMA)?;
         }
         // Repair previously invalidated caches, including rows whose old global origin hid
         // their canonical conversation ownership from the former rebuild implementation.
@@ -1498,10 +1624,27 @@ impl Storage {
                 "/tinkle.v1.MessagesService/SendMessage"
                     | "/tinkle.v1.MessagesService/SendMedia"
                     | "/tinkle.v1.MessagesService/SendAlbum"
+                    | "/tinkle.v1.MessagesService/EditChatPhoto"
+                    | "/tinkle.v1.ChannelsService/EditPhoto"
+                    | "/tinkle.v1.AccountService/SetProfilePhoto"
+                    | "/tinkle.v1.StickersService/CreateStickerAsset"
+                    | "/tinkle.v1.StickersService/UpdateStickerAsset"
             )
             || job.payload.is_empty()
             || job.payload.len() > 262144
-            || job.state != OutgoingState::Prepared
+            || !matches!(
+                job.state,
+                OutgoingState::Prepared | OutgoingState::ActionPrepared
+            )
+            || (job.state == OutgoingState::Prepared
+                && !matches!(
+                    job.method.as_str(),
+                    "/tinkle.v1.MessagesService/SendMessage"
+                        | "/tinkle.v1.MessagesService/SendMedia"
+                        | "/tinkle.v1.MessagesService/SendAlbum"
+                ))
+            || (job.state == OutgoingState::ActionPrepared
+                && job.method == "/tinkle.v1.MessagesService/SendMessage")
             || job.revision != 0
             || job.cache_generation > i64::MAX as u64
             || job.cache_incarnation > i64::MAX as u64
@@ -1539,8 +1682,8 @@ impl Storage {
             if count >= 256 {
                 return Err(StorageError::InvalidInput("outgoing queue full".into()));
             }
-            tx.execute("INSERT INTO outgoing_jobs(principal,source,job_id,target_key,method,payload,cache_generation,cache_incarnation) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
-                params![principal, job.source, job.job_id, job.target_key, job.method, job.payload,job.cache_generation as i64,job.cache_incarnation as i64])?;
+            tx.execute("INSERT INTO outgoing_jobs(principal,source,job_id,target_key,method,payload,cache_generation,cache_incarnation,state) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                params![principal, job.source, job.job_id, job.target_key, job.method, job.payload,job.cache_generation as i64,job.cache_incarnation as i64,job.state as i64])?;
         }
         tx.commit()?;
         Ok(())
@@ -1643,7 +1786,79 @@ impl Storage {
         response: &[u8],
         outcome: Option<&OutgoingOutcome>,
     ) -> Result<bool, StorageError> {
+        self.transition_outgoing_inner(principal, job, next, response, outcome, false, None)
+    }
+
+    /// Refresh domain-validated status disclosure without changing the immutable request.
+    pub fn transition_outgoing_action(
+        &self,
+        principal: &str,
+        job: &OutgoingJob,
+        next: OutgoingState,
+        response: &[u8],
+        outcome: Option<&OutgoingOutcome>,
+    ) -> Result<bool, StorageError> {
+        self.transition_outgoing_inner(principal, job, next, response, outcome, true, None)
+    }
+
+    /// Private remembered identity evidence is never substituted for current response disclosure.
+    pub fn outgoing_action_evidence(
+        &self,
+        principal: &str,
+        source: &str,
+        id: &str,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
         check_principal(principal)?;
+        check_job_id(id)?;
+        let conn = self.lock()?;
+        conn.execute_batch(ACTION_EVIDENCE_SCHEMA)?;
+        Ok(conn.query_row("SELECT evidence FROM outgoing_action_evidence_v1 WHERE principal=?1 AND source=?2 AND job_id=?3",params![principal,source,id],|r|r.get(0)).optional()?)
+    }
+
+    /// Commit current disclosure and monotonic remembered accepted IDs in the same intent CAS.
+    pub fn transition_outgoing_action_with_evidence(
+        &self,
+        principal: &str,
+        job: &OutgoingJob,
+        next: OutgoingState,
+        response: &[u8],
+        evidence: &[u8],
+    ) -> Result<bool, StorageError> {
+        if evidence.len() > 262144 {
+            return Err(StorageError::InvalidInput(
+                "action identity evidence exceeds budget".into(),
+            ));
+        }
+        self.transition_outgoing_inner(principal, job, next, response, None, true, Some(evidence))
+    }
+
+    /// One immutable-intent CAS implementation; legacy accepted outcomes remain terminal.
+    #[allow(clippy::too_many_arguments)]
+    fn transition_outgoing_inner(
+        &self,
+        principal: &str,
+        job: &OutgoingJob,
+        next: OutgoingState,
+        response: &[u8],
+        outcome: Option<&OutgoingOutcome>,
+        action: bool,
+        evidence: Option<&[u8]>,
+    ) -> Result<bool, StorageError> {
+        check_principal(principal)?;
+        Self::validate_outgoing_transition(job, next, response, action)?;
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        let changed = Self::write_outgoing(&tx, principal, job, next, response, outcome, evidence)?;
+        tx.commit()?;
+        Ok(changed)
+    }
+
+    fn validate_outgoing_transition(
+        job: &OutgoingJob,
+        next: OutgoingState,
+        response: &[u8],
+        action: bool,
+    ) -> Result<(), StorageError> {
         let allowed = matches!(
             (job.state, next),
             (
@@ -1661,14 +1876,68 @@ impl Storage {
                     | OutgoingState::AcceptedPending
             )
         );
-        if !allowed || response.len() > 4 * 1024 * 1024 || job.revision == i64::MAX {
+        let action_transition = action
+            && match job.state {
+                OutgoingState::ActionPrepared => next == OutgoingState::ActionDispatching,
+                OutgoingState::ActionDispatching | OutgoingState::ActionUnconfirmed => matches!(
+                    next,
+                    OutgoingState::ActionUnconfirmed
+                        | OutgoingState::ActionPending
+                        | OutgoingState::ActionProcessing
+                        | OutgoingState::ActionSucceeded
+                        | OutgoingState::ActionFailed
+                        | OutgoingState::ActionCanceled
+                ),
+                OutgoingState::ActionPending => matches!(
+                    next,
+                    OutgoingState::ActionPending
+                        | OutgoingState::ActionProcessing
+                        | OutgoingState::ActionSucceeded
+                        | OutgoingState::ActionFailed
+                        | OutgoingState::ActionCanceled
+                ),
+                OutgoingState::ActionProcessing => matches!(
+                    next,
+                    OutgoingState::ActionProcessing
+                        | OutgoingState::ActionSucceeded
+                        | OutgoingState::ActionFailed
+                        | OutgoingState::ActionCanceled
+                ),
+                OutgoingState::ActionSucceeded
+                | OutgoingState::ActionFailed
+                | OutgoingState::ActionCanceled => next == job.state,
+                _ => false,
+            };
+        if !(allowed || action_transition)
+            || response.len() > 4 * 1024 * 1024
+            || job.revision == i64::MAX
+        {
             return Err(StorageError::InvalidInput(
                 "invalid outgoing transition".into(),
             ));
         }
-        let conn = self.lock()?;
-        Ok(conn.execute("UPDATE outgoing_jobs SET state=?1,response=?2,revision=revision+1,outcome_code=?9,outcome_raw=?10,outcome_unknown=?11 WHERE principal=?3 AND source=?4 AND job_id=?5 AND revision=?6 AND state=?7 AND payload=?8 AND target_key=?12 AND method=?13 AND cache_incarnation=?14",
-            params![next as i64,response,principal,job.source,job.job_id,job.revision,job.state as i64,job.payload,outcome.map(|o|o.code),outcome.and_then(|o|o.raw_code),outcome.map(|o|o.unknown_outcome),job.target_key,job.method,job.cache_incarnation as i64])? == 1)
+        Ok(())
+    }
+
+    /// Update the exact retained intent and optional remembered status evidence together.
+    fn write_outgoing(
+        tx: &Transaction<'_>,
+        principal: &str,
+        job: &OutgoingJob,
+        next: OutgoingState,
+        response: &[u8],
+        outcome: Option<&OutgoingOutcome>,
+        evidence: Option<&[u8]>,
+    ) -> Result<bool, StorageError> {
+        let changed=tx.execute("UPDATE outgoing_jobs SET state=?1,response=?2,revision=revision+1,outcome_code=?9,outcome_raw=?10,outcome_unknown=?11 WHERE principal=?3 AND source=?4 AND job_id=?5 AND revision=?6 AND state=?7 AND payload=?8 AND target_key=?12 AND method=?13 AND cache_incarnation=?14 AND cache_generation=?15 AND response=?16",
+            params![next as i64,response,principal,job.source,job.job_id,job.revision,job.state as i64,job.payload,outcome.map(|o|o.code),outcome.and_then(|o|o.raw_code),outcome.map(|o|o.unknown_outcome),job.target_key,job.method,job.cache_incarnation as i64,job.cache_generation as i64,job.response])? == 1;
+        if changed {
+            if let Some(evidence) = evidence {
+                tx.execute_batch(ACTION_EVIDENCE_SCHEMA)?;
+                tx.execute("INSERT INTO outgoing_action_evidence_v1(principal,source,job_id,evidence) VALUES(?1,?2,?3,?4) ON CONFLICT(principal,source,job_id) DO UPDATE SET evidence=excluded.evidence",params![principal,job.source,job.job_id,evidence])?;
+            }
+        }
+        Ok(changed)
     }
 
     /// Explicitly remove a settled or never-dispatched intent; uncertain work cannot be forgotten here.
@@ -1680,7 +1949,20 @@ impl Storage {
     ) -> Result<bool, StorageError> {
         check_principal(principal)?;
         check_job_id(job_id)?;
-        Ok(self.lock()?.execute("DELETE FROM outgoing_jobs WHERE principal=?1 AND source=?2 AND job_id=?3 AND state IN (0,3,4,5,6)", params![principal,source,job_id])? == 1)
+        Ok(self.lock()?.execute("DELETE FROM outgoing_jobs WHERE principal=?1 AND source=?2 AND job_id=?3 AND state IN (0,3,4,5,6,16,17,18,19)", params![principal,source,job_id])? == 1)
+    }
+
+    /// Explicit disposal of incompatible experimental rows. This loses local recovery evidence,
+    /// never cancels remote work, and must not be used for an account with uncertain real actions.
+    pub fn discard_incompatible_candidate_actions(
+        &self,
+        principal: &str,
+    ) -> Result<usize, StorageError> {
+        check_principal(principal)?;
+        Ok(self.lock()?.execute(
+            "DELETE FROM outgoing_jobs WHERE principal=?1 AND state BETWEEN 7 AND 13",
+            [principal],
+        )?)
     }
 
     /// Invalidate one conversation's cache scope. Canonically owned messages/dialogs
@@ -1952,6 +2234,24 @@ impl Storage {
         )
     }
 
+    /// Complete body hydration only for the original, still-current accepted receipt.
+    #[cfg(tinkle_async_actions)]
+    pub fn hydrate_send_action(
+        &self,
+        principal: &str,
+        job: &OutgoingJob,
+        ops: &CacheOps,
+        fence: &MessageCacheFence,
+    ) -> Result<Vec<i64>, StorageError> {
+        self.apply_page(
+            principal,
+            &job.target_key,
+            ops,
+            job.cache_generation,
+            CacheWrite::SendHydration(job, fence),
+        )
+    }
+
     /// Commit a journal response using its pre-request target/principal proof as well as the
     /// server's mutation position. A wipe/rebuild cannot be adopted after the response arrives.
     pub fn apply_journal_page_with_scope(
@@ -2121,28 +2421,36 @@ impl Storage {
         }
         let mut conn = self.lock()?;
         let tx = conn.transaction()?;
-        match write {
-            CacheWrite::Snapshot(fence) | CacheWrite::JournalFenced(_, fence) => {
-                let database: String = tx.query_row(
-                    "SELECT value FROM meta WHERE key='search_database_id'",
-                    [],
-                    |r| r.get(0),
-                )?;
-                if !fence.valid
-                    || fence.principal != principal
-                    || fence.target_key != target_key
-                    || fence.database_id != database
-                    || fence.incarnation != Self::cache_incarnation(&tx, principal)?
-                {
-                    return Err(StorageError::CacheScopeChanged);
-                }
-            }
+        let fence = match write {
+            CacheWrite::Snapshot(fence) | CacheWrite::JournalFenced(_, fence) => Some(fence),
+            #[cfg(tinkle_async_actions)]
+            CacheWrite::SendHydration(_, fence) => Some(fence),
             CacheWrite::Outgoing(job) => {
                 if job.cache_incarnation != Self::cache_incarnation(&tx, principal)? {
                     return Err(StorageError::CacheScopeChanged);
                 }
+                None
             }
-            CacheWrite::Journal(_) => {}
+            CacheWrite::Journal(_) => None,
+        };
+        if let Some(fence) = fence {
+            let database: String = tx.query_row(
+                "SELECT value FROM meta WHERE key='search_database_id'",
+                [],
+                |r| r.get(0),
+            )?;
+            if !fence.valid
+                || fence.principal != principal
+                || fence.target_key != target_key
+                || fence.database_id != database
+                || fence.incarnation != Self::cache_incarnation(&tx, principal)?
+            {
+                return Err(StorageError::CacheScopeChanged);
+            }
+        }
+        #[cfg(tinkle_async_actions)]
+        if let CacheWrite::SendHydration(job, _) = write {
+            Self::finish_send_hydration(&tx, principal, job)?;
         }
         let row: Option<(i64, Option<i64>)> = tx
             .query_row(
@@ -2220,20 +2528,64 @@ impl Storage {
             }
         }
         let mut winning_ids = std::collections::HashSet::new();
+        let mut merged_ids = std::collections::HashSet::new();
+        let mut merged_files = Vec::new();
+        let mut merged_refs = Vec::new();
         for m in &ops.messages {
             let removed:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM message_tombstones WHERE principal=?1 AND conversation_key=?2 AND message_id=?3)",params![principal,target_key,m.message_id],|r|r.get(0))?;
             if removed {
                 continue;
             }
             let floor:Option<i64>=tx.query_row("SELECT minimum_revision FROM message_body_floors WHERE principal=?1 AND conversation_key=?2 AND message_id=?3",params![principal,target_key,m.message_id],|r|r.get(0)).optional()?;
-            if floor.is_some_and(|floor| {
-                body_revisions
-                    .get(&m.message_id)
-                    .is_none_or(|revision| *revision < floor)
-            }) {
+            let merged = if let Some(merge) = ops.message_merger {
+                let old:Option<Vec<u8>>=tx.query_row("SELECT proto FROM messages WHERE principal=?1 AND conversation_key=?2 AND message_id=?3",params![principal,target_key,m.message_id],|r|r.get(0)).optional()?;
+                if let Some(old) = old {
+                    match merge(&old, m)? {
+                        Some(ops) => Some(ops),
+                        None => {
+                            visible_ids.push(m.message_id);
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some(projected) = &merged {
+                if projected.messages.len() != 1
+                    || projected.messages[0].message_id != m.message_id
+                    || projected.messages[0].conversation_key != m.conversation_key
+                    || projected.message_body_revisions.len() > 1
+                    || projected
+                        .message_body_revisions
+                        .iter()
+                        .any(|(id, revision)| *id != m.message_id || *revision <= 0)
+                {
+                    return Err(StorageError::InvalidInput(
+                        "invalid merged message projection".into(),
+                    ));
+                }
+            }
+            // The merger owns the selected row AND its clock. Batch metadata describes the
+            // incoming row only and must not relabel a hybrid protobuf with an older revision.
+            let selected_revision = match &merged {
+                Some(projected) => projected
+                    .message_body_revisions
+                    .first()
+                    .map(|(_, revision)| *revision),
+                None => body_revisions.get(&m.message_id).copied(),
+            };
+            if floor.is_some_and(|floor| selected_revision.is_none_or(|revision| revision < floor))
+            {
                 continue;
             }
             visible_ids.push(m.message_id);
+            let m = merged
+                .as_ref()
+                .and_then(|ops| ops.messages.first())
+                .unwrap_or(m);
             let peer_ok = m.peer_id != 0 || m.peer_kind == "unknown";
             if m.message_id <= 0 || !peer_ok || m.proto.len() > 2_000_000 {
                 return Err(StorageError::InvalidInput("bad message row".into()));
@@ -2266,16 +2618,21 @@ impl Storage {
                             _ => false,
                         }
                     };
-                    match (old_revision, body_revisions.get(&m.message_id)) {
-                        (Some(old), Some(new)) => *new > old,
+                    match (old_revision, selected_revision) {
+                        (Some(old), Some(new)) => new > old,
                         _ => fresher_by_date,
                     }
                 }
             };
-            if !should_write {
+            if !should_write && merged.is_none() {
                 continue;
             }
             winning_ids.insert(m.message_id);
+            if let Some(ops) = &merged {
+                merged_ids.insert(m.message_id);
+                merged_files.extend(ops.files.iter().cloned());
+                merged_refs.extend(ops.message_files.iter().cloned());
+            }
             tx.execute("DELETE FROM message_files WHERE principal=?1 AND conversation_key=?2 AND message_id=?3",
                 params![principal, m.conversation_key, m.message_id])?;
             tx.execute(
@@ -2299,7 +2656,7 @@ impl Storage {
                     m.accept_seq,
                     m.edit_date_secs,
                     m.edit_date_nanos,
-                    body_revisions.get(&m.message_id)
+                    selected_revision
                 ],
             )?;
         }
@@ -2382,16 +2739,23 @@ impl Storage {
         }
         // File-cache subsystem: immutable metadata first, then idempotent
         // refs, all in the same fenced transaction.
-        for f in &ops.files {
-            if !ops.message_files.iter().any(|r| {
-                winning_ids.contains(&r.message_id)
-                    && r.file_scope == f.scope
-                    && r.file_id == f.file_id
-            }) && !ops.entity_files.iter().any(|r| {
-                written_entities.contains(&(r.kind.as_str(), r.entity_id))
-                    && r.file_scope == f.scope
-                    && r.file_id == f.file_id
-            }) && (!ops.messages.is_empty() || !ops.users.is_empty() || !ops.chats.is_empty())
+        for f in ops.files.iter().chain(merged_files.iter()) {
+            if !ops
+                .message_files
+                .iter()
+                .filter(|r| !merged_ids.contains(&r.message_id))
+                .chain(merged_refs.iter())
+                .any(|r| {
+                    winning_ids.contains(&r.message_id)
+                        && r.file_scope == f.scope
+                        && r.file_id == f.file_id
+                })
+                && !ops.entity_files.iter().any(|r| {
+                    written_entities.contains(&(r.kind.as_str(), r.entity_id))
+                        && r.file_scope == f.scope
+                        && r.file_id == f.file_id
+                })
+                && (!ops.messages.is_empty() || !ops.users.is_empty() || !ops.chats.is_empty())
             {
                 continue;
             }
@@ -2413,7 +2777,12 @@ impl Storage {
                 ],
             )?;
         }
-        for r in &ops.message_files {
+        for r in ops
+            .message_files
+            .iter()
+            .filter(|r| !merged_ids.contains(&r.message_id))
+            .chain(merged_refs.iter())
+        {
             if !winning_ids.contains(&r.message_id) {
                 continue;
             }
@@ -2909,8 +3278,9 @@ impl Storage {
         Ok(v.map(|proto| ChatRow { chat_id, proto }))
     }
 
-    /// Insert unversioned entities without treating arrival order or message journal positions
-    /// as entity revisions. The caller commits file refs only for the returned inserted set.
+    /// Insert unversioned entity semantics without arrival-order replacement. An application
+    /// adapter may advance only independent representations of an otherwise identical entity.
+    /// The caller commits file refs only for the returned inserted/representation-updated set.
     fn insert_hydrated_entities(
         tx: &rusqlite::Transaction<'_>,
         principal: &str,
@@ -2927,6 +3297,19 @@ impl Storage {
             )? == 1
             {
                 inserted.insert(("user", u.user_id));
+            } else if let Some(advance) = ops.entity_representation_advance {
+                let old: Vec<u8> = tx.query_row(
+                    "SELECT proto FROM users WHERE principal=?1 AND user_id=?2",
+                    params![principal, u.user_id],
+                    |r| r.get(0),
+                )?;
+                if advance("user", &old, &u.proto)? {
+                    tx.execute(
+                        "UPDATE users SET proto=?3 WHERE principal=?1 AND user_id=?2",
+                        params![principal, u.user_id, u.proto],
+                    )?;
+                    inserted.insert(("user", u.user_id));
+                }
             }
         }
         for c in &ops.chats {
@@ -2939,13 +3322,26 @@ impl Storage {
             )? == 1
             {
                 inserted.insert(("chat", c.chat_id));
+            } else if let Some(advance) = ops.entity_representation_advance {
+                let old: Vec<u8> = tx.query_row(
+                    "SELECT proto FROM chats WHERE principal=?1 AND chat_id=?2",
+                    params![principal, c.chat_id],
+                    |r| r.get(0),
+                )?;
+                if advance("chat", &old, &c.proto)? {
+                    tx.execute(
+                        "UPDATE chats SET proto=?3 WHERE principal=?1 AND chat_id=?2",
+                        params![principal, c.chat_id, c.proto],
+                    )?;
+                    inserted.insert(("chat", c.chat_id));
+                }
             }
         }
         Ok(inserted)
     }
 
-    /// Hydrate global dialog-list entities and their file refs atomically, insert-only.
-    /// Unversioned snapshots cannot replace existing entities or alter their reference sets.
+    /// Hydrate global entities and exact file refs atomically. Unversioned semantics stay
+    /// insert-only; an opted-in pure adapter may advance the same source's representations.
     /// Only users, chats, files and entity-file fields of `ops` are consumed.
     pub fn hydrate_entity_snapshot(
         &self,
@@ -2960,7 +3356,7 @@ impl Storage {
         Ok(())
     }
 
-    /// Shared insert-only entity/ref projection inside an existing snapshot transaction.
+    /// Shared semantic-insert-only entity/ref projection with narrow independent representation CAS.
     fn hydrate_entity_snapshot_tx(
         tx: &rusqlite::Transaction<'_>,
         principal: &str,
@@ -2970,6 +3366,7 @@ impl Storage {
             || ops.chats.len() > 256
             || ops.files.len() > 512
             || ops.entity_files.len() > 512
+            || ops.replace_entity_files.len() > 512
         {
             return Err(StorageError::InvalidInput(
                 "entity snapshot too large".into(),
@@ -3004,6 +3401,21 @@ impl Storage {
             }
             tx.execute("INSERT OR IGNORE INTO files(principal,scope,file_id,size_bytes,sha256,mime_type,file_name,encrypted,created_at,origin_stream) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'')",
                 params![principal,f.scope,f.file_id,f.size_bytes,f.sha256,f.mime_type,f.file_name,f.encrypted as i32,f.created_at])?;
+        }
+        // A selected representation owns its exact ref set, including an empty replacement.
+        for (kind, entity_id) in &ops.replace_entity_files {
+            check_entity_file_kind(kind)?;
+            if *entity_id <= 0 {
+                return Err(StorageError::InvalidInput(
+                    "bad replace_entity_file entity_id".into(),
+                ));
+            }
+            if inserted.contains(&(kind.as_str(), *entity_id)) {
+                tx.execute(
+                    "DELETE FROM entity_files WHERE principal=?1 AND kind=?2 AND entity_id=?3",
+                    params![principal, kind, entity_id],
+                )?;
+            }
         }
         for r in &ops.entity_files {
             check_entity_file_kind(&r.kind)?;
@@ -4710,6 +5122,12 @@ mod tests {
             )
             .unwrap();
         }
+        if cfg!(tinkle_schema_candidate) {
+            // Clean candidate cutover cannot run the published cache migration over opaque old bytes.
+            assert!(Storage::open(path.to_str().unwrap()).is_err());
+            std::fs::remove_dir_all(&dir).unwrap();
+            return;
+        }
         let s = Storage::open(path.to_str().unwrap()).unwrap();
         // Legacy v2 checkpoint cursors are stream-replay positions, not
         // journal positions: migration drops them so journaling restarts at
@@ -5163,6 +5581,10 @@ mod tests {
                  CREATE TABLE entity_provenance(principal TEXT NOT NULL, kind TEXT NOT NULL, entity_id INTEGER NOT NULL, stream TEXT NOT NULL, PRIMARY KEY(principal, kind, entity_id, stream));",
             )
             .unwrap();
+        }
+        if cfg!(tinkle_schema_candidate) {
+            assert!(Storage::open(&path_str).is_err());
+            return;
         }
         // First open migrates 3→4; second + third opens replay idempotently.
         for _ in 0..3 {

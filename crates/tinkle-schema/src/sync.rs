@@ -61,6 +61,23 @@ pub fn validate_connectivity_notification(
 
 /// Exact application notification binding; transport framing stays opaque to this crate.
 pub enum Notification {
+    /// Actor-private send status hint, not an authoritative receipt.
+    #[cfg(tinkle_async_actions)]
+    SendStatusChanged(crate::proto::SendStatusChanged),
+    #[cfg(tinkle_async_actions)]
+    ChatPhotoUpdateChanged(crate::proto::ChatPhotoUpdateChanged),
+    #[cfg(tinkle_async_actions)]
+    ChannelPhotoUpdateChanged(crate::proto::ChannelPhotoUpdateChanged),
+    #[cfg(tinkle_async_actions)]
+    ProfilePhotoUpdateChanged(crate::proto::ProfilePhotoUpdateChanged),
+    #[cfg(tinkle_async_actions)]
+    AssetChangeChanged(crate::proto::AssetChangeChanged),
+    #[cfg(tinkle_async_actions)]
+    ProfilePhotoRepresentationChanged(crate::proto::ProfilePhotoRepresentationChanged),
+    #[cfg(tinkle_async_actions)]
+    ChatPhotoRepresentationChanged(crate::proto::ChatPhotoRepresentationChanged),
+    #[cfg(tinkle_async_actions)]
+    StickerAssetRepresentationChanged(crate::proto::StickerAssetRepresentationChanged),
     /// Validated bare connectivity observation inside google.protobuf.Any.
     Connectivity(ConnectivityChanged),
     /// Validated session refresh hint, not an authoritative session projection.
@@ -76,12 +93,89 @@ pub fn notification(payload: &[u8]) -> Result<Notification, SyncError> {
     let Ok(any) = prost_types::Any::decode(payload) else {
         return Ok(Notification::Hint);
     };
+    #[cfg(tinkle_async_actions)]
+    macro_rules! hint {
+        ($ty:ident, $valid:expr) => {{
+            let value = crate::proto::$ty::decode(any.value.as_slice())
+                .map_err(|_| SyncError::Malformed("invalid action hint".into()))?;
+            if !($valid)(&value) {
+                return Err(SyncError::InvalidUpdate("invalid action hint".into()));
+            }
+            Ok(Notification::$ty(value))
+        }};
+    }
     match any.type_url.as_str() {
+        #[cfg(tinkle_async_actions)]
+        "type.googleapis.com/tinkle.v1.SendStatusChanged" => {
+            hint!(SendStatusChanged, |v: &crate::proto::SendStatusChanged| v
+                .revision
+                > 0
+                && v.idempotency_key != 0
+                && matches!(
+                    v.target.and_then(|t| t.kind),
+                    Some(target::Kind::UserId(1..) | target::Kind::ChatId(1..))
+                ))
+        }
+        #[cfg(tinkle_async_actions)]
+        "type.googleapis.com/tinkle.v1.ChatPhotoUpdateChanged" => hint!(
+            ChatPhotoUpdateChanged,
+            |v: &crate::proto::ChatPhotoUpdateChanged| v.revision > 0
+                && v.chat_id > 0
+                && v.operation_id > 0
+        ),
+        #[cfg(tinkle_async_actions)]
+        "type.googleapis.com/tinkle.v1.ChannelPhotoUpdateChanged" => hint!(
+            ChannelPhotoUpdateChanged,
+            |v: &crate::proto::ChannelPhotoUpdateChanged| v.revision > 0
+                && v.channel_id > 0
+                && session_id(&v.request_id)
+        ),
+        #[cfg(tinkle_async_actions)]
+        "type.googleapis.com/tinkle.v1.ProfilePhotoUpdateChanged" => hint!(
+            ProfilePhotoUpdateChanged,
+            |v: &crate::proto::ProfilePhotoUpdateChanged| v.revision > 0
+                && session_id(&v.request_id)
+        ),
+        #[cfg(tinkle_async_actions)]
+        "type.googleapis.com/tinkle.v1.AssetChangeChanged" => hint!(
+            AssetChangeChanged,
+            |v: &crate::proto::AssetChangeChanged| v.revision > 0
+                && session_id(&v.request_id)
+                && v.asset_id.is_none_or(|id| id > 0)
+        ),
+        #[cfg(tinkle_async_actions)]
+        "type.googleapis.com/tinkle.v1.ProfilePhotoRepresentationChanged" => hint!(
+            ProfilePhotoRepresentationChanged,
+            |v: &crate::proto::ProfilePhotoRepresentationChanged| v.user_id > 0
+                && v.photo_id > 0
+                && v.main_file_id > 0
+                && v.representation_revision > 0
+        ),
+        #[cfg(tinkle_async_actions)]
+        "type.googleapis.com/tinkle.v1.ChatPhotoRepresentationChanged" => hint!(
+            ChatPhotoRepresentationChanged,
+            |v: &crate::proto::ChatPhotoRepresentationChanged| v.chat_id > 0
+                && v.photo_id > 0
+                && v.main_file_id > 0
+                && v.representation_revision > 0
+        ),
+        #[cfg(tinkle_async_actions)]
+        "type.googleapis.com/tinkle.v1.StickerAssetRepresentationChanged" => hint!(
+            StickerAssetRepresentationChanged,
+            |v: &crate::proto::StickerAssetRepresentationChanged| v
+                .asset
+                .as_ref()
+                .is_some_and(|a| a.asset_id > 0 && a.asset_version > 0)
+                && v.main_file_id > 0
+                && v.representation_revision > 0
+        ),
         "type.googleapis.com/tinkle.v1.MessageChanged" => {
             let mut value = crate::proto::MessageChanged::decode(any.value.as_slice())
                 .map_err(|_| SyncError::Malformed("invalid MessageChanged".into()))?;
             let kind = TargetChangeKind::try_from(value.change_kind)
                 .map_err(|_| SyncError::InvalidUpdate("invalid message hint kind".into()))?;
+            #[cfg(tinkle_async_actions)]
+            validate_representation_marker(value.change_kind, value.representation_revision)?;
             if value.message_id <= 0
                 || value.body_revision <= 0
                 || !matches!(
@@ -250,6 +344,9 @@ pub fn validate_changes_page(
         let kind = TargetChangeKind::try_from(change.kind).map_err(|_| {
             SyncError::InvalidUpdate(format!("unknown target change kind {}", change.kind))
         })?;
+        #[cfg(tinkle_async_actions)]
+        validate_representation_marker(change.kind, change.representation_revision)?;
+        let kind = semantic_change_kind(kind);
         if change.body_invalidated {
             if change.message.is_some()
                 || change.message_revision.is_none()
@@ -302,7 +399,7 @@ pub fn validate_changes_page(
                     )));
                 }
             }
-            TargetChangeKind::Unspecified => {
+            _ => {
                 return Err(SyncError::InvalidUpdate(format!(
                     "change for message {} has unspecified kind",
                     change.message_id
@@ -370,15 +467,46 @@ pub fn chunk_message_ids(ids: &[i64]) -> Vec<Vec<i64>> {
 /// Whether body `b` is fresher than body `a` for the same message ID: keep
 /// the strictly greater body revision when both report it, otherwise the later
 /// edit_date. Equal revisions/dates never replace a cached copy.
+/// In v2, true means `b` itself is safe to install without losing either clock. Use
+/// `representations::merge_message` for a hybrid body; merge errors never authorize replacement.
 pub fn fresher_body(a: &TinkleMessage, b: &TinkleMessage) -> bool {
-    if let (Some(a), Some(b)) = (a.body_revision, b.body_revision) {
-        return a > 0 && b > a;
+    #[cfg(tinkle_async_actions)]
+    {
+        crate::representations::merge_message(a, b).is_ok_and(|merged| merged == *b && merged != *a)
     }
-    match (&a.edit_date, &b.edit_date) {
-        (_, None) => false,
-        (None, Some(_)) => true,
-        (Some(x), Some(y)) => (y.seconds, y.nanos) > (x.seconds, x.nanos),
+    #[cfg(not(tinkle_async_actions))]
+    {
+        if let (Some(a), Some(b)) = (a.body_revision, b.body_revision) {
+            return a > 0 && b > a;
+        }
+        match (&a.edit_date, &b.edit_date) {
+            (_, None) => false,
+            (None, Some(_)) => true,
+            (Some(x), Some(y)) => (y.seconds, y.nanos) > (x.seconds, x.nanos),
+        }
     }
+}
+
+/// Representation changes hydrate through the existing body path, without inventing edit dates.
+pub fn semantic_change_kind(kind: TargetChangeKind) -> TargetChangeKind {
+    #[cfg(tinkle_async_actions)]
+    if kind == TargetChangeKind::Representation {
+        return TargetChangeKind::Edited;
+    }
+    kind
+}
+
+/// Only representation markers may report a positive independent representation revision.
+#[cfg(tinkle_async_actions)]
+fn validate_representation_marker(kind: i32, revision: Option<u64>) -> Result<(), SyncError> {
+    if (kind == TargetChangeKind::Representation as i32) != revision.is_some()
+        || revision == Some(0)
+    {
+        return Err(SyncError::InvalidUpdate(
+            "invalid representation marker".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Canonical storage key for a conversation target.

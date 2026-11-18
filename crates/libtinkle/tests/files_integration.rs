@@ -20,7 +20,7 @@ use tinkle_schema::proto::{
     PartIndexRange, UploadPartRequest, UploadPartResponse, UploadStatus,
 };
 
-const PART_SIZE: i64 = 5;
+const PART_SIZE: i64 = if cfg!(tinkle_async_actions) { 65536 } else { 5 };
 const MAX_DOWNLOAD: i32 = 5;
 
 #[derive(Debug, Default)]
@@ -491,6 +491,8 @@ async fn files_validation_rejects_bad_inputs() {
     assert!(is_codec(
         &c.files()
             .begin_upload(BeginUploadRequest {
+                #[cfg(tinkle_async_actions)]
+                processing_intent: None,
                 idempotency_key: String::new(),
                 size_bytes: 10,
                 file_name: None,
@@ -503,6 +505,8 @@ async fn files_validation_rejects_bad_inputs() {
     assert!(is_codec(
         &c.files()
             .begin_upload(BeginUploadRequest {
+                #[cfg(tinkle_async_actions)]
+                processing_intent: None,
                 idempotency_key: "k".into(),
                 size_bytes: -1,
                 file_name: None,
@@ -515,6 +519,8 @@ async fn files_validation_rejects_bad_inputs() {
     assert!(is_codec(
         &c.files()
             .begin_upload(BeginUploadRequest {
+                #[cfg(tinkle_async_actions)]
+                processing_intent: None,
                 idempotency_key: "k".into(),
                 size_bytes: 10,
                 file_name: None,
@@ -674,6 +680,8 @@ async fn files_validation_rejects_bad_inputs() {
     // Client-level wrappers enforce the same contract.
     assert!(is_codec(
         &c.begin_upload(BeginUploadRequest {
+            #[cfg(tinkle_async_actions)]
+            processing_intent: None,
             idempotency_key: "k".into(),
             size_bytes: -5,
             file_name: None,
@@ -705,6 +713,8 @@ async fn files_chunked_upload_download_happy_path() {
     let begin = c
         .begin_upload(BeginUploadRequest {
             idempotency_key: "chunked-1".into(),
+            #[cfg(tinkle_async_actions)]
+            processing_intent: None,
             size_bytes: data.len() as i64,
             file_name: Some("hello.txt".into()),
             mime_type: Some("text/plain".into()),
@@ -736,7 +746,7 @@ async fn files_chunked_upload_download_happy_path() {
         .upload_part(UploadPartRequest {
             upload_id: upload_id.clone(),
             part_index: 0,
-            data: data[..5].to_vec().into(),
+            data: data[..data.len().min(PART_SIZE as usize)].to_vec().into(),
             sha256: None,
         })
         .await
@@ -757,7 +767,7 @@ async fn files_chunked_upload_download_happy_path() {
         status.received_ranges,
         vec![PartIndexRange {
             start_index: 0,
-            end_index: 3,
+            end_index: part_count(data.len() as i64),
         }]
     );
 
@@ -813,6 +823,8 @@ async fn files_chunked_upload_download_happy_path() {
     let begin2 = c
         .begin_upload(BeginUploadRequest {
             idempotency_key: "abort-me".into(),
+            #[cfg(tinkle_async_actions)]
+            processing_intent: None,
             size_bytes: 10,
             file_name: None,
             mime_type: None,

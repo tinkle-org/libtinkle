@@ -13,9 +13,17 @@ pub enum FfiOutgoingState {
     Rejected,
     Transient,
     AcceptedPending,
+    ActionPending,
+    ActionProcessing,
+    ActionSucceeded,
+    ActionFailed,
+    ActionCanceled,
+    ActionPrepared,
+    ActionDispatching,
+    ActionUnconfirmed,
 }
 
-/// Retained keyed request/result. Response is the named method's protobuf only when Accepted.
+/// Retained original request and owning-method status receipt; success need not disclose a body.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct FfiOutgoingJob {
     pub job_id: String,
@@ -57,6 +65,14 @@ impl From<OutgoingJob> for FfiOutgoingJob {
                 OutgoingState::Rejected => FfiOutgoingState::Rejected,
                 OutgoingState::Transient => FfiOutgoingState::Transient,
                 OutgoingState::AcceptedPending => FfiOutgoingState::AcceptedPending,
+                OutgoingState::ActionPending => FfiOutgoingState::ActionPending,
+                OutgoingState::ActionProcessing => FfiOutgoingState::ActionProcessing,
+                OutgoingState::ActionSucceeded => FfiOutgoingState::ActionSucceeded,
+                OutgoingState::ActionFailed => FfiOutgoingState::ActionFailed,
+                OutgoingState::ActionCanceled => FfiOutgoingState::ActionCanceled,
+                OutgoingState::ActionPrepared => FfiOutgoingState::ActionPrepared,
+                OutgoingState::ActionDispatching => FfiOutgoingState::ActionDispatching,
+                OutgoingState::ActionUnconfirmed => FfiOutgoingState::ActionUnconfirmed,
             },
         }
     }
@@ -87,6 +103,14 @@ impl From<libtinkle::sending::OutgoingJobSummary> for FfiOutgoingJobSummary {
                 OutgoingState::Rejected => FfiOutgoingState::Rejected,
                 OutgoingState::Transient => FfiOutgoingState::Transient,
                 OutgoingState::AcceptedPending => FfiOutgoingState::AcceptedPending,
+                OutgoingState::ActionPending => FfiOutgoingState::ActionPending,
+                OutgoingState::ActionProcessing => FfiOutgoingState::ActionProcessing,
+                OutgoingState::ActionSucceeded => FfiOutgoingState::ActionSucceeded,
+                OutgoingState::ActionFailed => FfiOutgoingState::ActionFailed,
+                OutgoingState::ActionCanceled => FfiOutgoingState::ActionCanceled,
+                OutgoingState::ActionPrepared => FfiOutgoingState::ActionPrepared,
+                OutgoingState::ActionDispatching => FfiOutgoingState::ActionDispatching,
+                OutgoingState::ActionUnconfirmed => FfiOutgoingState::ActionUnconfirmed,
             },
         }
     }
@@ -200,6 +224,9 @@ impl TinkleClient {
         job_id: String,
         request: Vec<u8>,
     ) -> Result<FfiOutgoingJob, FfiSendError> {
+        #[cfg(tinkle_async_actions)]
+        tinkle_schema::wire::validate_request("/tinkle.v1.MessagesService/SendMessage", &request)
+            .map_err(|_| FfiSendError::InvalidRequest)?;
         Ok(self
             .core_client()
             .sending()
@@ -217,6 +244,9 @@ impl TinkleClient {
         job_id: String,
         request: Vec<u8>,
     ) -> Result<FfiOutgoingJob, FfiSendError> {
+        #[cfg(tinkle_async_actions)]
+        tinkle_schema::wire::validate_request("/tinkle.v1.MessagesService/SendMedia", &request)
+            .map_err(|_| FfiSendError::InvalidRequest)?;
         Ok(self
             .core_client()
             .sending()
@@ -234,6 +264,9 @@ impl TinkleClient {
         job_id: String,
         request: Vec<u8>,
     ) -> Result<FfiOutgoingJob, FfiSendError> {
+        #[cfg(tinkle_async_actions)]
+        tinkle_schema::wire::validate_request("/tinkle.v1.MessagesService/SendAlbum", &request)
+            .map_err(|_| FfiSendError::InvalidRequest)?;
         Ok(self
             .core_client()
             .sending()
@@ -245,7 +278,8 @@ impl TinkleClient {
             .map_err(FfiSendError::from)?
             .into())
     }
-    /// Attempt/resume a retained job, with explicit permission for uncertain exact-key retries.
+    /// Resume retained work: v1 uncertain mutations need explicit exact-key retry permission;
+    /// submitted asynchronous work queries original domain keys instead of replaying the mutation.
     pub async fn sending_resume(
         &self,
         job_id: String,
@@ -298,5 +332,73 @@ impl TinkleClient {
             .discard(job_id)
             .await
             .map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prost::Message;
+
+    /// Wire-only FFI admission lets the shared enqueue coordinator generate and retain omitted keys.
+    #[tokio::test]
+    async fn enqueue_message_generates_and_reuses_zero_idempotency_key() {
+        let client = TinkleClient::new_sqlite(
+            crate::ClientConfigFfi {
+                host: "127.0.0.1".into(),
+                primary_port: 1,
+                fallback_port: None,
+                client_info: crate::ClientInfoFfi {
+                    device_model: "test".into(),
+                    platform: "test".into(),
+                    os_version: "1".into(),
+                    app_version: "1".into(),
+                    app_build: "1".into(),
+                    options: crate::ClientOptionsFfi {
+                        agent: String::new(),
+                        device_id: String::new(),
+                        install_id: String::new(),
+                        accept_language: String::new(),
+                        time_zone: String::new(),
+                        user_agent: String::new(),
+                    },
+                },
+            },
+            crate::TrustSourceFfi::bootstrap(crate::ServerTrustFfi {
+                server_public_key: vec![7; 32],
+                server_key_id: 1,
+                scope: "enqueue-fixture".into(),
+            })
+            .unwrap(),
+            crate::sqlite::SqliteStorage::open_in_memory().unwrap(),
+        )
+        .unwrap();
+        client.set_principal_user_id(42).await.unwrap();
+        let request = p::SendMessageRequest {
+            target: Some(p::Target {
+                kind: Some(p::target::Kind::UserId(1)),
+            }),
+            message: "retained text".into(),
+            idempotency_key: 0,
+            ..Default::default()
+        }
+        .encode_to_vec();
+        let first = client
+            .sending_enqueue_message("zero-key".into(), request.clone())
+            .await
+            .unwrap();
+        let keyed = p::SendMessageRequest::decode(first.request.as_slice()).unwrap();
+        assert_ne!(keyed.idempotency_key, 0);
+        assert_eq!(keyed.message, "retained text");
+        assert!(matches!(first.state, FfiOutgoingState::Prepared));
+        let repeated = client
+            .sending_enqueue_message("zero-key".into(), request)
+            .await
+            .unwrap();
+        assert_eq!(first.request, repeated.request);
+        assert_eq!(first.revision, repeated.revision);
+        let retained = client.sending_get_job("zero-key".into()).await.unwrap();
+        assert_eq!(first.request, retained.request);
+        client.core_client().close().await;
     }
 }

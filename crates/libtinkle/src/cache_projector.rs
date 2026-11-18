@@ -44,6 +44,7 @@ pub fn project_change_to_ops(
     let mut ops = tinkle_storage::CacheOps::default();
     let kind = TargetChangeKind::try_from(change.kind)
         .map_err(|_| format!("unknown target change kind {}", change.kind))?;
+    let kind = tinkle_schema::sync::semantic_change_kind(kind);
     if change.body_invalidated {
         let revision = change
             .message_revision
@@ -97,7 +98,7 @@ pub fn project_change_to_ops(
             ops.remove_messages
                 .push((target_key.to_string(), change.message_id));
         }
-        TargetChangeKind::Unspecified => {
+        _ => {
             return Err(format!(
                 "change for message {} has unspecified kind",
                 change.message_id
@@ -124,6 +125,12 @@ fn push_message(
     target_key: &str,
     msg: &TinkleMessage,
 ) -> Result<(), String> {
+    #[cfg(tinkle_async_actions)]
+    {
+        tinkle_schema::representations::validate_message_representations(msg)
+            .map_err(|_| "invalid message thumbnail representation".to_string())?;
+        ops.message_merger = Some(merge_cached_message);
+    }
     if msg.message_id <= 0 {
         return Err("message_id must be positive".into());
     }
@@ -186,11 +193,49 @@ fn push_message(
 /// coalesced so one journal page (up to 500 changes, all for the same
 /// conversation peer) commits a single dialog row instead of tripping the
 /// SQLite 256-dialog batch limit.
-pub fn merge_ops(base: &mut tinkle_storage::CacheOps, extra: tinkle_storage::CacheOps) {
+/// File rows retain first-wins metadata only for the selected message/entity memberships.
+/// Conflicting clocks are errors: callers must discard the batch and must not commit its cursor.
+pub fn merge_ops(
+    base: &mut tinkle_storage::CacheOps,
+    extra: tinkle_storage::CacheOps,
+) -> Result<(), String> {
+    #[cfg(tinkle_async_actions)]
+    let mut extra = extra;
+    base.message_merger = extra.message_merger.or(base.message_merger);
+    base.entity_representation_advance = extra
+        .entity_representation_advance
+        .or(base.entity_representation_advance);
     // Coalesce repeated message IDs before pairing rows with revision metadata.
     // A newer journal marker can carry the same or an older fetched body.
     let mut winners = HashSet::new();
     for message in extra.messages {
+        #[cfg(tinkle_async_actions)]
+        let message = if let Some(old) = base
+            .messages
+            .iter()
+            .find(|m| m.message_id == message.message_id)
+        {
+            match merge_cached_message(&old.proto, &message) {
+                Ok(Some(mut merged)) => {
+                    extra
+                        .message_files
+                        .retain(|r| r.message_id != message.message_id);
+                    extra.message_files.extend(merged.message_files);
+                    extra.files.extend(merged.files);
+                    extra
+                        .message_body_revisions
+                        .retain(|(id, _)| *id != message.message_id);
+                    extra
+                        .message_body_revisions
+                        .extend(merged.message_body_revisions);
+                    merged.messages.remove(0)
+                }
+                Ok(None) => continue,
+                Err(_) => return Err("inconsistent message representations".into()),
+            }
+        } else {
+            message
+        };
         let revision = extra
             .message_body_revisions
             .iter()
@@ -207,6 +252,13 @@ pub fn merge_ops(base: &mut tinkle_storage::CacheOps, extra: tinkle_storage::Cac
                 .iter()
                 .find(|(id, _)| *id == message.message_id)
                 .map(|(_, r)| *r);
+            #[cfg(tinkle_async_actions)]
+            if let (Ok(a), Ok(b)) = (
+                TinkleMessage::decode(old.proto.as_slice()),
+                TinkleMessage::decode(message.proto.as_slice()),
+            ) {
+                return tinkle_schema::sync::fresher_body(&a, &b);
+            }
             match (old_revision, revision) {
                 (Some(a), Some(b)) => b > a,
                 _ => match (old.edit_date_secs, message.edit_date_secs) {
@@ -250,7 +302,48 @@ pub fn merge_ops(base: &mut tinkle_storage::CacheOps, extra: tinkle_storage::Cac
     );
     base.entity_files.extend(extra.entity_files);
     base.replace_entity_files.extend(extra.replace_entity_files);
+    coalesce_file_rows(base);
     coalesce_dialog_touches(base);
+    Ok(())
+}
+
+/// Match storage's first-wins immutable rows and omit files no longer in the selected projections.
+fn coalesce_file_rows(ops: &mut tinkle_storage::CacheOps) {
+    let projected = !ops.messages.is_empty() || !ops.users.is_empty() || !ops.chats.is_empty();
+    let referenced: HashSet<_> = ops
+        .message_files
+        .iter()
+        .map(|r| (r.file_scope.as_str(), r.file_id))
+        .chain(
+            ops.entity_files
+                .iter()
+                .map(|r| (r.file_scope.as_str(), r.file_id)),
+        )
+        .collect();
+    let mut seen = HashSet::new();
+    ops.files.retain(|f| {
+        (!projected || referenced.contains(&(f.scope.as_str(), f.file_id)))
+            && seen.insert((f.scope.clone(), f.file_id))
+    });
+}
+
+/// Merge exact authorized bodies inside SQLite's scope-fenced transaction and rebuild memberships.
+#[cfg(tinkle_async_actions)]
+fn merge_cached_message(
+    old: &[u8],
+    incoming: &tinkle_storage::MessageRow,
+) -> Result<Option<tinkle_storage::CacheOps>, tinkle_storage::StorageError> {
+    let invalid = || tinkle_storage::StorageError::Corrupt("invalid representation body".into());
+    let old = TinkleMessage::decode(old).map_err(|_| invalid())?;
+    let new = TinkleMessage::decode(incoming.proto.as_slice()).map_err(|_| invalid())?;
+    let merged =
+        tinkle_schema::representations::merge_message(&old, &new).map_err(|_| invalid())?;
+    if merged == old {
+        return Ok(None);
+    }
+    project_message_to_ops(&incoming.conversation_key, &merged)
+        .map(Some)
+        .map_err(|_| invalid())
 }
 
 /// Coalesce dialog touches to one row per `(peer_kind, peer_id)`, keeping
@@ -326,14 +419,18 @@ pub fn encode_chat_row(chat: &TinkleChat) -> Option<tinkle_storage::ChatRow> {
 ///
 /// File refs (user avatars) are projected alongside entities: same `file_id`
 /// across users/messages shares one `files` row (scope `""`), with
-/// per-entity refs. Chat photos carry no `file_id` today, so chats
-/// contribute no refs (hook retained for future shapes). Repeated unversioned entities
-/// keep the first complete snapshot and its refs, never a union of conflicting copies.
+/// per-entity refs, including canonical chat-photo files. Repeated unversioned semantics
+/// keep the first complete snapshot, never a union of conflicting copies. Candidate
+/// representations may advance only an otherwise identical owning projection at commit.
 pub fn project_entities_to_ops(
     users: &[TinkleUser],
     chats: &[TinkleChat],
 ) -> tinkle_storage::CacheOps {
     let mut ops = tinkle_storage::CacheOps::default();
+    #[cfg(tinkle_async_actions)]
+    {
+        ops.entity_representation_advance = Some(advance_entity_representation);
+    }
     let mut seen_users = HashSet::new();
     let mut selected_users = Vec::new();
     for u in users {
@@ -364,6 +461,17 @@ pub fn project_entities_to_ops(
     ops
 }
 
+/// Independent representations may advance, but never overwrite unversioned semantic entity data.
+#[cfg(tinkle_async_actions)]
+fn advance_entity_representation(
+    kind: &str,
+    old: &[u8],
+    new: &[u8],
+) -> Result<bool, tinkle_storage::StorageError> {
+    tinkle_schema::representations::entity_representation_advance(kind, old, new)
+        .map_err(|_| tinkle_storage::StorageError::Corrupt("invalid entity representation".into()))
+}
+
 /// Rewrite placeholder file origins (`""`) to a journal `target_key` so the
 /// batch passes `apply_journal_page_fenced` validation
 /// (`file origin_stream must equal page target_key`). Global-pin snapshots
@@ -376,7 +484,7 @@ pub fn rebase_file_origins(ops: &mut tinkle_storage::CacheOps, target_key: &str)
     }
 }
 
-/// Project sticker-pack file refs (`StickerView.file_id` + `thumb_file_id`)
+/// Project sticker-pack main and thumbnail refs
 /// into `CacheOps` (`kind = "sticker"`). Shares records with message/user
 /// refs when the same `file_id` appears elsewhere.
 #[allow(dead_code)]
@@ -405,7 +513,7 @@ pub fn project_messages_to_ops(
             continue;
         }
         let extra = project_message_to_ops(target_key, m)?;
-        merge_ops(&mut ops, extra);
+        merge_ops(&mut ops, extra)?;
     }
     Ok(ops)
 }
@@ -438,6 +546,348 @@ fn build_dialog_proto(peer_kind: &str, peer_id: i64, top_message: i64) -> Vec<u8
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fixed authored body with independent, explicitly linked representation state.
+    #[cfg(tinkle_async_actions)]
+    fn representation_body(semantic: i64, revision: u64, variant: i64) -> TinkleMessage {
+        let mut m = message(10, Some(1), None);
+        m.body_revision = Some(semantic);
+        m.message = format!("semantic {semantic}");
+        m.media = Some(tinkle_schema::proto::Media {
+            media: Some(tinkle_schema::proto::media::Media::Photo(
+                tinkle_schema::proto::Photo {
+                    file_id: 9,
+                    representation_revision: Some(revision),
+                    thumbnail: Some(tinkle_schema::proto::Thumbnail {
+                        file_id: variant,
+                        width: 1,
+                        height: 1,
+                    }),
+                    ..Default::default()
+                },
+            )),
+        });
+        m
+    }
+
+    /// Coalescing must surface inconsistent equal clocks rather than allowing a caller to commit progress.
+    #[cfg(tinkle_async_actions)]
+    #[test]
+    fn coalescing_conflicting_equal_representation_clocks_is_an_error() {
+        assert!(project_messages_to_ops(
+            "target:room:7",
+            &[representation_body(1, 2, 12), representation_body(1, 2, 13)],
+            &Default::default()
+        )
+        .is_err());
+    }
+
+    /// The real in-memory coalescing branch, not just storage, keeps a representation-only update.
+    #[cfg(tinkle_async_actions)]
+    #[test]
+    fn coalescing_representation_only_update_retains_revision_and_exact_membership() {
+        let ops = project_messages_to_ops(
+            "target:room:7",
+            &[representation_body(1, 1, 11), representation_body(1, 2, 12)],
+            &Default::default(),
+        )
+        .unwrap();
+        assert_eq!(ops.messages.len(), 1);
+        assert_eq!(
+            TinkleMessage::decode(ops.messages[0].proto.as_slice()).unwrap(),
+            representation_body(1, 2, 12)
+        );
+        assert_eq!(ops.message_body_revisions, vec![(10, 1)]);
+        assert!(ops.message_files.iter().any(|r| r.file_id == 12));
+        assert!(!ops.message_files.iter().any(|r| r.file_id == 11));
+    }
+
+    /// A full journal page of repeated main/thumbnail captures fits the existing file-row cap.
+    #[cfg(tinkle_async_actions)]
+    #[test]
+    fn coalescing_repeated_media_updates_fits_storage_batch_limit() {
+        let mut messages = Vec::new();
+        for revision in 1..=2 {
+            for id in 1..=250 {
+                let mut m = representation_body(1, revision, 1000 + id * 2 + revision as i64);
+                m.message_id = id;
+                if let Some(tinkle_schema::proto::media::Media::Photo(photo)) =
+                    m.media.as_mut().unwrap().media.as_mut()
+                {
+                    photo.file_id = id;
+                }
+                messages.push(m);
+            }
+        }
+        let ops = project_messages_to_ops("target:room:7", &messages, &Default::default()).unwrap();
+        assert_eq!(ops.messages.len(), 250);
+        assert_eq!(ops.files.len(), 500);
+        assert_eq!(ops.message_files.len(), 500);
+        let storage = tinkle_storage::Storage::open_in_memory().unwrap();
+        storage
+            .apply_journal_page_fenced("user:42", "target:room:7", &ops, 500, 0)
+            .unwrap();
+        for id in 1..=250 {
+            let files = storage
+                .list_message_files("user:42", "target:room:7", id)
+                .unwrap();
+            assert_eq!(files.len(), 2);
+            assert!(files.iter().any(|r| r.file_id == id));
+            assert!(files.iter().any(|r| r.file_id == 1000 + id * 2 + 2));
+        }
+    }
+
+    /// Even unchanged repeated bodies must not consume the file batch budget more than once.
+    #[test]
+    fn coalescing_repeated_identical_media_deduplicates_file_rows() {
+        let mut m = message(10, Some(1), None);
+        m.media = Some(tinkle_schema::proto::Media {
+            media: Some(tinkle_schema::proto::media::Media::Photo(
+                tinkle_schema::proto::Photo {
+                    file_id: 9,
+                    ..Default::default()
+                },
+            )),
+        });
+        let ops =
+            project_messages_to_ops("target:room:7", &vec![m; 500], &Default::default()).unwrap();
+        assert_eq!(ops.messages.len(), 1);
+        assert_eq!(ops.files.len(), 1);
+        assert_eq!(ops.message_files.len(), 1);
+        tinkle_storage::Storage::open_in_memory()
+            .unwrap()
+            .apply_journal_page_fenced("user:42", "target:room:7", &ops, 500, 0)
+            .unwrap();
+    }
+
+    /// Superseded main files cannot exhaust the batch budget after their messages coalesce.
+    #[test]
+    fn coalescing_replacement_mains_keeps_only_selected_file_rows() {
+        let mut messages = Vec::new();
+        for revision in 1..=3 {
+            for id in 1..=200 {
+                let mut m = message(id, Some(id), None);
+                m.body_revision = Some(revision);
+                m.media = Some(tinkle_schema::proto::Media {
+                    media: Some(tinkle_schema::proto::media::Media::Photo(
+                        tinkle_schema::proto::Photo {
+                            file_id: revision * 1000 + id,
+                            ..Default::default()
+                        },
+                    )),
+                });
+                messages.push(m);
+            }
+        }
+        let ops = project_messages_to_ops("target:room:7", &messages, &Default::default()).unwrap();
+        assert_eq!(ops.messages.len(), 200);
+        assert_eq!(ops.files.len(), 200);
+        assert!(ops.files.iter().all(|f| f.file_id > 3000));
+        tinkle_storage::Storage::open_in_memory()
+            .unwrap()
+            .apply_journal_page_fenced("user:42", "target:room:7", &ops, 600, 0)
+            .unwrap();
+    }
+
+    /// The generic storage merger contract can return a hybrid. Its projected clock must accompany
+    /// its row even when the default application merger conservatively declines this older body.
+    #[cfg(tinkle_async_actions)]
+    #[test]
+    fn storage_merger_persists_its_semantic_clock_before_later_invalidation() {
+        fn hybrid(
+            old: &[u8],
+            incoming: &tinkle_storage::MessageRow,
+        ) -> Result<Option<tinkle_storage::CacheOps>, tinkle_storage::StorageError> {
+            let mut merged = TinkleMessage::decode(old).unwrap();
+            let incoming = TinkleMessage::decode(incoming.proto.as_slice()).unwrap();
+            merged.media = incoming.media;
+            Ok(Some(
+                project_message_to_ops("target:room:7", &merged).unwrap(),
+            ))
+        }
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("cache.sqlite");
+        let storage = tinkle_storage::Storage::open(path.to_str().unwrap()).unwrap();
+        storage
+            .apply_journal_page_fenced(
+                "user:42",
+                "target:room:7",
+                &project_message_to_ops("target:room:7", &representation_body(10, 2, 12)).unwrap(),
+                0,
+                0,
+            )
+            .unwrap();
+        let mut incoming =
+            project_message_to_ops("target:room:7", &representation_body(9, 3, 13)).unwrap();
+        incoming.message_merger = Some(hybrid);
+        storage
+            .apply_journal_page_fenced("user:42", "target:room:7", &incoming, 1, 0)
+            .unwrap();
+        let retained = TinkleMessage::decode(
+            storage
+                .get_messages("user:42", "target:room:7", 10, None)
+                .unwrap()[0]
+                .proto
+                .as_slice(),
+        )
+        .unwrap();
+        assert_eq!(retained.body_revision, Some(10));
+        let sql = rusqlite::Connection::open(&path).unwrap();
+        let clock:i64=sql.query_row("SELECT body_revision FROM messages WHERE principal='user:42' AND conversation_key='target:room:7' AND message_id=10",[],|r|r.get(0)).unwrap();
+        assert_eq!(
+            clock, 10,
+            "SQL metadata must describe the merged protobuf, not the incoming batch"
+        );
+        storage
+            .apply_journal_page_fenced(
+                "user:42",
+                "target:room:7",
+                &tinkle_storage::CacheOps {
+                    body_invalidations: vec![("target:room:7".into(), 10, 9)],
+                    ..Default::default()
+                },
+                2,
+                0,
+            )
+            .unwrap();
+        assert_eq!(
+            storage
+                .get_messages("user:42", "target:room:7", 10, None)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(storage
+            .list_message_files("user:42", "target:room:7", 10)
+            .unwrap()
+            .iter()
+            .any(|r| r.file_id == 13));
+    }
+
+    /// Representation-only writes and semantic edits merge atomically with exact file memberships.
+    #[cfg(tinkle_async_actions)]
+    #[test]
+    fn independent_representations_keep_newer_semantics_and_fence_replacement_mains() {
+        let storage = tinkle_storage::Storage::open_in_memory().unwrap();
+        let body = |semantic, representation, main, variant: Option<i64>, text: &str| {
+            let mut m = message(10, Some(1), None);
+            m.body_revision = Some(semantic);
+            m.message = text.into();
+            m.media = Some(tinkle_schema::proto::Media {
+                media: Some(tinkle_schema::proto::media::Media::Photo(
+                    tinkle_schema::proto::Photo {
+                        file_id: main,
+                        representation_revision: Some(representation),
+                        thumbnail: variant.map(|file_id| tinkle_schema::proto::Thumbnail {
+                            file_id,
+                            width: 1,
+                            height: 1,
+                        }),
+                        ..Default::default()
+                    },
+                )),
+            });
+            m
+        };
+        let put = |m: &TinkleMessage| {
+            storage
+                .apply_journal_page_fenced(
+                    "user:42",
+                    "target:room:7",
+                    &project_message_to_ops("target:room:7", m).unwrap(),
+                    0,
+                    0,
+                )
+                .unwrap()
+        };
+        put(&body(1, 1, 9, None, "old"));
+        put(&body(1, 2, 9, Some(12), "old"));
+        put(&body(2, 1, 9, None, "new caption"));
+        put(&body(1, 3, 9, Some(13), "old"));
+        let read = || {
+            TinkleMessage::decode(
+                storage
+                    .get_messages("user:42", "target:room:7", 10, None)
+                    .unwrap()[0]
+                    .proto
+                    .as_slice(),
+            )
+            .unwrap()
+        };
+        let merged = read();
+        assert_eq!(merged.message, "new caption");
+        assert_eq!(merged.body_revision, Some(2));
+        let files = storage
+            .list_message_files("user:42", "target:room:7", 10)
+            .unwrap();
+        assert!(files.iter().any(|r| r.file_id == 13));
+        assert!(!files.iter().any(|r| r.file_id == 12));
+        put(&body(3, 1, 20, Some(21), "replacement"));
+        let files = storage
+            .list_message_files("user:42", "target:room:7", 10)
+            .unwrap();
+        assert!(files.iter().all(|r| r.file_id == 20 || r.file_id == 21));
+        put(&body(2, 4, 9, Some(14), "new caption"));
+        assert_eq!(read().message, "replacement");
+        let files = storage
+            .list_message_files("user:42", "target:room:7", 10)
+            .unwrap();
+        assert!(files.iter().all(|r| r.file_id == 20 || r.file_id == 21));
+    }
+
+    /// Avatar output advancement is exact-owner/main only, never an unversioned entity overwrite.
+    #[cfg(tinkle_async_actions)]
+    #[test]
+    fn avatar_representation_updates_do_not_replace_semantics_or_source_identity() {
+        use tinkle_schema::proto as p;
+        let storage = tinkle_storage::Storage::open_in_memory().unwrap();
+        let user = |revision, variant: Option<i64>, name: &str, photo_id, file_id| p::User {
+            user_type: Some(p::user::UserType::Data(p::user::UserData {
+                id: 42,
+                name: Some(name.into()),
+                photo: Some(p::UserPhoto {
+                    photo_id,
+                    file_id,
+                    representation_revision: Some(revision),
+                    thumbnail: variant.map(|file_id| p::Thumbnail {
+                        file_id,
+                        width: 1,
+                        height: 1,
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+        };
+        let put = |user: p::User| {
+            storage
+                .hydrate_entity_snapshot("user:1", &project_entities_to_ops(&[user], &[]))
+                .unwrap()
+        };
+        put(user(1, None, "original", 7, 9));
+        put(user(2, Some(12), "original", 7, 9));
+        put(user(3, Some(13), "different semantic snapshot", 7, 9));
+        put(user(4, Some(21), "original", 8, 20));
+        let retained = p::User::decode(
+            storage
+                .get_user("user:1", 42)
+                .unwrap()
+                .unwrap()
+                .proto
+                .as_slice(),
+        )
+        .unwrap();
+        let Some(p::user::UserType::Data(data)) = retained.user_type else {
+            panic!("user data")
+        };
+        assert_eq!(data.name, Some("original".into()));
+        let photo = data.photo.unwrap();
+        assert_eq!(photo.file_id, 9);
+        assert_eq!(photo.representation_revision, Some(2));
+        assert_eq!(photo.thumbnail.unwrap().file_id, 12);
+        assert_eq!(storage.file_refcount("user:1", "", 13).unwrap(), 0);
+        assert_eq!(storage.file_refcount("user:1", "", 21).unwrap(), 0);
+    }
     use tinkle_schema::proto::{target::Kind, Target, TargetChange};
 
     fn target_room7() -> Target {
@@ -488,7 +938,7 @@ mod tests {
         assert!(ops.messages.is_empty());
         assert!(ops.message_files.is_empty());
         let mut merged = tinkle_storage::CacheOps::default();
-        merge_ops(&mut merged, ops);
+        merge_ops(&mut merged, ops).unwrap();
         assert_eq!(merged.body_invalidations.len(), 1);
     }
 
@@ -566,6 +1016,8 @@ mod tests {
             body.pinned = revision == 5;
             let change = TargetChange {
                 message_id: 10,
+                #[cfg(tinkle_async_actions)]
+                representation_revision: None,
                 kind: TargetChangeKind::Pin as i32,
                 message: Some(body),
                 message_revision: Some(2),
@@ -575,7 +1027,8 @@ mod tests {
             merge_ops(
                 &mut base,
                 project_change_to_ops("target:room:7", &change).unwrap(),
-            );
+            )
+            .unwrap();
         }
         assert_eq!(base.messages.len(), 1);
         assert_eq!(base.message_body_revisions, vec![(10, 5)]);
@@ -601,7 +1054,7 @@ mod tests {
         for id in [10, 11, 12] {
             let extra =
                 project_message_to_ops("target:room:7", &message(id, Some(id), None)).unwrap();
-            merge_ops(&mut ops, extra);
+            merge_ops(&mut ops, extra).unwrap();
         }
         assert_eq!(ops.messages.len(), 3);
         // Same conversation peer: 3 touches coalesce to 1 row, keeping the

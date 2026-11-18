@@ -117,6 +117,24 @@ pub struct FfiDialogsRequest {
 /// `target_cursor`/`target_status` instead of inferring it from events.
 #[derive(Debug, Clone, uniffi::Enum)]
 pub enum FfiSyncEvent {
+    /// Source-fenced send status hint; query before resolving pending UI.
+    #[cfg(tinkle_async_actions)]
+    SendStatusChanged { payload: Vec<u8> },
+    /// Exact owner-scoped photo hint, never a receipt.
+    #[cfg(tinkle_async_actions)]
+    ChatPhotoUpdateChanged { payload: Vec<u8> },
+    #[cfg(tinkle_async_actions)]
+    ChannelPhotoUpdateChanged { payload: Vec<u8> },
+    #[cfg(tinkle_async_actions)]
+    ProfilePhotoUpdateChanged { payload: Vec<u8> },
+    #[cfg(tinkle_async_actions)]
+    AssetChangeChanged { payload: Vec<u8> },
+    #[cfg(tinkle_async_actions)]
+    ProfilePhotoRepresentationChanged { payload: Vec<u8> },
+    #[cfg(tinkle_async_actions)]
+    ChatPhotoRepresentationChanged { payload: Vec<u8> },
+    #[cfg(tinkle_async_actions)]
+    StickerAssetRepresentationChanged { payload: Vec<u8> },
     /// One conversation reconciled forward: `applied_accept_seq` is the new
     /// per-target accept position. Refresh the conversation from the cache
     /// (or hydrate via `get_messages`).
@@ -154,6 +172,44 @@ pub enum FfiSyncEvent {
 impl From<libtinkle::SyncEvent> for FfiSyncEvent {
     fn from(e: libtinkle::SyncEvent) -> Self {
         match e {
+            #[cfg(tinkle_async_actions)]
+            libtinkle::SyncEvent::SendStatusChanged(v) => Self::SendStatusChanged {
+                payload: v.notification.encode_to_vec(),
+            },
+            #[cfg(tinkle_async_actions)]
+            libtinkle::SyncEvent::ChatPhotoUpdateChanged(v) => Self::ChatPhotoUpdateChanged {
+                payload: v.notification.encode_to_vec(),
+            },
+            #[cfg(tinkle_async_actions)]
+            libtinkle::SyncEvent::ChannelPhotoUpdateChanged(v) => Self::ChannelPhotoUpdateChanged {
+                payload: v.notification.encode_to_vec(),
+            },
+            #[cfg(tinkle_async_actions)]
+            libtinkle::SyncEvent::ProfilePhotoUpdateChanged(v) => Self::ProfilePhotoUpdateChanged {
+                payload: v.notification.encode_to_vec(),
+            },
+            #[cfg(tinkle_async_actions)]
+            libtinkle::SyncEvent::AssetChangeChanged(v) => Self::AssetChangeChanged {
+                payload: v.notification.encode_to_vec(),
+            },
+            #[cfg(tinkle_async_actions)]
+            libtinkle::SyncEvent::ProfilePhotoRepresentationChanged(v) => {
+                Self::ProfilePhotoRepresentationChanged {
+                    payload: v.notification.encode_to_vec(),
+                }
+            }
+            #[cfg(tinkle_async_actions)]
+            libtinkle::SyncEvent::ChatPhotoRepresentationChanged(v) => {
+                Self::ChatPhotoRepresentationChanged {
+                    payload: v.notification.encode_to_vec(),
+                }
+            }
+            #[cfg(tinkle_async_actions)]
+            libtinkle::SyncEvent::StickerAssetRepresentationChanged(v) => {
+                Self::StickerAssetRepresentationChanged {
+                    payload: v.notification.encode_to_vec(),
+                }
+            }
             libtinkle::SyncEvent::ReactionEffect(effect) => Self::ReactionEffect {
                 payload: effect.notification.encode_to_vec(),
             },
@@ -714,6 +770,8 @@ impl TinkleClient {
             }
         }
         let params = libtinkle::UploadParams {
+            #[cfg(tinkle_async_actions)]
+            processing_intent: None,
             idempotency_key,
             file_name,
             mime_type,

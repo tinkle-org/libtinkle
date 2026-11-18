@@ -89,7 +89,12 @@ fn enrollment_fields_and_capability_activation_are_exact() {
         ),
         (
             "SignInResponse",
-            vec![("user", 1), ("is_new_user", 3), ("enrollment", 4)],
+            // Numbering follows the wire identity, independently of action capability.
+            if cfg!(tinkle_schema_candidate) {
+                vec![("user", 1), ("is_new_user", 2), ("enrollment", 3)]
+            } else {
+                vec![("user", 1), ("is_new_user", 3), ("enrollment", 4)]
+            },
         ),
         (
             "ActivateEnrollmentRequest",

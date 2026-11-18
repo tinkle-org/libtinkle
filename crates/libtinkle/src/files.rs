@@ -214,7 +214,7 @@ fn valid_file_id(id: i64) -> bool {
 }
 
 /// All `(file_id, role)` pairs referenced by one message body:
-/// `Photo.file_id` + `Photo.variants`, `Document.file_id` + variants.
+/// Main and current thumbnail identities; the published compatibility lane retains its old shape.
 pub fn extract_message_files(msg: &Message) -> Vec<(i64, String)> {
     let mut out = Vec::new();
     let media = match msg.media.as_ref().and_then(|m| m.media.as_ref()) {
@@ -226,20 +226,30 @@ pub fn extract_message_files(msg: &Message) -> Vec<(i64, String)> {
             if valid_file_id(p.file_id) {
                 out.push((p.file_id, ROLE_PHOTO.to_string()));
             }
+            #[cfg(not(tinkle_async_actions))]
             for v in &p.variants {
                 if valid_file_id(v.file_id) {
                     out.push((v.file_id, ROLE_PHOTO_VARIANT.to_string()));
                 }
+            }
+            #[cfg(tinkle_async_actions)]
+            if let Some(id) = thumbnail_file(p.file_id, p.thumbnail.as_ref()) {
+                out.push((id, ROLE_PHOTO_VARIANT.to_string()));
             }
         }
         tinkle_schema::proto::media::Media::Document(d) => {
             if valid_file_id(d.file_id) {
                 out.push((d.file_id, ROLE_DOCUMENT.to_string()));
             }
+            #[cfg(not(tinkle_async_actions))]
             for v in &d.variants {
                 if valid_file_id(v.file_id) {
                     out.push((v.file_id, ROLE_DOCUMENT_VARIANT.to_string()));
                 }
+            }
+            #[cfg(tinkle_async_actions)]
+            if let Some(id) = thumbnail_file(d.file_id, d.thumbnail.as_ref()) {
+                out.push((id, ROLE_DOCUMENT_VARIANT.to_string()));
             }
         }
         _ => {}
@@ -248,7 +258,7 @@ pub fn extract_message_files(msg: &Message) -> Vec<(i64, String)> {
 }
 
 /// All `(file_id, role)` pairs referenced by one user: `UserPhoto.file_id`
-/// + variants. Empty users carry no photo.
+/// and its current thumbnail. Empty users carry no photo.
 pub fn extract_user_files(user: &User) -> Vec<(i64, String)> {
     let mut out = Vec::new();
     let data = match user.user_type.as_ref() {
@@ -259,10 +269,15 @@ pub fn extract_user_files(user: &User) -> Vec<(i64, String)> {
         if valid_file_id(photo.file_id) {
             out.push((photo.file_id, ROLE_AVATAR.to_string()));
         }
+        #[cfg(not(tinkle_async_actions))]
         for v in &photo.variants {
             if valid_file_id(v.file_id) {
                 out.push((v.file_id, ROLE_AVATAR_VARIANT.to_string()));
             }
+        }
+        #[cfg(tinkle_async_actions)]
+        if let Some(id) = thumbnail_file(photo.file_id, photo.thumbnail.as_ref()) {
+            out.push((id, ROLE_AVATAR_VARIANT.to_string()));
         }
     }
     out
@@ -277,17 +292,31 @@ pub fn user_entity_id(user: &User) -> i64 {
     }
 }
 
-/// All `(file_id, role)` pairs for one sticker view: `file_id` +
-/// `thumb_file_id`.
+/// All main/thumbnail identities from one exact sticker asset projection.
 pub fn extract_sticker_files(sticker: &StickerView) -> Vec<(i64, String)> {
     let mut out = Vec::new();
     if valid_file_id(sticker.file_id) {
         out.push((sticker.file_id, ROLE_STICKER.to_string()));
     }
+    #[cfg(not(tinkle_async_actions))]
     if valid_file_id(sticker.thumb_file_id) && sticker.thumb_file_id != sticker.file_id {
         out.push((sticker.thumb_file_id, ROLE_STICKER_THUMB.to_string()));
     }
+    #[cfg(tinkle_async_actions)]
+    if let Some(id) = thumbnail_file(sticker.file_id, sticker.thumbnail.as_ref()) {
+        out.push((id, ROLE_STICKER_THUMB.to_string()));
+    }
     out
+}
+
+/// Malformed display metadata never creates membership for another file.
+#[cfg(tinkle_async_actions)]
+fn thumbnail_file(main: i64, thumbnail: Option<&tinkle_schema::proto::Thumbnail>) -> Option<i64> {
+    thumbnail
+        .filter(|t| {
+            main > 0 && tinkle_schema::representations::validate_thumbnail(main, Some(t)).is_ok()
+        })
+        .map(|t| t.file_id)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -335,16 +364,15 @@ pub fn project_message_files_to_ops(
     ops
 }
 
-/// Project entity file refs (user avatars) into `CacheOps`. Chat photos
-/// carry no `file_id` (`ChatPhoto` is `{photo_id, has_video}`), so chats
-/// contribute no refs today; the hook is kept so future photo-carrying
-/// chat shapes reuse the same shared-record path.
+/// Project user avatars and candidate chat-photo main/thumbnail refs into `CacheOps`.
+/// The published compatibility lane retains its existing user-only behavior.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn project_entity_files_to_ops(
     users: &[User],
     chats: &[tinkle_schema::proto::Chat],
 ) -> tinkle_storage::CacheOps {
     let mut ops = tinkle_storage::CacheOps::default();
+    #[cfg(not(tinkle_async_actions))]
     let _ = chats;
     let mut seen_files: HashSet<i64> = HashSet::new();
     let mut seen_entities: HashSet<i64> = HashSet::new();
@@ -374,11 +402,31 @@ pub fn project_entity_files_to_ops(
             });
         }
     }
+    #[cfg(tinkle_async_actions)]
+    for chat in chats.iter().filter(|c| c.chat_id > 0) {
+        ops.replace_entity_files.push(("chat".into(), chat.chat_id));
+        if let Some(photo) = &chat.photo {
+            let files = std::iter::once(photo.file_id)
+                .filter(|id| *id > 0)
+                .chain(thumbnail_file(photo.file_id, photo.thumbnail.as_ref()));
+            for fid in files {
+                if seen_files.insert(fid) {
+                    ops.files.push(file_row_for(fid, ""));
+                }
+                ops.entity_files.push(tinkle_storage::EntityFileRef {
+                    kind: "chat".into(),
+                    entity_id: chat.chat_id,
+                    file_scope: SHARED_FILE_SCOPE.into(),
+                    file_id: fid,
+                    role: ROLE_AVATAR.into(),
+                });
+            }
+        }
+    }
     ops
 }
 
-/// Project sticker-pack file refs (stickers carry `file_id` +
-/// `thumb_file_id`) into `CacheOps` with `kind = "sticker"`.
+/// Project sticker main/thumbnail refs into `CacheOps` with `kind = "sticker"`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn project_sticker_files_to_ops(stickers: &[StickerView]) -> tinkle_storage::CacheOps {
     let mut ops = tinkle_storage::CacheOps::default();
@@ -986,6 +1034,30 @@ impl TransferScope {
         *intent = checkpoint;
         Ok(())
     }
+
+    /// Retain immutable negotiated boundaries before emitting any part, including after restart.
+    async fn bind_upload_geometry(
+        self: &Arc<Self>,
+        intent: tinkle_storage::transfer_intent::TransferIntentCheckpoint,
+        upload_id: String,
+        part_size: i64,
+    ) -> Result<(), TinkleError> {
+        self.check()?;
+        let storage = self
+            .client
+            .sqlite_storage()
+            .ok_or_else(|| transfer_error("managed upload requires SQLite intent storage"))?;
+        let scope = self.clone();
+        disk(move || {
+            scope.commit(|| {
+                storage
+                    .bind_upload_part_size(&scope.principal, &intent, &upload_id, part_size)
+                    .map_err(|_| transfer_error("negotiated upload boundaries changed"))
+            })
+        })
+        .await?;
+        self.check()
+    }
 }
 
 /// Compact server-authoritative interval snapshot; no allocation per acknowledged part.
@@ -1080,9 +1152,21 @@ pub struct UploadParams {
     pub file_name: Option<String>,
     pub mime_type: Option<String>,
     pub sha256: Option<Vec<u8>>,
+    /// Explicit immutable main processing request; absent for legacy uploads and regular thumbnails.
+    #[cfg(tinkle_async_actions)]
+    pub processing_intent: Option<tinkle_schema::proto::MediaProcessingIntent>,
 }
 
 impl UploadParams {
+    /// Explicit unknown/unspecified processing never silently becomes an omitted intent.
+    fn validate_processing(&self) -> Result<(), TinkleError> {
+        #[cfg(tinkle_async_actions)]
+        if self.processing_intent == Some(tinkle_schema::proto::MediaProcessingIntent::Unspecified)
+        {
+            return Err(transfer_error("invalid processing intent"));
+        }
+        Ok(())
+    }
     pub fn new(idempotency_key: String, data_len: usize) -> Self {
         let _ = data_len;
         Self {
@@ -1090,6 +1174,8 @@ impl UploadParams {
             file_name: None,
             mime_type: None,
             sha256: None,
+            #[cfg(tinkle_async_actions)]
+            processing_intent: None,
         }
     }
 }
@@ -1117,6 +1203,12 @@ pub fn decide_begin_status(resp: &BeginUploadResponse) -> Result<BeginDecision, 
             if part_size <= 0 {
                 return Err(TinkleError::Codec(
                     "BeginUpload ACTIVE part_size_bytes must be positive".to_string(),
+                ));
+            }
+            #[cfg(tinkle_async_actions)]
+            if !matches!(part_size, 65536 | 131072 | 262144 | 524288) {
+                return Err(TinkleError::Codec(
+                    "unsupported negotiated upload part size".into(),
                 ));
             }
             if resp.upload_id.is_empty() {
@@ -1421,7 +1513,10 @@ impl UploadManager {
         .await?;
         scope.check()?;
         let size = i64::try_from(source.size).map_err(|_| transfer_error("source too large"))?;
+        params.validate_processing()?;
         let begin = BeginUploadRequest {
+            #[cfg(tinkle_async_actions)]
+            processing_intent: params.processing_intent.map(|v| v as i32),
             idempotency_key: params.idempotency_key.clone(),
             size_bytes: size,
             file_name: params.file_name,
@@ -1499,6 +1594,9 @@ impl UploadManager {
             .ok_or_else(|| transfer_error("ACTIVE upload lacks positive parallel limit"))?
             .min(MAX_TRANSFER_PARTS as i32) as usize;
         let count = part_count(size, part_size)?;
+        scope
+            .bind_upload_geometry(intent.clone(), upload_id.clone(), part_size)
+            .await?;
         job.upload_id = upload_id.clone();
         job.state = "active".into();
         scope.save_upload_job(job.clone(), &mut intent).await?;
@@ -1686,7 +1784,10 @@ impl UploadManager {
         let size = data.len() as i64;
         // EXACT original request (presence preserved): rebuilt byte-identical
         // on every idempotency retry below.
+        params.validate_processing()?;
         let begin_req = BeginUploadRequest {
+            #[cfg(tinkle_async_actions)]
+            processing_intent: params.processing_intent.map(|v| v as i32),
             idempotency_key: params.idempotency_key.clone(),
             size_bytes: size,
             file_name: params.file_name.clone(),
@@ -3267,7 +3368,7 @@ mod tests {
         // ACTIVE with config → Active (config present required).
         let active = BeginUploadResponse {
             upload_id: "u1".into(),
-            part_size_bytes: Some(1024),
+            part_size_bytes: Some(65536),
             max_parallel_parts: Some(4),
             expires_at: None,
             status: UploadStatus::Active as i32,
@@ -3318,6 +3419,33 @@ mod tests {
                 decide_begin_status(&r).unwrap(),
                 BeginDecision::NeedFreshKey
             ));
+        }
+    }
+
+    /// The largest supported file fits 4096 512-KiB parts; illegal candidate sizes fail closed.
+    #[cfg(tinkle_async_actions)]
+    #[test]
+    fn candidate_part_geometry_preserves_large_file_policy() {
+        assert_eq!(part_count(2 * 1024 * 1024 * 1024, 524288).unwrap(), 4096);
+        for size in [0, 1, 65535, 65537, 1048576] {
+            assert!(decide_begin_status(&BeginUploadResponse {
+                upload_id: "u".into(),
+                status: 1,
+                part_size_bytes: Some(size),
+                max_parallel_parts: Some(1),
+                ..Default::default()
+            })
+            .is_err());
+        }
+        for size in [65536, 131072, 262144, 524288] {
+            assert!(decide_begin_status(&BeginUploadResponse {
+                upload_id: "u".into(),
+                status: 1,
+                part_size_bytes: Some(size),
+                max_parallel_parts: Some(1),
+                ..Default::default()
+            })
+            .is_ok());
         }
     }
 
@@ -3448,13 +3576,20 @@ mod tests {
             message: format!("m{id}"),
             media: Some(Media {
                 media: Some(media::Media::Photo(Photo {
+                    #[cfg(tinkle_async_actions)]
+                    inline_preview: None,
+                    #[cfg(tinkle_async_actions)]
+                    representation_revision: None,
                     id: 1,
                     access_hash: 0,
                     width: 1,
                     height: 1,
                     file_id: 50,
                     metadata: None,
+                    #[cfg(not(tinkle_async_actions))]
                     variants: vec![],
+                    #[cfg(tinkle_async_actions)]
+                    thumbnail: None,
                 })),
             }),
             entities: vec![],
@@ -3485,7 +3620,10 @@ mod tests {
                     username: None,
                     photo: Some(tinkle_schema::proto::UserPhoto {
                         file_id: 50,
+                        #[cfg(not(tinkle_async_actions))]
                         variants: vec![],
+                        #[cfg(tinkle_async_actions)]
+                        thumbnail: None,
                         ..Default::default()
                     }),
                     name: None,

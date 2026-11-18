@@ -43,7 +43,8 @@ fn fixture() -> (Client, Arc<Storage>) {
         crate::cache_projector::merge_ops(
             &mut ops,
             crate::cache_projector::project_message_to_ops("target:room:7", &message).unwrap(),
-        );
+        )
+        .unwrap();
     }
     storage
         .apply_journal_page_fenced("user:42", "target:room:7", &ops, 0, 0)

@@ -32,6 +32,9 @@ pub const PREPARATION_PROFILE: &str = "tinkle-media-v3-image02510-flac051-webpmu
 pub const MAX_MEDIA_BYTES: usize = 32 * 1024 * 1024;
 /// Bounded decoded pixel count (RGBA16 worst-case 128 MiB per decode).
 pub const MAX_IMAGE_PIXELS: u64 = 16 * 1024 * 1024;
+/// Inline display preview limits, independent of main-media normalization and upload budgets.
+pub const TINY_PREVIEW_AXIS: u32 = 40;
+pub const TINY_PREVIEW_BYTES: usize = 4096;
 
 /// Synchronous callers share the same codec admission as native path workers.
 static CODEC_ADMISSION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -466,6 +469,264 @@ fn encode_png(image: &DynamicImage) -> Result<Vec<u8>, MediaError> {
     )
     .map_err(encode_limit_error)?;
     Ok(output.0)
+}
+
+/// Display-only JPEG: fit without upscaling and composite alpha on white, never alter main pixels.
+pub(crate) fn tiny_jpeg_preview(image: &DynamicImage) -> Result<Vec<u8>, MediaError> {
+    if image.width() == 0 || image.height() == 0 {
+        return Err(MediaError::Invalid);
+    }
+    let small = image
+        .thumbnail(
+            TINY_PREVIEW_AXIS.min(image.width()),
+            TINY_PREVIEW_AXIS.min(image.height()),
+        )
+        .to_rgba8();
+    let rgb = image::RgbImage::from_fn(small.width(), small.height(), |x, y| {
+        let p = small.get_pixel(x, y).0;
+        let alpha = u32::from(p[3]);
+        image::Rgb(
+            [0, 1, 2].map(|i| ((u32::from(p[i]) * alpha + 255 * (255 - alpha) + 127) / 255) as u8),
+        )
+    });
+    /// Enforce the tiny budget while encoding, not after growing an unbounded output buffer.
+    struct Output(Vec<u8>);
+    impl std::io::Write for Output {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > TINY_PREVIEW_BYTES.saturating_sub(self.0.len()) {
+                return Err(std::io::Error::other("preview exceeds budget"));
+            }
+            self.0.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    for quality in [80, 60, 40] {
+        let mut output = Output(Vec::new());
+        match image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, quality)
+            .write_image(
+                rgb.as_raw(),
+                rgb.width(),
+                rgb.height(),
+                image::ExtendedColorType::Rgb8,
+            )
+            .map_err(encode_limit_error)
+        {
+            Ok(()) => return Ok(output.0),
+            Err(MediaError::Budget) => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(MediaError::Budget)
+}
+
+/// Decode a normalized image's first composited frame, not the unnormalized imported source.
+fn normalized_display_image(bytes: &[u8], animated: bool) -> Result<DynamicImage, MediaError> {
+    let format = image::guess_format(bytes).map_err(|_| MediaError::Invalid)?;
+    if animated {
+        let frame = animation_frames(bytes, format)?
+            .next()
+            .ok_or(MediaError::Invalid)?
+            .map_err(|_| MediaError::Invalid)?;
+        return Ok(DynamicImage::ImageRgba8(frame.into_buffer()));
+    }
+    reader(bytes, format)
+        .decode()
+        .map_err(|_| MediaError::Invalid)
+}
+
+/// Fit static PNG inputs within public message-thumbnail bounds without changing main quality.
+pub(crate) fn regular_thumbnail(
+    image: &DynamicImage,
+    main_width: u32,
+    main_height: u32,
+) -> Result<Option<Vec<u8>>, MediaError> {
+    let pixels = u64::from(main_width) * u64::from(main_height);
+    if pixels <= 1 {
+        return Ok(None);
+    }
+    let mut edge = 320.min(image.width().max(image.height()));
+    for _ in 0..32 {
+        let thumb = image.thumbnail(edge.min(image.width()), edge.min(image.height()));
+        if u64::from(thumb.width()) * u64::from(thumb.height()) < pixels {
+            let bytes = encode_png(&thumb)?;
+            if bytes.len() <= 256 * 1024 {
+                return Ok(Some(bytes));
+            }
+        }
+        if edge == 1 {
+            return Err(MediaError::Budget);
+        }
+        edge = (edge * 3 / 4).max(1);
+    }
+    Err(MediaError::Budget)
+}
+
+/// Check stored/adopted inline bytes before exposing them as a tiny JPEG or decoding their raster.
+pub(crate) fn validate_tiny_preview(bytes: &[u8]) -> Result<(u32, u32), MediaError> {
+    if bytes.is_empty() || bytes.len() > TINY_PREVIEW_BYTES {
+        return Err(MediaError::Budget);
+    }
+    if image::guess_format(bytes).map_err(|_| MediaError::Invalid)? != ImageFormat::Jpeg {
+        return Err(MediaError::Invalid);
+    }
+    complete_jpeg(bytes)?;
+    let decoder = reader(bytes, ImageFormat::Jpeg)
+        .into_decoder()
+        .map_err(|_| MediaError::Invalid)?;
+    let (width, height) = decoder.dimensions();
+    if width == 0 || height == 0 || width > TINY_PREVIEW_AXIS || height > TINY_PREVIEW_AXIS {
+        return Err(MediaError::Budget);
+    }
+    DynamicImage::from_decoder(decoder).map_err(|_| MediaError::Invalid)?;
+    Ok((width, height))
+}
+
+/// Locate the one JPEG end marker through checked segments/entropy escaping; reject trailing bytes.
+fn complete_jpeg(bytes: &[u8]) -> Result<(), MediaError> {
+    if !bytes.starts_with(&[255, 216]) {
+        return Err(MediaError::Invalid);
+    }
+    let mut offset = 2usize;
+    let mut entropy = false;
+    let mut scan = false;
+    while offset < bytes.len() {
+        if entropy && bytes[offset] != 255 {
+            offset += 1;
+            continue;
+        }
+        if bytes[offset] != 255 {
+            return Err(MediaError::Invalid);
+        }
+        offset += 1;
+        while bytes.get(offset) == Some(&255) {
+            offset += 1;
+        }
+        let marker = *bytes.get(offset).ok_or(MediaError::Invalid)?;
+        offset += 1;
+        if entropy && (marker == 0 || (0xd0..=0xd7).contains(&marker)) {
+            continue;
+        }
+        if marker == 0xd9 {
+            return if scan && offset == bytes.len() {
+                Ok(())
+            } else {
+                Err(MediaError::Invalid)
+            };
+        }
+        if matches!(marker, 0 | 0xd8 | 0xd0..=0xd7) {
+            return Err(MediaError::Invalid);
+        }
+        let length = bytes.get(offset..offset + 2).ok_or(MediaError::Invalid)?;
+        let length = usize::from(u16::from_be_bytes([length[0], length[1]]));
+        if length < 2 {
+            return Err(MediaError::Invalid);
+        }
+        offset = offset
+            .checked_add(length)
+            .filter(|n| *n <= bytes.len())
+            .ok_or(MediaError::Invalid)?;
+        entropy = marker == 0xda;
+        scan |= entropy;
+    }
+    Err(MediaError::Invalid)
+}
+
+/// Validate bounded, tightly packed display-oriented host pixels before any raster construction.
+fn validated_video_frame(
+    frame: DecodedVideoFrame,
+    width: u32,
+    height: u32,
+) -> Result<DynamicImage, MediaError> {
+    validate_video_frame(&frame, width, height)?;
+    Ok(DynamicImage::ImageRgba8(
+        image::RgbaImage::from_raw(frame.width, frame.height, frame.rgba)
+            .ok_or(MediaError::Invalid)?,
+    ))
+}
+
+/// Check dimensions, exact row storage, no upscaling and at most one-pixel aspect rounding.
+fn validate_video_frame(
+    frame: &DecodedVideoFrame,
+    width: u32,
+    height: u32,
+) -> Result<(), MediaError> {
+    if frame.width == 0
+        || frame.height == 0
+        || frame.width > 320.min(width)
+        || frame.height > 320.min(height)
+        || frame.rgba.len() as u64 != u64::from(frame.width) * u64::from(frame.height) * 4
+        || (u64::from(frame.width) * u64::from(height))
+            .abs_diff(u64::from(frame.height) * u64::from(width))
+            > u64::from(width.max(height))
+    {
+        return Err(MediaError::Invalid);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+
+    /// Optional host pixels never bypass bounded layout, source dimensions or aspect fitting.
+    #[test]
+    fn host_frame_limits_reject_malformed_cropped_and_upscaled_frames() {
+        for (width, height, len) in [
+            (0, 1, 0),
+            (321, 160, 321 * 160 * 4),
+            (32, 32, 32 * 32 * 4),
+            (65, 32, 65 * 32 * 4),
+            (32, 16, 3),
+        ] {
+            assert_eq!(
+                validate_video_frame(
+                    &DecodedVideoFrame {
+                        width,
+                        height,
+                        rgba: vec![0; len]
+                    },
+                    64,
+                    32
+                ),
+                Err(MediaError::Invalid)
+            );
+        }
+        assert!(validate_video_frame(
+            &DecodedVideoFrame {
+                width: 32,
+                height: 16,
+                rgba: vec![0; 32 * 16 * 4]
+            },
+            64,
+            32
+        )
+        .is_ok());
+    }
+
+    /// Valid JPEG encoding alone is insufficient for retained tiny-preview shape and byte budgets.
+    #[test]
+    fn tiny_preview_validation_rejects_wrong_format_dimensions_and_length() {
+        let image = DynamicImage::new_rgb8(41, 1);
+        let mut bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut bytes)
+            .encode_image(&image)
+            .unwrap();
+        assert_eq!(validate_tiny_preview(&bytes), Err(MediaError::Budget));
+        assert_eq!(
+            validate_tiny_preview(&vec![0; TINY_PREVIEW_BYTES + 1]),
+            Err(MediaError::Budget)
+        );
+        assert_eq!(
+            validate_tiny_preview(&encode_png(&DynamicImage::new_rgb8(1, 1)).unwrap()),
+            Err(MediaError::Invalid)
+        );
+        let mut valid = tiny_jpeg_preview(&DynamicImage::new_rgb8(1, 1)).unwrap();
+        valid.push(0);
+        assert_eq!(validate_tiny_preview(&valid), Err(MediaError::Invalid));
+    }
 }
 
 /// Enforce encoded output budgets during writes, not after a potentially huge Vec grows.
@@ -1226,7 +1487,7 @@ impl Default for VideoDecodeLimits {
 /// Optional decoded, display-oriented sRGB RGBA8 thumbnail (not a full-size
 /// frame). Hosts must return Unsupported/None rather than silently losing HDR,
 /// alpha or color management they cannot handle. Row layout is tightly packed.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DecodedVideoFrame {
     pub width: u32,
     pub height: u32,

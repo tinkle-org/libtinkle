@@ -18,6 +18,141 @@ fn job() -> OutgoingJob {
     }
 }
 
+/// Experimental discriminants fail closed across restart and can only be explicitly disposed.
+#[test]
+fn incompatible_candidate_rows_are_not_reinterpreted_or_silently_removed() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("cache.sqlite");
+    let path = path.to_str().unwrap();
+    let s = Storage::open(path).unwrap();
+    let j = job();
+    s.insert_outgoing("user:1", &j).unwrap();
+    s.insert_outgoing("user:2", &j).unwrap();
+    drop(s);
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.execute(
+        "UPDATE outgoing_jobs SET state=12 WHERE principal='user:1'",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let s = Storage::open(path).unwrap();
+    assert!(s.outgoing("user:1", &j.source, &j.job_id).is_err());
+    assert!(s.list_outgoing("user:1", &j.source).is_err());
+    assert!(!s.discard_outgoing("user:1", &j.source, &j.job_id).unwrap());
+    assert_eq!(
+        s.discard_incompatible_candidate_actions("user:1").unwrap(),
+        1
+    );
+    assert!(s
+        .outgoing("user:2", &j.source, &j.job_id)
+        .unwrap()
+        .is_some());
+    assert!(S::ActionPending as i64 > 13);
+    assert!(S::ActionUnconfirmed as i64 > 13);
+}
+
+/// A status CAS cannot lose or cross-bind remembered identity evidence; principal cleanup cascades.
+#[test]
+fn action_receipt_and_private_evidence_commit_together() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("cache.sqlite");
+    let path = path.to_str().unwrap();
+    let s = Storage::open(path).unwrap();
+    let mut j = job();
+    j.method = "/tinkle.v1.MessagesService/SendMedia".into();
+    j.state = S::ActionPrepared;
+    s.insert_outgoing("user:1", &j).unwrap();
+    s.transition_outgoing_action("user:1", &j, S::ActionDispatching, &[], None)
+        .unwrap();
+    j = s.outgoing("user:1", &j.source, &j.job_id).unwrap().unwrap();
+    assert!(s
+        .transition_outgoing_action_with_evidence("user:1", &j, S::ActionSucceeded, &[1], &[7])
+        .unwrap());
+    assert!(!s
+        .transition_outgoing_action_with_evidence("user:1", &j, S::ActionSucceeded, &[2], &[8])
+        .unwrap());
+    drop(s);
+    let s = Storage::open(path).unwrap();
+    assert_eq!(
+        s.outgoing_action_evidence("user:1", &j.source, &j.job_id)
+            .unwrap(),
+        Some(vec![7])
+    );
+    assert_eq!(
+        s.outgoing("user:1", &j.source, &j.job_id)
+            .unwrap()
+            .unwrap()
+            .response,
+        vec![1]
+    );
+    s.clear_principal("user:1").unwrap();
+    assert_eq!(
+        s.outgoing_action_evidence("user:1", &j.source, &j.job_id)
+            .unwrap(),
+        None
+    );
+}
+
+/// Opening a rollback cache drops obsolete cursor storage without losing receipt or hydration state.
+#[cfg(tinkle_async_actions)]
+#[test]
+fn obsolete_cursor_cleanup_preserves_send_recovery_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cache.sqlite");
+    let path = path.to_str().unwrap();
+    let p = "user:1";
+    let s = Storage::open(path).unwrap();
+    let mut j = job();
+    j.method = "/tinkle.v1.MessagesService/SendMedia".into();
+    j.state = S::ActionPrepared;
+    s.insert_outgoing(p, &j).unwrap();
+    s.transition_outgoing_action(p, &j, S::ActionDispatching, &[], None)
+        .unwrap();
+    let j = s.outgoing(p, &j.source, &j.job_id).unwrap().unwrap();
+    assert!(s
+        .transition_outgoing_action_with_evidence(p, &j, S::ActionSucceeded, &[3], &[7])
+        .unwrap());
+    drop(s);
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE send_update_state(
+            principal TEXT NOT NULL, source TEXT NOT NULL, cursor BLOB NOT NULL DEFAULT X'',
+            refresh_revision INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(principal,source));",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO send_update_state VALUES (?1, ?2, X'09', 1)",
+        rusqlite::params![p, j.source],
+    )
+    .unwrap();
+    let s = Storage::open(path).unwrap();
+    let obsolete_exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='send_update_state')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(!obsolete_exists);
+    assert_eq!(
+        s.outgoing_action_evidence(p, &j.source, &j.job_id).unwrap(),
+        Some(vec![7])
+    );
+    assert_eq!(
+        s.send_hydration_due(p, &j.source).unwrap(),
+        vec![j.job_id.clone()]
+    );
+    let receipt = s.outgoing(p, &j.source, &j.job_id).unwrap().unwrap();
+    assert_eq!(receipt.response, vec![3]);
+    assert!(s.complete_send_hydration(p, &j).is_err());
+    s.complete_send_hydration(p, &receipt).unwrap();
+    assert!(s.send_hydration_due(p, &j.source).unwrap().is_empty());
+    drop(s);
+    let s = Storage::open(path).unwrap();
+    assert!(s.send_hydration_due(p, &j.source).unwrap().is_empty());
+}
+
 /// Repeated creation is exact-byte idempotent, never an upsert that can mutate a send.
 #[test]
 fn immutable_request_and_revision_cas() {

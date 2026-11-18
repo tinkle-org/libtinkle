@@ -174,23 +174,20 @@ fn method_constants_match_inventory() {
 }
 
 #[test]
-fn updates_inventory_is_connectivity_only() {
-    let updates: Vec<_> = ALL_METHODS
+fn updates_inventory_stays_narrow() {
+    let mut updates: Vec<_> = ALL_METHODS
         .iter()
         .filter(|(m, _, _)| m.starts_with("/tinkle.v1.UpdatesService/"))
+        .copied()
         .collect();
+    updates.sort_unstable();
     assert_eq!(
-        updates.len(),
-        1,
-        "updates surface must be connectivity-only"
-    );
-    assert_eq!(
-        *updates[0],
-        (
+        updates,
+        [(
             "/tinkle.v1.UpdatesService/ObserveConnectivity",
             "ObserveConnectivityRequest",
             "ObserveConnectivityResponse"
-        )
+        )]
     );
     // No retired update-feed names survive anywhere in the inventory.
     for (method, req, resp) in ALL_METHODS {
@@ -250,7 +247,11 @@ fn updates_proto_surface_is_connectivity_only() {
     let svc = &updates.service[0];
     assert_eq!(svc.name.as_deref(), Some("UpdatesService"));
     assert_eq!(svc.method.len(), 1);
-    let method = &svc.method[0];
+    let method = svc
+        .method
+        .iter()
+        .find(|m| m.name.as_deref() == Some("ObserveConnectivity"))
+        .unwrap();
     assert_eq!(method.name.as_deref(), Some("ObserveConnectivity"));
     assert_eq!(method.server_streaming, Some(true));
     assert!(method.client_streaming != Some(true));

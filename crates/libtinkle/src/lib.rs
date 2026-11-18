@@ -21,6 +21,8 @@
 //! `Some(true)` more, `Some(false)` done, `None` legacy window-edge
 //! heuristic) heal journal skips without moving the cursor.
 
+#[cfg(all(tinkle_async_actions, not(target_arch = "wasm32")))]
+mod action_api;
 pub(crate) mod authorization;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod cache_projector;
@@ -38,6 +40,10 @@ pub(crate) mod liveness;
 pub(crate) mod logout;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod media;
+#[cfg(all(tinkle_async_actions, not(target_arch = "wasm32")))]
+mod representation_refresh;
+#[cfg(all(tinkle_async_actions, not(target_arch = "wasm32")))]
+pub use action_api::Channels;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod push;
 pub(crate) mod reconnect;
@@ -92,6 +98,8 @@ pub use session::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use sqlite_store::SqliteCursorStore;
+#[cfg(tinkle_async_actions)]
+pub use sync::MediaHintEvent;
 pub use sync::{ReconcileStatus, SyncEvent, SyncManager};
 mod effects;
 pub use effects::ReactionEffectEvent;

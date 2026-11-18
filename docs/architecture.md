@@ -205,6 +205,41 @@ that same removal transaction. A successor needs a valid acceptance position, no
 larger numeric message ID. Absent public outbox-read evidence remains absent in the
 retained protobuf and pending in the legacy scalar cache projection.
 
+### App event consumption and update application
+
+Use one serial `next_event()` loop per client in Rust or UniFFI. Multiple SDK
+tasks write to a bounded queue with one receiver. Concurrent callers compete
+for entries; they do not each get a copy. Fan out to screens from that one host
+loop. RPC replies go to their callers separately, so dequeue order does not
+order replies against notifications or establish a global update order.
+
+The SQLite conversation path commits each shard's cache changes and returned
+mutation cursor together before offering `ConversationChanged` and
+`MessagesChanged` notices. These notices tell the app to reread local state.
+The queue can drop notices when full; it is not a replay log, and the app does
+not acknowledge it. A cursor-only store does not give the SDK an atomic commit
+with a host-owned projection. Raw action and representation hints do not prove
+that an outcome or object was applied.
+
+The async-actions candidate supervises retained jobs on Returning connections
+with SQLite, independently of conversation reconciliation. The worker starts
+after `start()` finishes its initial subscription; `connect()` and manual
+`reconnect()` alone do not start it. Each bounded sweep selects one job in fair
+rotation and reads its owning status. For immediate media and albums, it calls
+`GetSendStatus` with the original target and key (the first album key). A failed
+read leaves the job unresolved; recovery never retransmits a send. No send
+cursor is opened or restored. Compatible candidate caches discard obsolete
+send-cursor storage without changing retained jobs or receipts.
+
+Command and point-status receipts use the same reducer and commit with private
+identity evidence under an intent CAS. Success leaves durable hydration demand
+until the exact receipt's current bodies have been handled. Hydration uses
+authorized `GetMessages`, rechecks the retained receipt and original cache scope,
+and never advances the conversation cursor. The worker stops polling successful
+sends once hydration is complete. `SendStatusChanged` notices are best-effort;
+hosts can reread retained jobs or explicitly query current status. A notification
+does not select an outcome or disclose current bodies.
+
 ### Shared message search
 
 `Messages::search(SearchRequest)` and the UniFFI `messages_search` protobuf-byte
@@ -278,13 +313,40 @@ item count, captions/entities and consistent scheduling. A pending acknowledgeme
 does not establish delivery. Unversioned user/chat projections in accepted responses
 are insert-only and cannot replace an already cached entity snapshot.
 
-Attachment preparation publishes a main-only artifact and immutable manifest before
+Attachment preparation publishes main and optional regular-thumbnail artifacts and an immutable manifest before
 upload. `Sending::attachment_manifest` (and the matching FFI adapter) exposes the
-source path, settings, hashes, artifact path and preparation profile. Repeating a key
+source path, settings, hashes, artifact paths, exact tiny JPEG preview and preparation profile. Repeating a key
 uses those exact retained bytes, even after restart or source replacement; it never
 invokes a codec again. The parent uses the existing transfer-intent CAS, is scoped to
 principal/provisioned trust and is bounded to 256 retained preparation keys per
 principal. Principal cleanup removes its owned artifact directory and intent rows.
+In published builds, existing preparation settings strings remain stable for
+older retained keys; absent optional display fields stay absent on resume.
+Main and PNG use independent `:main` and `:thumbnail` upload keys. Confirmed main
+identity commits before the optional
+attempt. Thumbnail failures propagate, including unknown outcomes; explicit
+`upload_attachment_thumbnail` retries only the retained PNG. Neither path rewrites
+an already submitted send. Legacy display artifacts remain separate result fields.
+Candidate preparation includes InlinePreview and one optional completed
+ThumbnailSource, with positive file identity and dimensions, and persists IMAGE/VIDEO processing intent in the exact upload
+declaration. Backend validation and action readiness are not inferred from upload
+completion. The [SDK README](../README.md#asynchronous-application-actions-candidate) owns
+ordinary enqueue, domain recovery and independent representation-merge entry points;
+the [pinning guide](../PROTO_PINNING.md#optional-future-schema-development) owns
+candidate activation and the capability gate.
+The candidate uses a reset wire identity for SQLite independently of asynchronous
+actions, and a v5 preparation manifest. Old cache markers and v4 manifests are
+rejected before retained protobufs are used, without translation or relabelling.
+The global wire break still requires coordinated fresh isolated state; see the
+[encoding identities, build-mode support, and clean cutover gate](../PROTO_PINNING.md#optional-future-schema-development).
+Within a compatible encoding, original operation keys, raw request bytes and
+transfer CAS proofs remain unchanged. The completed thumbnail's ordinary FileInfo
+and source input use the same file ID.
+Successful domain identity receipts retain every ordered key/slot independently
+of original-result disclosure. Recovery fetches current message bodies by disclosed
+accepted message references, not by original main IDs. A withheld/missing body never
+selects an old request/result body for hydration; receipt disclosure can change at
+the same terminal operation revision without transferring references across slots.
 Upload checkpoints expose part counts separately from download prefix bytes; neither
 diagnostic counter authorizes skipping server verification.
 Normal `Sending::prepare_attachment` uses the host installed by
@@ -302,6 +364,12 @@ commit before upload. `Sending::adopt_native_attachment` and the FFI
 `sending_adopt_native_attachment` entry adopt a retained `FfiPreparedNativeMedia` without
 encoding again. Durable artifacts use container-appropriate suffixes for native readers.
 Platform codec qualification is separate from durable artifact recovery tests.
+Normalized image pixels feed shared Rust's regular PNG and <=40-axis, <=4096-byte
+JPEG generation. Native video encoders may supply a bounded display-oriented sRGB
+RGBA8 frame from their normalized output through the actual preparation callback;
+decoder-only configuration remains separate. Callback facts retain no raw frame
+after conversion. The host still owns complete stream decode, color handling and
+native teardown; synthetic bridge fixtures do not qualify those codecs.
 
 Native preparation and upload scratch files use the private writable parent of the
 host-configured SQLite database, outside principal artifact cleanup. In-memory

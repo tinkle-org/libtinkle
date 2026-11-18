@@ -56,6 +56,30 @@ pub(crate) enum RecoverySignal {
 /// App-visible sync events.
 #[derive(Debug, Clone)]
 pub enum SyncEvent {
+    /// Actor-private query demand, never an acceptance receipt or file grant.
+    #[cfg(tinkle_async_actions)]
+    SendStatusChanged(MediaHintEvent<tinkle_schema::proto::SendStatusChanged>),
+    /// Source/version-scoped fetch demand, never patched into cached memberships from the hint.
+    #[cfg(tinkle_async_actions)]
+    ChatPhotoUpdateChanged(MediaHintEvent<tinkle_schema::proto::ChatPhotoUpdateChanged>),
+    #[cfg(tinkle_async_actions)]
+    ChannelPhotoUpdateChanged(MediaHintEvent<tinkle_schema::proto::ChannelPhotoUpdateChanged>),
+    #[cfg(tinkle_async_actions)]
+    ProfilePhotoUpdateChanged(MediaHintEvent<tinkle_schema::proto::ProfilePhotoUpdateChanged>),
+    #[cfg(tinkle_async_actions)]
+    AssetChangeChanged(MediaHintEvent<tinkle_schema::proto::AssetChangeChanged>),
+    #[cfg(tinkle_async_actions)]
+    ProfilePhotoRepresentationChanged(
+        MediaHintEvent<tinkle_schema::proto::ProfilePhotoRepresentationChanged>,
+    ),
+    #[cfg(tinkle_async_actions)]
+    ChatPhotoRepresentationChanged(
+        MediaHintEvent<tinkle_schema::proto::ChatPhotoRepresentationChanged>,
+    ),
+    #[cfg(tinkle_async_actions)]
+    StickerAssetRepresentationChanged(
+        MediaHintEvent<tinkle_schema::proto::StickerAssetRepresentationChanged>,
+    ),
     /// Ephemeral presentation only. Never hydrate a body or advance/replay a journal from this event.
     ReactionEffect(crate::ReactionEffectEvent),
     /// One journal page applied for a conversation.
@@ -84,6 +108,16 @@ pub enum SyncEvent {
         accept_seq: i64,
         error: String,
     },
+}
+
+/// Ephemeral source-fenced hint. Its payload is fetch demand, never file membership authority.
+#[cfg(tinkle_async_actions)]
+#[derive(Debug, Clone)]
+pub struct MediaHintEvent<T> {
+    pub notification: T,
+    pub(crate) principal: String,
+    pub(crate) epoch: u64,
+    pub(crate) source_revision: u64,
 }
 
 /// Per-target reconcile status.
@@ -129,6 +163,9 @@ pub struct SyncManager {
     /// (reconnect re-demands tracked targets anyway).
     dirty: Mutex<HashSet<String>>,
     signals: Mutex<Option<mpsc::Sender<RecoverySignal>>>,
+    /// Coalesced read demand survives a full app event queue; it carries no outcome or object data.
+    #[cfg(tinkle_async_actions)]
+    action_hint_revision: std::sync::atomic::AtomicU64,
 }
 
 impl SyncManager {
@@ -149,6 +186,8 @@ impl SyncManager {
             in_flight: Mutex::new(HashSet::new()),
             dirty: Mutex::new(HashSet::new()),
             signals: Mutex::new(None),
+            #[cfg(tinkle_async_actions)]
+            action_hint_revision: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -185,6 +224,20 @@ impl SyncManager {
 
     pub(crate) async fn emit_event(&self, event: SyncEvent) {
         let _ = self.event_tx.try_send(event);
+    }
+
+    /// Record fetch demand before best-effort event delivery, never durable acceptance.
+    #[cfg(tinkle_async_actions)]
+    pub(crate) fn mark_action_hint(&self) {
+        self.action_hint_revision
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Read the connection-local demand counter around an authoritative query.
+    #[cfg(tinkle_async_actions)]
+    pub(crate) fn action_hint_revision(&self) -> u64 {
+        self.action_hint_revision
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Current fencing generation.
