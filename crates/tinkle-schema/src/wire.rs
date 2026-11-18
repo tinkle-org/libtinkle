@@ -1,7 +1,9 @@
 //! Bounded descriptor-driven unknown-field rejection without reserializing original request bytes.
 use crate::{proto, sync::SyncError};
 use prost::Message;
-use prost_types::{DescriptorProto, FileDescriptorSet};
+use prost_types::{
+    field_descriptor_proto::Type, DescriptorProto, FieldDescriptorProto, FileDescriptorSet,
+};
 
 /// Validate recursive known field numbers/types while preserving byte-order and explicit presence.
 pub fn validate_request(method: &str, bytes: &[u8]) -> Result<(), SyncError> {
@@ -35,7 +37,7 @@ pub fn validate_request(method: &str, bytes: &[u8]) -> Result<(), SyncError> {
     validate_message(&input, bytes)
 }
 
-/// Reject unknown/reserved fields in an exact candidate type before any source assembly.
+/// Reject unknown/reserved fields in an exact schema type before any source assembly.
 pub fn validate_message(name: &str, bytes: &[u8]) -> Result<(), SyncError> {
     if bytes.len() > 262144 {
         return Err(invalid());
@@ -52,6 +54,22 @@ pub fn validate_message(name: &str, bytes: &[u8]) -> Result<(), SyncError> {
             );
         }
     }
+    // The registry descriptor can omit imported well-known types. Keep Timestamp
+    // validation strict even when its descriptor is not embedded (e.g. PollSource.close_date).
+    let timestamp = DescriptorProto {
+        field: [(1, Type::Int64), (2, Type::Int32)]
+            .into_iter()
+            .map(|(number, ty)| FieldDescriptorProto {
+                number: Some(number),
+                r#type: Some(ty as i32),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    };
+    types
+        .entry(".google.protobuf.Timestamp".into())
+        .or_insert(&timestamp);
     let mut fields = 0usize;
     validate(&types, name, bytes, 0, &mut fields)
 }

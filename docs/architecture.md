@@ -16,7 +16,8 @@ syntra-core                 framing, secure channel, pinned server + Returning p
 ```
 
 `tinkle-schema` owns application payloads and validation. It is independent of
-transport selection. Its artifact/dependency update is coordinated separately.
+transport selection. The [published schema pin](../PROTO_PINNING.md#current-published-schema-pin)
+uses `compact-wire-reset-v1` and async actions in ordinary registry builds.
 `tinkle-storage` owns application SQLite rows, journals, transfer state and
 background jobs; authorization keys never enter that database.
 
@@ -221,15 +222,14 @@ not acknowledge it. A cursor-only store does not give the SDK an atomic commit
 with a host-owned projection. Raw action and representation hints do not prove
 that an outcome or object was applied.
 
-The async-actions candidate supervises retained jobs on Returning connections
+The async action worker supervises retained jobs on Returning connections
 with SQLite, independently of conversation reconciliation. The worker starts
 after `start()` finishes its initial subscription; `connect()` and manual
 `reconnect()` alone do not start it. Each bounded sweep selects one job in fair
 rotation and reads its owning status. For immediate media and albums, it calls
 `GetSendStatus` with the original target and key (the first album key). A failed
 read leaves the job unresolved; recovery never retransmits a send. No send
-cursor is opened or restored. Compatible candidate caches discard obsolete
-send-cursor storage without changing retained jobs or receipts.
+cursor is opened or restored.
 
 Command and point-status receipts use the same reducer and commit with private
 identity evidence under an intent CAS. Success leaves durable hydration demand
@@ -306,7 +306,9 @@ journal progress or hydrates/reinstates cache bodies.
 before dispatch. Inspection never transmits. Known transient refusal, rejection,
 unconfirmed execution, accepted history and accepted-pending scheduling are distinct
 states. Last failure code, raw code and outcome uncertainty commit with the state.
-Only an explicit exact-key retry may retransmit uncertain work. Accepted responses
+For submitted async actions, recovery queries the original domain keys instead
+of replaying the mutation. Where a synchronous send supports explicit retry, it
+reuses the exact request and key within the same wire epoch. Accepted responses
 are retained before cache hydration; cache failure cannot turn them back into sends.
 Album acknowledgements require a common positive album ID, ordered source identities,
 item count, captions/entities and consistent scheduling. A pending acknowledgement
@@ -320,25 +322,20 @@ uses those exact retained bytes, even after restart or source replacement; it ne
 invokes a codec again. The parent uses the existing transfer-intent CAS, is scoped to
 principal/provisioned trust and is bounded to 256 retained preparation keys per
 principal. Principal cleanup removes its owned artifact directory and intent rows.
-In published builds, existing preparation settings strings remain stable for
-older retained keys; absent optional display fields stay absent on resume.
 Main and PNG use independent `:main` and `:thumbnail` upload keys. Confirmed main
 identity commits before the optional
 attempt. Thumbnail failures propagate, including unknown outcomes; explicit
 `upload_attachment_thumbnail` retries only the retained PNG. Neither path rewrites
-an already submitted send. Legacy display artifacts remain separate result fields.
-Candidate preparation includes InlinePreview and one optional completed
-ThumbnailSource, with positive file identity and dimensions, and persists IMAGE/VIDEO processing intent in the exact upload
-declaration. Backend validation and action readiness are not inferred from upload
-completion. The [SDK README](../README.md#asynchronous-application-actions-candidate) owns
-ordinary enqueue, domain recovery and independent representation-merge entry points;
-the [pinning guide](../PROTO_PINNING.md#optional-future-schema-development) owns
-candidate activation and the capability gate.
-The candidate uses a reset wire identity for SQLite independently of asynchronous
-actions, and a v5 preparation manifest. Old cache markers and v4 manifests are
-rejected before retained protobufs are used, without translation or relabelling.
-The global wire break still requires coordinated fresh isolated state; see the
-[encoding identities, build-mode support, and clean cutover gate](../PROTO_PINNING.md#optional-future-schema-development).
+an already submitted send. Preparation includes `InlinePreview` and one optional
+completed `ThumbnailSource`, with positive file identity and dimensions. The
+exact upload declaration retains any IMAGE or VIDEO processing intent. Backend
+validation and action readiness are not inferred from upload completion. See
+[asynchronous application actions](../README.md#asynchronous-application-actions)
+for enqueue, domain recovery, and representation-merge entry points.
+
+Ordinary builds check the SQLite wire identity and require preparation manifest
+v5 before using retained protobufs. The [clean cutover gate](../PROTO_PINNING.md#clean-media-cutover-gate)
+applies to client state and server rollout across the global wire break.
 Within a compatible encoding, original operation keys, raw request bytes and
 transfer CAS proofs remain unchanged. The completed thumbnail's ordinary FileInfo
 and source input use the same file ID.
@@ -388,7 +385,7 @@ final snapshot is separate from that callback destination. No process-wide
 `Users::get_users` and `get_user_complete` provide typed profile reads without implicit
 unversioned cache replacement. `Messages::delete_history` requires a caller-persisted
 nonzero UUID and exact selection parameters. It never silently generates an operation
-ID; the durable sending coordinator supports only text, media and album sends.
+ID and is not part of the durable sending queue.
 
 ## Platforms and fixtures
 

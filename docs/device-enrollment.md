@@ -1,9 +1,11 @@
 # Native device enrollment
 
 The Rust `Auth` facade implements the published public `AuthService` contract.
-The network binding is pinned Syntra TCP. The published schema
-includes `connection.proto` and initializes every
-new connection before metadata-dependent application work.
+The network binding is pinned Syntra TCP. The SDK initializes every new
+connection before metadata-dependent application work. The published schema's
+`compact-wire-reset-v1` break includes enrollment and `InitConnect`; use matching
+peers and follow the [clean cutover gate](../PROTO_PINNING.md#clean-media-cutover-gate).
+Cutover does not clear protected enrollment records.
 
 ## Initialization
 
@@ -430,8 +432,9 @@ or production authority acceptance.
 ## Published schema checks
 
 Run from the original libtinkle workspace with the pinned Rust toolchain and
-published Cargo dependency. Required CI uses ordinary `--locked` checks without
-Buf or schema-candidate generation:
+[published Cargo dependency](../PROTO_PINNING.md#current-published-schema-pin).
+Required CI uses ordinary `--locked` checks without extra environment variables,
+Buf, or schema-candidate generation:
 
 ```sh
 cargo test --locked --workspace --all-features --verbose
@@ -441,10 +444,9 @@ cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D w
 Consumer repositories build the native library, generate language bindings from
 the matching revision, and verify their foreign runtime integration.
 
-`scripts/test-schema-candidate.sh` remains optional for future-schema development,
-not release qualification. See [public pinning](../PROTO_PINNING.md) for that
-workflow. No generated protobuf source or vendored `.proto` enters production
-directories.
+The [isolated local generator](../PROTO_PINNING.md#optional-future-schema-development)
+provides descriptor evidence for unpublished schema changes only. It does not
+qualify the registry build.
 
 To exercise the shared mobile fixture in the original workspace:
 

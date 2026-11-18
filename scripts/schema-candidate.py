@@ -24,7 +24,8 @@ MEDIA_CONTRACT = "singular-thumbnail-compact-wire-reset-v1"
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--schema", type=Path, default=ROOT.parent / "schema")
 parser.add_argument("--output", type=Path)
-parser.add_argument("--async-actions", action="store_true", help="enable unpublished asynchronous application actions only in the copied workspace")
+parser.add_argument("--async-actions", action="store_true", required=True,
+                    help="opt in to checking an unpublished replacement for the async-actions contract")
 parser.add_argument("command", nargs=argparse.REMAINDER, help="command executed in the isolated workspace (default: cargo test)")
 args = parser.parse_args()
 output = (args.output or Path(tempfile.mkdtemp(prefix="libtinkle-schema-candidate-"))).resolve()
@@ -90,16 +91,15 @@ with config.open("a") as handle:
     handle.write(f'\n[patch.buf]\n{package_name} = {{ path = {json.dumps(str(crate))} }}\n')
 evidence = {"schema_descriptor_sha256": hashlib.sha256(descriptor.read_bytes()).hexdigest(),
              "schema_source_sha256": before, "schema_snapshot": str(snapshot),
-              "wire_identity": WIRE_ID,
-              "media_contract": MEDIA_CONTRACT if args.async_actions else None,
-             "async_actions": args.async_actions,
+            "wire_identity": WIRE_ID, "media_contract": MEDIA_CONTRACT,
+            "async_actions": True,
             "plugin": "buf.build/community/neoeinstein-prost:v0.5.0", "revision": 2,
             "patched_package": package_name, "base_version_only": pin, "workspace": str(workspace)}
 (output / "candidate.json").write_text(json.dumps(evidence, indent=2) + "\n")
 env = dict(os.environ, CARGO_TARGET_DIR=str(output / "target"), CARGO_INCREMENTAL="0")
 env["TINKLE_SCHEMA_CANDIDATE_WIRE_ID"] = WIRE_ID
-env["TINKLE_SCHEMA_CANDIDATE_ASYNC_ACTIONS"] = "1" if args.async_actions else "0"
-env["TINKLE_SCHEMA_CANDIDATE_MEDIA_CONTRACT"] = MEDIA_CONTRACT if args.async_actions else ""
+env["TINKLE_SCHEMA_CANDIDATE_ASYNC_ACTIONS"] = "1"
+env["TINKLE_SCHEMA_CANDIDATE_MEDIA_CONTRACT"] = MEDIA_CONTRACT
 subprocess.run(["cargo", "check", "--workspace", "--all-targets", "--keep-going"], cwd=workspace, env=env, check=True)
 resolved = json.loads(subprocess.check_output(["cargo", "metadata", "--format-version", "1", "--locked"], cwd=workspace, env=env))
 actual = [p for p in resolved["packages"] if p["name"] == package_name]

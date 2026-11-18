@@ -62,118 +62,104 @@ exit results, skips, and raw evidence paths.
 
 ## Current published schema pin
 
-`Cargo.toml` and `Cargo.lock` pin the published prost artifact
-`=0.5.0-20261112172535-6099d89af63f.2` and its checksum. BSR commit
-`6099d89af63f4813bba67870d08500ea` maps to schema Git revision
-`e0038da40641a39ee90e8d4b95a8c3f36e213044`. This baseline includes the public
-naming/field migration and scheduled-message/poll contracts used by the SDK;
-no source override or candidate generation is required. Go consumers own their
-independent published coordinates in their manifests.
+Use the latest published prost artifact with the exact pin
+`=0.5.0-20261118031328-a03ec89f7e36.2`. BSR module commit
+`a03ec89f7e3640b5bcd5b86c5bc297f1` maps to schema Git revision
+`45c4e3d0e7901e680aa2830de2946156939c5199`. The Syntra pins above are unchanged.
+Go consumers own their independent published coordinates in their manifests.
 
-Required Rust CI and source qualification use
-the same published dependency and committed lockfile with `--locked`. They do not
-depend on a schema checkout or a Cargo registry patch.
-The descriptor tests check the complete method inventory and exact message shapes.
+Ordinary registry builds with this pin and matching SDK source use
+`compact-wire-reset-v1` and the [asynchronous action APIs](README.md#asynchronous-application-actions),
+including with `--all-features`.
+Before qualifying a build, verify that `Cargo.toml` and `Cargo.lock` resolve this
+exact dependency for `--locked` CI. A checkout that still resolves the previous
+pin does not exercise this contract. Registry builds need no extra environment
+variables, schema checkout, Buf invocation, or Cargo registry patch. Do not set
+`TINKLE_SCHEMA_CANDIDATE_*` for these builds.
+
+### Wire identity and retained preparation
+
+The published schema numbers fields consecutively from 1 within each message,
+with no reserved names or ranges and no placeholder fields. This is an
+intentional global protobuf wire break, including auth and bot contracts.
+Preview and representation-revision tags are not preserved. Do not mix
+pre-renumber peers or payloads with this release.
+
+`ThumbnailSource` and `Thumbnail` are singular, each with `file_id: int64` at
+tag 1 and positive `width` and `height` (`uint32`) at tags 2 and 3. There is no
+media variant enum or list. The descriptor tests check the full method inventory
+and exact message shapes, including those in
+`crates/tinkle-schema/tests/representations.rs` and
+`crates/tinkle-schema/tests/auth_contract.rs`.
+
+`crates/tinkle-storage/src/lib.rs` records `compact-wire-reset-v1` under
+`meta.media_encoding`. It rejects older markers, including
+`singular-thumbnail-v1` and `published-media-v1`, before retained protobuf
+decoding or network use. The marker is a compatibility epoch, not a descriptor
+digest.
+
+`crates/libtinkle/src/sending.rs` requires attachment manifest v5 with
+`wire_identity: compact-wire-reset-v1`,
+`media_contract: singular-thumbnail-compact-wire-reset-v1`, and a settings
+string ending in `:singular-thumbnail-compact-wire-reset-v1`. Older manifests
+and mismatched v5 manifests fail before retained paths or protobufs are used.
+Old payloads are never translated or relabelled.
+
+### Clean media cutover gate
+
+Before switching wire epochs, coordinate clients and servers:
+
+- Start with a fresh, isolated application cache and artifact namespace.
+- If the host persists cursors separately, start with a fresh host cursor
+  namespace. Do not carry forward old checkpoints.
+- Have the server owner provision fresh, compatible database and media state as
+  a separate step. Do not connect to peers using the previous wire epoch.
+
+An unmarked SQLite database with retained bodies, file membership, cached files,
+transfer intents, queued background work, or outgoing actions is not empty.
+Opening it fails without relabelling or deleting its state. The encoding check
+runs again under SQLite's write lock before an empty cache is stamped.
+
+Record the selected namespaces and the explicit cutover decision. Keep incompatible
+databases and artifacts isolated so uncertain actions can be investigated in their
+original environment. Do not change original keys, CAS values, or upload proofs,
+or replay mutations against fresh state. Disposing of test data does not cancel
+remote work. Neither the SDK nor the local generator resets server state, wipes
+accounts, clears protected enrollment, or deploys anything as part of cutover.
+
+Generate UniFFI bindings from the exact native build with the pinned UniFFI
+toolchain. Do not mix bindings and libraries across the cutover; optional record
+defaults do not make the builds ABI compatible.
 
 ## Optional future-schema development
 
-The candidate generator uses `buf.build/community/neoeinstein-prost:v0.5.0`,
-revision 2, with `bytes=.` and prost/prost-types `=0.14.4`. It emits only into a
-temporary artifact directory, preserves the generated package exports, and
-records the exact descriptor SHA-256. A registry patch in the copied workspace
-must resolve to that generated manifest. No candidate release coordinate is
-assigned or published. This is an opt-in integration aid, not release qualification.
+For unpublished schema changes, pass `--async-actions` explicitly before any
+local generation or build work. The flag is required for the local workflow,
+not for registry builds.
 
 ```sh
 ./scripts/test-schema-candidate.sh --async-actions --output /absolute/temp/candidate
 ```
 
-Asynchronous application actions require the explicit candidate capability:
+To select a schema checkout and run a specific command in the isolated workspace:
 
 ```sh
 python3 scripts/schema-candidate.py --schema /absolute/schema --async-actions \
   --output /absolute/temp/media-candidate -- cargo test --locked --workspace --all-features
 ```
 
-The helper always sets
-`TINKLE_SCHEMA_CANDIDATE_WIRE_ID=compact-wire-reset-v1` in the copied workspace,
-independently of asynchronous actions. With `--async-actions`, it also sets
-`TINKLE_SCHEMA_CANDIDATE_ASYNC_ACTIONS=1` and
-`TINKLE_SCHEMA_CANDIDATE_MEDIA_CONTRACT=singular-thumbnail-compact-wire-reset-v1`.
-The shared build script, `scripts/schema-cfg.rs`, enables
-`cfg(tinkle_schema_candidate)` for the wire identity and `cfg(tinkle_async_actions)`
-for the action capability. The older action capability alone fails at build time.
-Ordinary published-pin builds, including `--all-features`, enable neither cfg;
-do not set these variables against the published artifact.
+`scripts/schema-candidate.py` snapshots the schema and Buf configuration outside
+the checkout, then builds the descriptor and generates Rust from that same
+snapshot. It rejects source changes during snapshot or generation. It uses
+`buf.build/community/neoeinstein-prost:v0.5.0`, revision 2, with `bytes=.`, and
+prost/prost-types `=0.14.4`.
 
-`tinkle-storage` supports the reset wire identity without asynchronous actions.
-The `libtinkle` and `tinkle-ffi` build scripts explicitly reject that nonasync
-runtime configuration because its adapter still uses removed media fields.
-The helper checks the whole workspace before running the requested command, so
-use `--async-actions` for the workspace workflow above. Candidate metadata records
-the wire identity, descriptor digest, media contract, and action opt-in separately
-from release coordinates. Generated prost files and the candidate lockfile remain
-outside this repository.
-
-The generator snapshots schema source/configuration outside the checkout before
-building the descriptor and generating Rust from that same snapshot. It rejects
-source changes during snapshot/generation; wait for schema writes to finish before
-the final run. Evidence records source and descriptor digests, the contract and the
-isolated manifest path. No generated public protocol source is copied into this
-repository or used by ordinary checks.
-
-The approved candidate renumbers fields throughout the public schema consecutively
-from 1 within each message, with no reserved names/ranges or placeholder fields.
-This is an intentional global protobuf wire break, including auth and bot
-contracts, not just media. Preview and representation-revision tags are not
-preserved. Do not mix pre-renumber payloads or peers with the renumbered candidate.
-The published schema and Syntra pins above remain unchanged; this schema is
-available only through the opt-in candidate workflow, not ordinary builds.
-
-The candidate retains singular `ThumbnailSource` and `Thumbnail`, each with
-`file_id: int64` at 1 and positive `width`/`height: uint32` at 2/3, and no media
-variant enum/list. Descriptor assertions in
-`crates/tinkle-schema/tests/representations.rs` and
-`crates/tinkle-schema/tests/auth_contract.rs` distinguish candidate shapes from
-the unchanged published pin. Final qualification requires fresh execution
-evidence; these assertions are not test results.
-
-SQLite records `compact-wire-reset-v1` under the `media_encoding` key in `meta` through
-`crates/tinkle-storage/src/lib.rs`, independently of the async-actions flag.
-It rejects older markers, including `singular-thumbnail-v1` and
-`published-media-v1`, before retained protobuf decoding or network use.
-This is an explicit compatibility epoch, not a descriptor digest.
-Candidate preparation in `crates/libtinkle/src/sending.rs` requires manifest v5
-with `wire_identity: compact-wire-reset-v1`; v4 and older manifests are rejected
-before retained paths or protobufs are used. Async preparation additionally
-requires `media_contract: singular-thumbnail-compact-wire-reset-v1` and the
-matching settings suffix. Published builds retain their own v1 manifest behavior
-and reject candidate v4/v5 manifests. No old payloads are translated or relabelled.
-
-### Clean media cutover gate
-
-The renumbered candidate requires a fresh isolated application cache and
-coordinated fresh server media state. An unmarked database with retained bodies,
-file membership, cached files, transfer intents, queued background work or outgoing
-actions is not an empty cache. Opening it fails without relabelling or deleting its
-state; the encoding check runs again under SQLite's write lock before stamping an
-empty cache. Previously stamped pre-renumber candidate caches are rejected by
-their old marker. Published builds keep their existing unmarked-cache compatibility.
-
-Record the selected disposable media/cache namespace and explicit clean-reset
-decision before candidate execution. Keep incompatible databases and artifacts
-isolated for inspection and resolution of uncertain actions. Do not translate old
-protobufs, change original keys/CAS/upload proofs, or replay mutations against a
-fresh namespace. An explicit test-data disposal decision does not cancel any
-remote operation. Fresh PostgreSQL/media test state is permitted only as a separate
-coordinated setup step; the SDK and candidate generator perform no server reset,
-account wipe, protected-enrollment clear or deployment action.
-
-An actual published schema SDK and separately qualified pin upgrade are required
-before enabling this capability in ordinary consumer builds. Normal and candidate
-FFI exports differ: generate bindings and native libraries from the same source,
-cfg and pinned UniFFI toolchain. Optional record defaults are not mixed-build ABI
-compatibility.
+The helper checks that the registry patch resolves to the generated manifest in
+the copied workspace. The patch, generated prost files, and candidate lockfile
+stay outside this repository. `candidate.json` records the source and descriptor
+SHA-256 digests, wire identity, media contract, and action opt-in as local evidence.
+The generated package version matches the registry pin solely to make the patch
+resolve; it does not assign a release coordinate or qualify the published artifact.
 
 See [device enrollment](docs/device-enrollment.md#published-schema-checks) for
 SDK checks and their verification boundaries.
@@ -201,3 +187,5 @@ expects authoritative [retirement evidence](docs/device-enrollment.md#permanent-
 its checks do not establish server-side rollback protection.
 Rust host tests and consumer application execution have distinct evidence scopes;
 see [integration verification](docs/platform-ios-android-wasm.md#consumer-qualification).
+The pin and checks listed here do not claim live-server, backend-worker, or
+simulator/device execution.

@@ -758,18 +758,33 @@ impl Storage {
         }
         #[cfg(tinkle_schema_candidate)]
         if encoding.is_none() {
+            // Visibility and synchronization state can survive without any cached bodies.
+            // Schema metadata and SQLite's own index bookkeeping do not count as retained state.
             for table in [
+                "checkpoints",
+                "stream_state",
+                "cache_incarnations",
+                "message_tombstones",
+                "message_body_floors",
                 "messages",
                 "dialogs",
                 "users",
                 "chats",
+                "entity_provenance",
+                "message_documents",
+                "message_search_revisions",
                 "files",
                 "file_cache_entries",
                 "message_files",
                 "entity_files",
                 "file_transfers",
+                "file_transfer_intents_v1",
+                "file_upload_negotiations_v1",
                 "background_sync_jobs",
                 "outgoing_jobs",
+                "outgoing_action_evidence_v1",
+                "send_hydration_done",
+                "send_update_state",
             ] {
                 let exists: bool = conn.query_row(
                     "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
@@ -919,7 +934,10 @@ impl Storage {
              PRAGMA foreign_keys=ON;
              PRAGMA busy_timeout=5000;",
         )?;
-        conn.execute_batch(
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        // A writer may have populated or stamped the cache since the first check.
+        Self::check_media_encoding(&tx)?;
+        tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS checkpoints(
                principal TEXT NOT NULL, stream TEXT NOT NULL, cursor INTEGER NOT NULL,
@@ -958,15 +976,10 @@ impl Storage {
                principal TEXT NOT NULL, chat_id INTEGER NOT NULL, proto BLOB NOT NULL,
                PRIMARY KEY(principal, chat_id));",
         )?;
-        conn.execute_batch(Self::V4_DDL)?;
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        // Recheck unmarked state under the write lock before assigning its encoding.
-        Self::check_media_encoding(&tx)?;
         tx.execute(
             "INSERT OR IGNORE INTO meta(key,value) VALUES('media_encoding',?1)",
             [env!("TINKLE_SCHEMA_WIRE_ID")],
         )?;
-        // A competing opener may have stamped the database after the pre-DDL check.
         Self::check_media_encoding(&tx)?;
         let version: Option<String> = tx
             .query_row(

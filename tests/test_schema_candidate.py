@@ -32,7 +32,7 @@ class SchemaCandidateTests(unittest.TestCase):
             shutil.copy2(ROOT / name, self.root / name)
         (self.root / ".cargo/config.toml").write_text("")
 
-    def generate(self, syntra_version="1.0.0-rc.5", fail_command=False, async_actions=False):
+    def generate(self, syntra_version="1.0.0-rc.5", fail_command=False):
         """Run the candidate helper on disposable fixtures with Buf and Cargo mocked."""
         commands = []
         def run(command, **kwargs):
@@ -53,9 +53,7 @@ class SchemaCandidateTests(unittest.TestCase):
                       "source": "registry+https://github.com/rust-lang/crates.io-index"}
                      for name in ("syntra-core", "syntra-runtime", "syntra-net")]
         metadata = {"packages": packages, "resolve": {"nodes": [{"id": "syntra-net", "features": ["tcp"]}]}}
-        args = [str(self.script), "--schema", str(self.schema), "--output", str(self.output)]
-        if async_actions:
-            args.append("--async-actions")
+        args = [str(self.script), "--schema", str(self.schema), "--output", str(self.output), "--async-actions"]
         with patch.object(sys, "argv", [*args, "--", "true"]), \
                 patch("subprocess.run", side_effect=run), \
                 patch("subprocess.check_output", return_value=json.dumps(metadata).encode()), \
@@ -64,28 +62,24 @@ class SchemaCandidateTests(unittest.TestCase):
         return commands
 
     def test_async_actions_capability_is_explicit_and_isolated(self):
-        commands = self.generate(async_actions=True)
+        commands = self.generate()
         self.assertEqual(commands[-1][1]["env"]["TINKLE_SCHEMA_CANDIDATE_ASYNC_ACTIONS"], "1")
         evidence = json.loads((self.output / "candidate.json").read_text())
         self.assertTrue(evidence["async_actions"])
         self.assertEqual(evidence["media_contract"], "singular-thumbnail-compact-wire-reset-v1")
         self.assertEqual(commands[-1][1]["env"]["TINKLE_SCHEMA_CANDIDATE_MEDIA_CONTRACT"], "singular-thumbnail-compact-wire-reset-v1")
 
-    def test_reset_identity_is_passed_to_every_command_in_both_modes(self):
-        """The reset gate is never conditional on async-actions or inherited caller identity."""
-        for actions in (False, True):
-            with self.subTest(async_actions=actions), patch.dict("os.environ", {
-                "TINKLE_SCHEMA_CANDIDATE_WIRE_ID": "stale-candidate",
-                "TINKLE_SCHEMA_CANDIDATE_MEDIA_CONTRACT": "singular-thumbnail-v1",
-            }):
-                commands = self.generate(async_actions=actions)
-            evidence = json.loads((self.output / "candidate.json").read_text())
-            self.assertEqual(evidence["wire_identity"], "compact-wire-reset-v1")
-            for command, options in commands:
-                if command[0] != "buf":
-                    self.assertEqual(options["env"]["TINKLE_SCHEMA_CANDIDATE_WIRE_ID"], "compact-wire-reset-v1")
-            if not actions:
-                self.assertEqual(commands[-1][1]["env"]["TINKLE_SCHEMA_CANDIDATE_MEDIA_CONTRACT"], "")
+    def test_reset_identity_overrides_stale_environment(self):
+        with patch.dict("os.environ", {
+            "TINKLE_SCHEMA_CANDIDATE_WIRE_ID": "stale-candidate",
+            "TINKLE_SCHEMA_CANDIDATE_MEDIA_CONTRACT": "singular-thumbnail-v1",
+        }):
+            commands = self.generate()
+        evidence = json.loads((self.output / "candidate.json").read_text())
+        self.assertEqual(evidence["wire_identity"], "compact-wire-reset-v1")
+        for command, options in commands:
+            if command[0] != "buf":
+                self.assertEqual(options["env"]["TINKLE_SCHEMA_CANDIDATE_WIRE_ID"], "compact-wire-reset-v1")
 
     def test_generator_uses_one_isolated_source_snapshot(self):
         """Both generation operations consume the same frozen source, never the live checkout."""
@@ -133,10 +127,17 @@ class SchemaCandidateTests(unittest.TestCase):
             json.loads((self.output / "candidate.json").read_text())["schema_source_sha256"], before
         )
 
-    def test_default_commands_never_inherit_candidate_action_capability(self):
-        with patch.dict("os.environ", {"TINKLE_SCHEMA_CANDIDATE_ASYNC_ACTIONS": "1"}):
-            commands = self.generate()
-        self.assertEqual(commands[-1][1]["env"]["TINKLE_SCHEMA_CANDIDATE_ASYNC_ACTIONS"], "0")
+    def test_candidate_requires_explicit_actions_before_creating_output(self):
+        stderr = io.StringIO()
+        with patch.dict("os.environ", {"TINKLE_SCHEMA_CANDIDATE_ASYNC_ACTIONS": "1"}), \
+                patch.object(sys, "argv", [str(self.script), "--output", str(self.output)]), \
+                patch("subprocess.run") as invoke, patch.object(sys, "stderr", stderr):
+            with self.assertRaises(SystemExit) as error:
+                runpy.run_path(str(self.script), run_name="__main__")
+            self.assertEqual(error.exception.code, 2)
+            self.assertIn("required: --async-actions", stderr.getvalue())
+            invoke.assert_not_called()
+        self.assertFalse(self.output.exists())
 
     def test_repeat_copy_removes_deleted_sources(self):
         workspace = self.output / "workspace"
@@ -170,7 +171,7 @@ class SchemaCandidateTests(unittest.TestCase):
     def test_output_cannot_overwrite_sources_or_repository_ancestors(self):
         for output in (self.root / "crates", self.root / "scripts", self.root.parent):
             with self.subTest(output=output), patch.object(sys, "argv", [
-                str(self.script), "--output", str(output)
+                str(self.script), "--async-actions", "--output", str(output)
             ]), patch("subprocess.run") as invoke:
                 with self.assertRaisesRegex(SystemExit, "separate temporary/build directory"):
                     runpy.run_path(str(self.script), run_name="__main__")
@@ -194,19 +195,17 @@ class SchemaCfgTests(unittest.TestCase):
         env.update({"TINKLE_SCHEMA_CANDIDATE_" + key: value for key, value in variables.items()})
         return subprocess.run([str(self.binary)], env=env, capture_output=True, text=True)
 
-    def test_published_and_both_candidate_modes_have_exact_identity(self):
-        """Only explicit reset input enables candidate caches; actions remain independent."""
+    def test_published_and_explicit_candidate_have_same_contract(self):
+        """Selecting a registry or isolated source does not change the wire contract."""
         published = self.configure()
         self.assertEqual(published.returncode, 0, published.stderr)
-        self.assertIn("cargo:rustc-env=TINKLE_SCHEMA_WIRE_ID=published-media-v1", published.stdout)
-        self.assertNotIn("cargo:rustc-cfg=tinkle_schema_candidate", published.stdout)
-        for actions in ("0", "1"):
-            result = self.configure(WIRE_ID="compact-wire-reset-v1", ASYNC_ACTIONS=actions,
-                                    MEDIA_CONTRACT="singular-thumbnail-compact-wire-reset-v1" if actions == "1" else "")
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("cargo:rustc-env=TINKLE_SCHEMA_WIRE_ID=compact-wire-reset-v1", result.stdout)
-            self.assertIn("cargo:rustc-cfg=tinkle_schema_candidate", result.stdout)
-            self.assertEqual("cargo:rustc-cfg=tinkle_async_actions" in result.stdout, actions == "1")
+        self.assertIn("cargo:rustc-env=TINKLE_SCHEMA_WIRE_ID=compact-wire-reset-v1", published.stdout)
+        self.assertIn("cargo:rustc-cfg=tinkle_schema_candidate", published.stdout)
+        self.assertIn("cargo:rustc-cfg=tinkle_async_actions", published.stdout)
+        candidate = self.configure(WIRE_ID="compact-wire-reset-v1", ASYNC_ACTIONS="1",
+                                   MEDIA_CONTRACT="singular-thumbnail-compact-wire-reset-v1")
+        self.assertEqual(candidate.returncode, 0, candidate.stderr)
+        self.assertEqual(candidate.stdout, published.stdout)
 
     def test_invalid_or_incomplete_build_flags_fail_closed(self):
         """Typos and the previous candidate capability cannot fall back to published identity."""
@@ -217,21 +216,10 @@ class SchemaCfgTests(unittest.TestCase):
             {"WIRE_ID": "compact-wire-reset-v1", "ASYNC_ACTIONS": "1"},
             {"WIRE_ID": "compact-wire-reset-v1", "ASYNC_ACTIONS": "1", "MEDIA_CONTRACT": "singular-thumbnail-v1"},
             {"MEDIA_CONTRACT": "singular-thumbnail-compact-wire-reset-v1"},
+            {"WIRE_ID": "compact-wire-reset-v1", "ASYNC_ACTIONS": "0"},
         ):
             with self.subTest(variables=variables):
                 self.assertNotEqual(self.configure(**variables).returncode, 0)
-
-    def test_nonasync_reset_runtime_refuses_unsupported_adapter(self):
-        """Storage's independent wire gate works without claiming nonasync runtime support."""
-        for package in ("libtinkle", "tinkle-ffi", "tinkle-storage"):
-            with self.subTest(package=package), patch.dict("os.environ", {"CARGO_PKG_NAME": package}):
-                result = self.configure(WIRE_ID="compact-wire-reset-v1", ASYNC_ACTIONS="0")
-            if package == "tinkle-storage":
-                self.assertEqual(result.returncode, 0, result.stderr)
-            else:
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("nonasync reset runtime is unsupported", result.stderr)
-
 
 if __name__ == "__main__":
     unittest.main()

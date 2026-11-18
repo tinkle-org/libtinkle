@@ -1,7 +1,7 @@
 //! Durable domain-key recovery, cancellation races and independent accepted identities.
 #![cfg(tinkle_async_actions)]
 mod support;
-use libtinkle::{Client, OutgoingRequest, OutgoingState as S, SendRetry, Storage};
+use libtinkle::{Client, OutgoingRequest, OutgoingState as S, SendError, SendRetry, Storage};
 use prost::Message;
 use std::sync::{
     atomic::{AtomicI32, Ordering},
@@ -678,6 +678,66 @@ async fn invalid_domain_inputs_and_unknown_fields_never_create_jobs() {
         .await
         .is_err());
     assert!(client.sending().jobs().await.unwrap().is_empty());
+    client.close().await;
+}
+
+#[tokio::test]
+async fn durable_sticker_update_requires_source_or_fallback_and_validates_present_source() {
+    let client = Client::new_sqlite(
+        support::config("127.0.0.1:1".parse().unwrap()),
+        support::source(),
+        Arc::new(Storage::open_in_memory().unwrap()),
+    );
+    client.set_principal_user_id(42).await;
+    let sending = client.sending();
+    let request = p::UpdateStickerAssetRequest {
+        asset_id: 31,
+        expected_version: 5,
+        request_id: UUID.into(),
+        ..Default::default()
+    };
+    assert!(matches!(
+        sending
+            .enqueue_update_asset("empty".into(), request.clone())
+            .await,
+        Err(SendError::InvalidRequest)
+    ));
+    let fallback_only = p::UpdateStickerAssetRequest {
+        fallback_text: Some(String::new()),
+        ..request.clone()
+    };
+    let invalid_source = p::UpdateStickerAssetRequest {
+        source: Some(p::StickerAssetSource {
+            file_id: 0,
+            ..asset().unwrap()
+        }),
+        ..fallback_only.clone()
+    };
+    assert!(sending
+        .enqueue_update_asset("bad-source".into(), invalid_source)
+        .await
+        .is_err());
+    assert!(sending.jobs().await.unwrap().is_empty());
+
+    for (id, request) in [
+        ("fallback-only", fallback_only),
+        (
+            "source-only",
+            p::UpdateStickerAssetRequest {
+                source: asset(),
+                ..request
+            },
+        ),
+    ] {
+        assert_eq!(
+            sending
+                .enqueue_update_asset(id.into(), request)
+                .await
+                .unwrap()
+                .state,
+            S::ActionPrepared
+        );
+    }
     client.close().await;
 }
 
@@ -1469,10 +1529,9 @@ fn action_hint_cases() -> Vec<HintCase> {
     cases
 }
 
-/// In-flight hints require another read. Restart refreshes photo/asset actions, but does not
-/// poll settled sends with no remaining hydration, or retransmit any mutation.
+/// In-flight hints require another read. Restart polls only pending work and sends due for hydration.
 #[tokio::test]
-async fn status_pushes_redemand_inflight_reads_and_restart_skips_settled_sends() {
+async fn status_pushes_redemand_inflight_reads_and_restart_skips_settled_actions() {
     use std::sync::atomic::AtomicUsize;
     use syntra_core::secure_channel::{self, Mode, Secret32};
     use syntra_runtime::{ConnectionConfig, FnHandler, HandlerOutcome};
@@ -1486,6 +1545,12 @@ async fn status_pushes_redemand_inflight_reads_and_restart_skips_settled_sends()
         }
     }
     let cases = Arc::new(action_hint_cases());
+    // Keep the last job pending so the first recovery rotation must pass every settled job.
+    let pending_index = cases.len() - 1;
+    let hydration_index = cases
+        .iter()
+        .position(|c| c.submit.ends_with("/SendMedia"))
+        .unwrap();
     let queries = Arc::new(
         (0..cases.len())
             .map(|_| AtomicUsize::new(0))
@@ -1552,6 +1617,8 @@ async fn status_pushes_redemand_inflight_reads_and_restart_skips_settled_sends()
                         if connection == 0 && count == 0 {
                             entered.send(index).await.unwrap();
                             gate.notified().await;
+                            c.queried_pending.clone()
+                        } else if connection == 0 && index == pending_index {
                             c.queried_pending.clone()
                         } else {
                             c.queried_success.clone()
@@ -1663,10 +1730,18 @@ async fn status_pushes_redemand_inflight_reads_and_restart_skips_settled_sends()
             Some(i)
         );
         host.notify(c.hint.clone()).await.unwrap();
-        let event = tokio::time::timeout(std::time::Duration::from_secs(2), client.next_event())
-            .await
-            .unwrap()
-            .unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let event = client.next_event().await.unwrap();
+                // Local send receipt notices can be queued ahead of the server hint.
+                if !matches!(&event, libtinkle::SyncEvent::SendStatusChanged(v) if v.notification.revision != 999)
+                {
+                    break event;
+                }
+            }
+        })
+        .await
+        .unwrap();
         assert!(matches!(
             event,
             libtinkle::SyncEvent::SendStatusChanged(_)
@@ -1681,40 +1756,66 @@ async fn status_pushes_redemand_inflight_reads_and_restart_skips_settled_sends()
         );
         release.notify_one();
         let completed = waiter.await.unwrap().unwrap();
-        assert_eq!(completed.state, S::ActionSucceeded, "{}", c.submit);
+        let expected = if i == pending_index {
+            S::ActionPending
+        } else {
+            S::ActionSucceeded
+        };
+        assert_eq!(completed.state, expected, "{}", c.submit);
         assert_eq!(queries[i].load(Ordering::SeqCst), 2);
     }
+    // Simulate a restart after receipt commit but before hydration acknowledges that revision.
+    let send = client
+        .sending()
+        .get(format!("hint-{hydration_index}"))
+        .await
+        .unwrap();
+    assert!(storage
+        .transition_outgoing_action("user:42", &send, S::ActionSucceeded, &send.response, None)
+        .unwrap());
+    assert_eq!(
+        storage.send_hydration_due("user:42", &send.source).unwrap(),
+        [send.job_id]
+    );
     client.close().await;
     drop(client);
     drop(storage);
-    let client = Client::new_sqlite(
-        config,
-        source(),
-        Arc::new(Storage::open(path.to_str().unwrap()).unwrap()),
-    );
+    let storage = Arc::new(Storage::open(path.to_str().unwrap()).unwrap());
+    let client = Client::new_sqlite(config, source(), storage.clone());
     client.set_principal_user_id(42).await;
     client.start(vec![]).await.unwrap();
     let _host = host_rx.recv().await.unwrap();
-    let lookups = cases.iter().zip(queries.iter());
+    let pending_id = format!("hint-{pending_index}");
     tokio::time::timeout(std::time::Duration::from_secs(45), async {
-        while lookups
-            .clone()
-            .filter(|(c, _)| !c.query.ends_with("/GetSendStatus"))
-            .any(|(_, n)| n.load(Ordering::SeqCst) < 3)
+        while client
+            .sending()
+            .get(pending_id.clone())
+            .await
+            .unwrap()
+            .state
+            != S::ActionSucceeded
         {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     })
     .await
     .unwrap();
-    for (c, n) in lookups.filter(|(c, _)| c.query.ends_with("/GetSendStatus")) {
+    for (i, (c, n)) in cases.iter().zip(queries.iter()).enumerate() {
         assert_eq!(
             n.load(Ordering::SeqCst),
-            2,
-            "{} was already settled",
+            if i == pending_index || i == hydration_index {
+                3
+            } else {
+                2
+            },
+            "unexpected lookup count for {}",
             c.submit
         );
     }
+    assert!(storage
+        .send_hydration_due("user:42", &send.source)
+        .unwrap()
+        .is_empty());
     assert_eq!(submits.load(Ordering::SeqCst), cases.len());
     for j in client.sending().jobs().await.unwrap() {
         assert_eq!(j.state, S::ActionSucceeded);

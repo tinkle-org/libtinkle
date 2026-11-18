@@ -710,6 +710,7 @@ asset_action!(
         if !uuid(&r.request_id)
             || r.asset_id <= 0
             || r.expected_version == 0
+            || (r.source.is_none() && r.fallback_text.is_none())
             || r.fallback_text.as_ref().is_some_and(|v| v.len() > 64)
         {
             return Err(SendError::InvalidRequest);
@@ -1179,7 +1180,7 @@ impl Sending<'_> {
                             p::SendMediaRequest::METHOD | p::SendAlbumRequest::METHOD => {
                                 hydration.contains(&j.job_id)
                             }
-                            _ => true,
+                            _ => false,
                         },
                         _ => false,
                     })

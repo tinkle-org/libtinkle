@@ -350,6 +350,31 @@ fn raw_send_message_validation_allows_zero_key_without_weakening_unknown_field_r
     assert!(tinkle_schema::wire::validate_request(method, &bytes).is_err());
 }
 
+#[test]
+fn raw_send_media_accepts_poll_close_date_and_rejects_unknown_timestamp_fields() {
+    use tinkle_schema::wire::{validate_message, validate_request};
+
+    let request = p::SendMediaRequest {
+        media: Some(p::MediaSource {
+            media: Some(p::media_source::Media::Poll(p::PollSource {
+                close_date: Some(prost_types::Timestamp {
+                    seconds: 2_000_000_000,
+                    nanos: 1,
+                }),
+                ..Default::default()
+            })),
+        }),
+        ..Default::default()
+    };
+    validate_request(
+        "/tinkle.v1.MessagesService/SendMedia",
+        &request.encode_to_vec(),
+    )
+    .unwrap();
+    // PollSource.close_date with valid seconds and an unknown Timestamp field 3.
+    assert!(validate_message(".tinkle.v1.PollSource", &[0x3a, 4, 8, 1, 24, 1]).is_err());
+}
+
 /// Both hint types are demands only, and representation marker revisions never advance a cursor.
 #[test]
 fn representation_hints_and_journal_revision_presence_validate() {
