@@ -8,13 +8,16 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
     },
+    time::Duration,
 };
 use tinkle_schema::proto as p;
+use tokio::sync::Barrier;
 
 #[derive(Default)]
 struct Session {
     size: i64,
     parts: BTreeMap<i64, Vec<u8>>,
+    first_two: Option<Arc<Barrier>>,
 }
 fn reply(bytes: Vec<u8>) -> syntra_core::proto::Frame {
     syntra_core::proto::Frame {
@@ -64,6 +67,7 @@ async fn all_file_purposes_share_legal_parts_exact_bytes_and_server_parallelism(
                             .entry(q.idempotency_key.clone())
                             .or_insert(Session {
                                 size: q.size_bytes,
+                                first_two: (q.size_bytes > part).then(|| Arc::new(Barrier::new(2))),
                                 ..Default::default()
                             });
                         return reply(
@@ -100,14 +104,32 @@ async fn all_file_purposes_share_legal_parts_exact_bytes_and_server_parallelism(
                         let n = active.fetch_add(1, Ordering::SeqCst) + 1;
                         assert!(n <= 2);
                         max.fetch_max(n, Ordering::SeqCst);
-                        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                        // Neither initial part may reply until its peer arrives. A serial
+                        // uploader must fail, regardless of disk or network scheduling.
+                        let first_two = if q.part_index < 2 {
+                            sessions.lock().unwrap()[&q.upload_id].first_two.clone()
+                        } else {
+                            None
+                        };
+                        if let Some(first_two) = first_two {
+                            assert!(
+                                tokio::time::timeout(Duration::from_secs(5), first_two.wait())
+                                    .await
+                                    .is_ok(),
+                                "first two parts did not overlap for {} (part size {part})",
+                                q.upload_id,
+                            );
+                        }
                         {
                             let mut s = sessions.lock().unwrap();
                             let session = s.get_mut(&q.upload_id).unwrap();
                             let expected = (session.size - q.part_index * part).min(part);
                             assert_eq!(q.data.len() as i64, expected);
                             assert_eq!(q.sha256.unwrap().as_ref(), libtinkle::sha256(&q.data));
-                            session.parts.insert(q.part_index, q.data.to_vec());
+                            assert!(session
+                                .parts
+                                .insert(q.part_index, q.data.to_vec())
+                                .is_none());
                         }
                         active.fetch_sub(1, Ordering::SeqCst);
                         return reply(
