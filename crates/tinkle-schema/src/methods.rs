@@ -10,6 +10,66 @@
 /// All known Tinkle methods with request/response type names.
 /// `(method, request, response)`; descriptors for codegen.
 pub const ALL_METHODS: &[(&str, &str, &str)] = &[
+    #[cfg(tinkle_async_actions)]
+    (
+        "/tinkle.v1.MessagesService/GetSendStatus",
+        "GetSendStatusRequest",
+        "GetSendStatusResponse",
+    ),
+    #[cfg(tinkle_async_actions)]
+    (
+        "/tinkle.v1.MessagesService/CancelSend",
+        "CancelSendRequest",
+        "CancelSendResponse",
+    ),
+    #[cfg(tinkle_async_actions)]
+    (
+        "/tinkle.v1.MessagesService/GetChatPhotoUpdate",
+        "GetChatPhotoUpdateRequest",
+        "GetChatPhotoUpdateResponse",
+    ),
+    #[cfg(tinkle_async_actions)]
+    (
+        "/tinkle.v1.MessagesService/CancelChatPhotoUpdate",
+        "CancelChatPhotoUpdateRequest",
+        "CancelChatPhotoUpdateResponse",
+    ),
+    #[cfg(tinkle_async_actions)]
+    (
+        "/tinkle.v1.ChannelsService/GetPhotoUpdate",
+        "GetPhotoUpdateRequest",
+        "GetPhotoUpdateResponse",
+    ),
+    #[cfg(tinkle_async_actions)]
+    (
+        "/tinkle.v1.ChannelsService/CancelPhotoUpdate",
+        "CancelPhotoUpdateRequest",
+        "CancelPhotoUpdateResponse",
+    ),
+    #[cfg(tinkle_async_actions)]
+    (
+        "/tinkle.v1.AccountService/GetProfilePhotoUpdate",
+        "GetProfilePhotoUpdateRequest",
+        "GetProfilePhotoUpdateResponse",
+    ),
+    #[cfg(tinkle_async_actions)]
+    (
+        "/tinkle.v1.AccountService/CancelProfilePhotoUpdate",
+        "CancelProfilePhotoUpdateRequest",
+        "CancelProfilePhotoUpdateResponse",
+    ),
+    #[cfg(tinkle_async_actions)]
+    (
+        "/tinkle.v1.StickersService/GetAssetChange",
+        "GetAssetChangeRequest",
+        "GetAssetChangeResponse",
+    ),
+    #[cfg(tinkle_async_actions)]
+    (
+        "/tinkle.v1.StickersService/CancelAssetChange",
+        "CancelAssetChangeRequest",
+        "CancelAssetChangeResponse",
+    ),
     (
         "/tinkle.v1.MessagesService/GetScheduledMessages",
         "GetScheduledMessagesRequest",

@@ -749,7 +749,48 @@ async fn all_messages_methods_cross_the_encrypted_boundary() {
         .filter(|(m, _, _)| m.starts_with("/tinkle.v1.MessagesService/"))
         .map(|(m, _, _)| m.to_string())
         .collect();
-    assert_eq!(expected.len(), 43);
+    #[cfg(tinkle_async_actions)]
+    for method in [
+        "GetSendStatus",
+        "CancelSend",
+        "GetChatPhotoUpdate",
+        "CancelChatPhotoUpdate",
+    ] {
+        // These actor-private methods require conforming status snapshots, exercised in action tests.
+        let bytes = match method {
+            "GetSendStatus" => p::GetSendStatusRequest {
+                target,
+                idempotency_key: 1,
+            }
+            .encode_to_vec(),
+            "CancelSend" => p::CancelSendRequest {
+                target,
+                idempotency_key: 1,
+            }
+            .encode_to_vec(),
+            "GetChatPhotoUpdate" => p::GetChatPhotoUpdateRequest {
+                chat_id: 7,
+                operation_id: 1,
+            }
+            .encode_to_vec(),
+            _ => p::CancelChatPhotoUpdateRequest {
+                chat_id: 7,
+                operation_id: 1,
+            }
+            .encode_to_vec(),
+        };
+        c.call_raw(
+            &format!("/tinkle.v1.MessagesService/{method}"),
+            bytes,
+            30_000,
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(
+        expected.len(),
+        if cfg!(tinkle_async_actions) { 47 } else { 43 }
+    );
     assert_eq!(*seen.lock().unwrap(), expected);
     c.close().await;
     server.await.unwrap();
@@ -790,6 +831,8 @@ async fn metadata_revisions_and_filtered_horizon_cross_encrypted_reconciliation(
                         if r.after_accept_seq == 0 {
                             p::ListMessageChangesResponse {
                                 changes: vec![p::TargetChange {
+                                    #[cfg(tinkle_async_actions)]
+                                    representation_revision: None,
                                     message_id: 1,
                                     kind: p::TargetChangeKind::Pin as i32,
                                     message: Some(updated),

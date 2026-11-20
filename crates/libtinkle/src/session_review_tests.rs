@@ -1,7 +1,7 @@
 //! Real encrypted TCP review reads, typed Any hints, and uncertain confirmation ordering.
 #[path = "../tests/support/mod.rs"]
 #[allow(dead_code)] // Shared Bootstrap helpers are unused by this Returning-only fixture.
-mod support;
+pub(crate) mod support;
 use crate::{Client, InMemoryCursorStore, TrustSource};
 use prost::Message;
 use std::sync::{

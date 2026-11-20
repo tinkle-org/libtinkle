@@ -224,6 +224,7 @@ fn reply(value: Option<&p::ReplyInput>) -> Result<(), TinkleError> {
 }
 
 /// Validate completed-file references and bounded variant identities, never upload IDs/paths.
+#[cfg(not(tinkle_async_actions))]
 fn variants(values: &[p::MediaVariantSource]) -> Result<(), TinkleError> {
     let mut roles = std::collections::HashSet::new();
     let mut files = std::collections::HashSet::new();
@@ -237,25 +238,57 @@ fn variants(values: &[p::MediaVariantSource]) -> Result<(), TinkleError> {
     Ok(())
 }
 
+/// Candidate sources carry one optional completed thumbnail, with mandatory positive dimensions.
+#[cfg(tinkle_async_actions)]
+pub(crate) fn thumbnail(
+    main: i64,
+    value: Option<&p::ThumbnailSource>,
+    edge: u32,
+) -> Result<(), TinkleError> {
+    require(
+        value.is_none_or(|v| {
+            v.file_id > 0
+                && v.file_id != main
+                && (1..=edge).contains(&v.width)
+                && (1..=edge).contains(&v.height)
+        }),
+        "invalid thumbnail",
+    )
+}
+
+/// Keep the published artifact's private compatibility path out of candidate source assembly.
+macro_rules! source_thumbnail {
+    ($source:expr, $edge:expr) => {{
+        #[cfg(tinkle_async_actions)]
+        {
+            thumbnail($source.file_id, $source.thumbnail.as_ref(), $edge)
+        }
+        #[cfg(not(tinkle_async_actions))]
+        {
+            variants(&$source.variants)
+        }
+    }};
+}
+
 /// Validate the typed attachment shape. Ownership, actual media bytes and permissions remain server checks.
 pub(crate) fn validate_media(value: Option<&p::MediaSource>) -> Result<(), TinkleError> {
     use p::media_source::Media;
     match value.and_then(|m| m.media.as_ref()) {
         Some(Media::Photo(v)) => {
             require(v.file_id > 0, "invalid photo file")?;
-            variants(&v.variants)
+            source_thumbnail!(v, 320)
         }
         Some(Media::Document(v)) => {
             require(v.file_id > 0 && v.attributes.len() <= 8, "invalid document")?;
-            variants(&v.variants)
+            source_thumbnail!(v, 320)
         }
         Some(Media::Video(v)) => {
             require(v.file_id > 0, "invalid video file")?;
-            variants(&v.variants)
+            source_thumbnail!(v, 320)
         }
         Some(Media::Audio(v)) => {
             require(v.file_id > 0, "invalid audio file")?;
-            variants(&v.variants)
+            source_thumbnail!(v, 320)
         }
         Some(Media::Voice(v)) => require(
             v.file_id > 0
@@ -273,7 +306,7 @@ pub(crate) fn validate_media(value: Option<&p::MediaSource>) -> Result<(), Tinkl
                     },
                 "invalid sticker exact version",
             )?;
-            variants(&v.variants)
+            source_thumbnail!(v, 128)
         }
         Some(Media::Geo(v)) => require(
             v.lat.is_finite()
@@ -365,6 +398,8 @@ macro_rules! typed_methods {
             #[doc = concat!("Validate and invoke `", $service, "/", $wire, "` once; no mutation replay.")]
             pub async fn $method(&self, $r: p::$req) -> Result<p::$resp, TinkleError> {
                 $validate
+                #[cfg(all(tinkle_async_actions,not(target_arch="wasm32")))]
+                crate::sending::actions::validate_direct(concat!("/tinkle.v1.",$service,"/",$wire),&$r.encode_to_vec()).map_err(|_|TinkleError::Codec("invalid domain action request".into()))?;
                 call_typed(self.client, concat!("/tinkle.v1.", $service, "/", $wire), &$r, 30_000).await
             }
         )* }
@@ -396,7 +431,7 @@ where
 
 /// Messages service (`/tinkle.v1.MessagesService/*`).
 pub struct Messages<'a> {
-    client: &'a Client,
+    pub(crate) client: &'a Client,
 }
 
 impl<'a> Messages<'a> {
@@ -580,7 +615,7 @@ typed_methods! { Messages, "MessagesService",
         match r.photo.as_ref().and_then(|p| p.input.as_ref()) {
             Some(p::chat_photo_source::Input::FileId(id)) => require(*id > 0, "invalid photo file")?,
             Some(p::chat_photo_source::Input::Empty(true)) => {},
-            Some(p::chat_photo_source::Input::Photo(p)) => { require(p.file_id > 0, "invalid photo file")?; variants(&p.variants)?; },
+            Some(p::chat_photo_source::Input::Photo(p)) => { require(p.file_id > 0, "invalid photo file")?; source_thumbnail!(p, 160)?; },
             _ => return Err(TinkleError::Codec("photo source required".into())),
         }
     };
@@ -649,7 +684,7 @@ typed_methods! { Users, "UsersService",
 
 /// Account session management on the authenticated channel.
 pub struct Account<'a> {
-    client: &'a Client,
+    pub(crate) client: &'a Client,
 }
 
 impl<'a> Account<'a> {
@@ -747,7 +782,8 @@ typed_methods! { Account, "AccountService",
         require(source.file_id > 0, "invalid photo file")?;
         let m = source.metadata.as_ref().ok_or_else(|| TinkleError::Codec("photo metadata required".into()))?;
         require(m.width > 0 && m.height > 0 && m.width <= 4096 && m.height <= 4096 && !m.animated && (1..=2).contains(&m.format), "invalid photo metadata")?;
-        validation(m.validation.as_ref())?; variants(&source.variants)?;
+        validation(m.validation.as_ref())?; source_thumbnail!(source, 160)?;
+        #[cfg(not(tinkle_async_actions))]
         require(source.variants.len() <= 1 && source.variants.iter().all(|v| v.role==1 && v.file_id!=source.file_id && v.width.is_some_and(|n|(1..=160).contains(&n)) && v.height.is_some_and(|n|(1..=160).contains(&n))), "invalid profile thumbnail")?;
     };
     get_profile_photos(GetProfilePhotosRequest) -> GetProfilePhotosResponse, "GetProfilePhotos", |r| { require(r.user_id.is_none_or(|v| v > 0), "invalid profile user")?; };
@@ -757,7 +793,7 @@ typed_methods! { Account, "AccountService",
 
 /// Sticker and custom-emoji catalog and owner authoring on the authenticated channel.
 pub struct Stickers<'a> {
-    client: &'a Client,
+    pub(crate) client: &'a Client,
 }
 impl<'a> Stickers<'a> {
     /// Bind catalog operations to the same principal and transport as Messages.
@@ -775,7 +811,7 @@ fn validation(v: Option<&p::MediaValidation>) -> Result<(), TinkleError> {
 }
 
 /// Validate authored metadata without claiming a client assertion proves file validity/ownership.
-fn asset(source: Option<&p::StickerAssetSource>, kind: i32) -> Result<(), TinkleError> {
+pub(crate) fn asset(source: Option<&p::StickerAssetSource>, kind: i32) -> Result<(), TinkleError> {
     let s = source.ok_or_else(|| TinkleError::Codec("asset source required".into()))?;
     let m = s
         .metadata
@@ -799,7 +835,8 @@ fn asset(source: Option<&p::StickerAssetSource>, kind: i32) -> Result<(), Tinkle
         "invalid sticker metadata",
     )?;
     validation(m.validation.as_ref())?;
-    variants(&s.variants)?;
+    source_thumbnail!(s, 128)?;
+    #[cfg(not(tinkle_async_actions))]
     require(
         s.variants.len() <= 1
             && s.variants.iter().all(|v| {
@@ -809,7 +846,8 @@ fn asset(source: Option<&p::StickerAssetSource>, kind: i32) -> Result<(), Tinkle
                     && v.height.is_some_and(|n| (1..=128).contains(&n))
             }),
         "invalid asset thumbnail",
-    )
+    )?;
+    Ok(())
 }
 
 /// Short names are ASCII identifiers, case-insensitive on the server.
@@ -1050,6 +1088,11 @@ impl<'a> Files<'a> {
         &self,
         req: tinkle_schema::proto::BeginUploadRequest,
     ) -> Result<tinkle_schema::proto::BeginUploadResponse, TinkleError> {
+        #[cfg(tinkle_async_actions)]
+        require(
+            req.processing_intent.is_none_or(|v| matches!(v, 1 | 2)),
+            "invalid processing intent",
+        )?;
         if req.idempotency_key.is_empty() {
             return Err(TinkleError::Codec(
                 "BeginUploadRequest.idempotency_key must be non-empty".to_string(),
@@ -1266,5 +1309,29 @@ impl<'a> Updates<'a> {
             30_000,
         )
         .await
+    }
+}
+
+#[cfg(all(test, tinkle_async_actions, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    /// Synchronous viewer deletion must pass the shared action guard without becoming a send action.
+    #[test]
+    fn direct_action_guard_accepts_viewer_deletion_with_revoke() {
+        let request = p::DeleteMessagesRequest {
+            target: Some(p::Target {
+                kind: Some(p::target::Kind::UserId(1)),
+            }),
+            message_ids: vec![10],
+            revoke: Some(true),
+        };
+        validate_target(request.target.as_ref()).unwrap();
+        ids(&request.message_ids, 100, false).unwrap();
+        crate::sending::actions::validate_direct(
+            "/tinkle.v1.MessagesService/DeleteMessages",
+            &request.encode_to_vec(),
+        )
+        .unwrap();
     }
 }

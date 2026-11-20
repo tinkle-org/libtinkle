@@ -8,7 +8,11 @@
 
 pub mod methods;
 pub mod proto;
+#[cfg(tinkle_async_actions)]
+pub mod representations;
 pub mod sync;
+#[cfg(tinkle_async_actions)]
+pub mod wire;
 
 pub use sync::{
     accept_seq_decision, chunk_message_ids, fresher_body, target_from_parts, target_key_for,

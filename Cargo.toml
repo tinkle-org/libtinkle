@@ -48,4 +48,4 @@ crc32fast = "=1.5.5"
 
 # BSR-generated bindings (public index, no token).
 # Versions pinned from `buf registry sdk version` (see PROTO_PINNING.md).
-tinkle-org_schema_community_neoeinstein-prost = { version = "=0.5.0-20261112172535-6099d89af63f.2", registry = "buf" }
+tinkle-org_schema_community_neoeinstein-prost = { version = "=0.5.0-20261118031328-a03ec89f7e36.2", registry = "buf" }

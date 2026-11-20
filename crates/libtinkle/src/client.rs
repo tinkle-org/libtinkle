@@ -339,6 +339,7 @@ mod sending_scope_capture_regressions {
                 .unwrap();
         let artifact = crate::media::NativePreparedMedia {
             main,
+            tiny_preview: None,
             kind: crate::media::NativeMediaKind::Image,
             output: crate::media::NativeMediaOutput {
                 width: 1,
@@ -349,6 +350,7 @@ mod sending_scope_capture_regressions {
                 audio_sample_rate: 0,
                 audio_samples: 0,
                 waveform: vec![],
+                thumbnail_frame: None,
             },
         };
         let pause = client.catchup_pending.lock().await;
@@ -884,6 +886,12 @@ impl Client {
         caller
     }
 
+    /// Inherit a supervisor's socket bound when entering the ordinary send recovery API.
+    #[cfg(tinkle_async_actions)]
+    pub(crate) fn bound_send_generation(&self) -> Option<Arc<LiveGeneration>> {
+        self.call_generation.clone()
+    }
+
     /// Preserve the originating principal/source through nested transfer callers.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn for_application_scope(&self, epoch: u64, revision: u64) -> Self {
@@ -1115,9 +1123,8 @@ impl Client {
         self.reconcile_epoch.load(Ordering::SeqCst)
     }
 
-    /// Wasm stub: no SQLite commit gate exists on wasm, so there is no
-    /// epoch to invalidate; callers only thread the value into native-only
-    /// paths.
+    /// Wasm has no SQLite commit epoch. Candidate notification fences pair this
+    /// value with the current manager, principal and source revision instead.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn reconcile_epoch(&self) -> u64 {
         0
@@ -1549,7 +1556,7 @@ impl Client {
         let pump_state = self.session_state.clone();
         #[cfg(not(target_arch = "wasm32"))]
         let effects = self.reaction_effects.clone();
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(not(target_arch = "wasm32"), tinkle_async_actions))]
         let effect_epoch = self.reconcile_epoch();
         #[cfg(not(target_arch = "wasm32"))]
         let current_epoch = self.reconcile_epoch.clone();
@@ -1559,7 +1566,64 @@ impl Client {
         let effect_authority = self.authorization.clone();
         let pump = AbortTask::new(tokio::spawn(async move {
             while let Some(payload) = pump_conn.next_notification().await {
+                #[cfg(tinkle_async_actions)]
+                macro_rules! emit_hint {
+                    ($kind:ident, $value:expr) => {
+                        if pump_generation.returning
+                            && principal != UNKNOWN_PRINCIPAL
+                            && pump_generation.open.load(Ordering::SeqCst)
+                        {
+                            pump_mgr.mark_action_hint();
+                            pump_mgr
+                                .emit_event(SyncEvent::$kind(crate::sync::MediaHintEvent {
+                                    notification: $value,
+                                    principal: principal.clone(),
+                                    epoch: effect_epoch,
+                                    source_revision: pump_generation.source_revision,
+                                }))
+                                .await;
+                        }
+                    };
+                }
                 match tinkle_schema::sync::notification(&payload) {
+                    #[cfg(tinkle_async_actions)]
+                    Ok(tinkle_schema::sync::Notification::SendStatusChanged(value)) => {
+                        emit_hint!(SendStatusChanged, value);
+                    }
+                    #[cfg(tinkle_async_actions)]
+                    Ok(tinkle_schema::sync::Notification::ChatPhotoUpdateChanged(value)) => {
+                        emit_hint!(ChatPhotoUpdateChanged, value);
+                    }
+                    #[cfg(tinkle_async_actions)]
+                    Ok(tinkle_schema::sync::Notification::ChannelPhotoUpdateChanged(value)) => {
+                        emit_hint!(ChannelPhotoUpdateChanged, value);
+                    }
+                    #[cfg(tinkle_async_actions)]
+                    Ok(tinkle_schema::sync::Notification::ProfilePhotoUpdateChanged(value)) => {
+                        emit_hint!(ProfilePhotoUpdateChanged, value);
+                    }
+                    #[cfg(tinkle_async_actions)]
+                    Ok(tinkle_schema::sync::Notification::AssetChangeChanged(value)) => {
+                        emit_hint!(AssetChangeChanged, value);
+                    }
+                    #[cfg(tinkle_async_actions)]
+                    Ok(tinkle_schema::sync::Notification::ProfilePhotoRepresentationChanged(
+                        value,
+                    )) => {
+                        emit_hint!(ProfilePhotoRepresentationChanged, value);
+                    }
+                    #[cfg(tinkle_async_actions)]
+                    Ok(tinkle_schema::sync::Notification::ChatPhotoRepresentationChanged(
+                        value,
+                    )) => {
+                        emit_hint!(ChatPhotoRepresentationChanged, value);
+                    }
+                    #[cfg(tinkle_async_actions)]
+                    Ok(tinkle_schema::sync::Notification::StickerAssetRepresentationChanged(
+                        value,
+                    )) => {
+                        emit_hint!(StickerAssetRepresentationChanged, value);
+                    }
                     Ok(tinkle_schema::sync::Notification::MessageChanged(notification)) => {
                         // Reconciliation is independent of effect validity, expiry, dedup or queue pressure.
                         pump_mgr.handle_hint(&payload).await;
@@ -1745,7 +1809,7 @@ impl Client {
     }
 
     /// Resolve the reconcile manager without letting generation-bound restoration adopt a successor.
-    async fn live_mgr(&self) -> Result<Arc<SyncManager>, TinkleError> {
+    pub(crate) async fn live_mgr(&self) -> Result<Arc<SyncManager>, TinkleError> {
         self.live
             .read()
             .await
@@ -1818,7 +1882,7 @@ impl Client {
     }
 
     /// Fail closed on exhaustion or clock loss, never falling back to SDK default zero.
-    fn remaining_timeout_ms(
+    pub(crate) fn remaining_timeout_ms(
         budget: &syntra_runtime::elapsed::ElapsedDeadline,
     ) -> Result<u32, TinkleError> {
         let remaining = budget
@@ -2920,7 +2984,8 @@ impl Client {
         crate::cache_projector::merge_ops(
             &mut ops,
             crate::cache_projector::project_entities_to_ops(users, chats),
-        );
+        )
+        .map_err(TinkleError::Sync)?;
         // Journal pages require file origins == target_key; entity file
         // refs arrive with a global-pin placeholder ("") and are rebased
         // here so the same shared (scope,file_id) record commits atomically.
@@ -3055,6 +3120,7 @@ impl Client {
                     return false;
                 }
                 tinkle_schema::proto::TargetChangeKind::try_from(c.kind)
+                    .map(tinkle_schema::sync::semantic_change_kind)
                     .map(|k| {
                         matches!(
                             k,
@@ -3101,6 +3167,7 @@ impl Client {
                 tinkle_schema::proto::TargetChangeKind::try_from(change.kind).map_err(|_| {
                     TinkleError::Sync(format!("unknown target change kind {}", change.kind))
                 })?;
+            let kind = tinkle_schema::sync::semantic_change_kind(kind);
             match kind {
                 tinkle_schema::proto::TargetChangeKind::Edited
                 | tinkle_schema::proto::TargetChangeKind::Pin
@@ -3114,11 +3181,28 @@ impl Client {
                         let extra =
                             crate::cache_projector::project_change_to_ops(target_key, change)
                                 .map_err(TinkleError::Sync)?;
-                        crate::cache_projector::merge_ops(&mut ops, extra);
+                        crate::cache_projector::merge_ops(&mut ops, extra)
+                            .map_err(TinkleError::Sync)?;
                         continue;
                     }
                     let fetched_body = fetched.get(&change.message_id);
                     let journal_body = change.message.as_ref();
+                    #[cfg(tinkle_async_actions)]
+                    let merged_body = match (journal_body, fetched_body) {
+                        (Some(a), Some(b)) => Some(
+                            tinkle_schema::representations::merge_message(a, b).map_err(|_| {
+                                TinkleError::Sync("inconsistent message representations".into())
+                            })?,
+                        ),
+                        _ => None,
+                    };
+                    #[cfg(tinkle_async_actions)]
+                    let body = merged_body
+                        .as_ref()
+                        .or(journal_body)
+                        .or(fetched_body)
+                        .ok_or_else(|| TinkleError::Sync("message body required".into()))?;
+                    #[cfg(not(tinkle_async_actions))]
                     let body = match (journal_body, fetched_body) {
                         (Some(a), Some(b)) => Some(if tinkle_schema::sync::fresher_body(a, b) {
                             b
@@ -3135,15 +3219,17 @@ impl Client {
                     })?;
                     let extra = crate::cache_projector::project_message_to_ops(target_key, body)
                         .map_err(TinkleError::Sync)?;
-                    crate::cache_projector::merge_ops(&mut ops, extra);
+                    crate::cache_projector::merge_ops(&mut ops, extra)
+                        .map_err(TinkleError::Sync)?;
                 }
                 tinkle_schema::proto::TargetChangeKind::Deleted
                 | tinkle_schema::proto::TargetChangeKind::Revoked => {
                     let extra = crate::cache_projector::project_change_to_ops(target_key, change)
                         .map_err(TinkleError::Sync)?;
-                    crate::cache_projector::merge_ops(&mut ops, extra);
+                    crate::cache_projector::merge_ops(&mut ops, extra)
+                        .map_err(TinkleError::Sync)?;
                 }
-                tinkle_schema::proto::TargetChangeKind::Unspecified => {
+                _ => {
                     return Err(TinkleError::Sync(format!(
                         "change for message {} has unspecified kind",
                         change.message_id
@@ -3157,7 +3243,8 @@ impl Client {
         crate::cache_projector::merge_ops(
             &mut ops,
             crate::cache_projector::project_entities_to_ops(&fetched_users, &fetched_chats),
-        );
+        )
+        .map_err(TinkleError::Sync)?;
         crate::cache_projector::rebase_file_origins(&mut ops, target_key);
         Ok((ops, affected))
     }
@@ -4163,6 +4250,20 @@ impl Client {
                 let i = 0;
                 while i < retained.len() {
                     if let Some(evt) = retained[i].try_next_event().await {
+                        #[cfg(tinkle_async_actions)]
+                        if matches!(
+                            evt,
+                            SyncEvent::SendStatusChanged(_)
+                                | SyncEvent::ChatPhotoUpdateChanged(_)
+                                | SyncEvent::ChannelPhotoUpdateChanged(_)
+                                | SyncEvent::ProfilePhotoUpdateChanged(_)
+                                | SyncEvent::AssetChangeChanged(_)
+                                | SyncEvent::ProfilePhotoRepresentationChanged(_)
+                                | SyncEvent::ChatPhotoRepresentationChanged(_)
+                                | SyncEvent::StickerAssetRepresentationChanged(_)
+                        ) {
+                            continue;
+                        }
                         // Ephemeral presentation is never replayed from a retired manager.
                         if matches!(evt, SyncEvent::ReactionEffect(_)) {
                             continue;
@@ -4208,6 +4309,47 @@ impl Client {
     /// An event may wait in a bounded queue past expiry, sign-out, account/source replacement or
     /// disconnect. Recheck at actual app delivery, not only when the notification was received.
     async fn effect_event_current(&self, event: &SyncEvent, manager: &Arc<SyncManager>) -> bool {
+        #[cfg(tinkle_async_actions)]
+        {
+            let fence = match event {
+                SyncEvent::SendStatusChanged(v) => Some((&v.principal, v.epoch, v.source_revision)),
+                SyncEvent::ChatPhotoUpdateChanged(v) => {
+                    Some((&v.principal, v.epoch, v.source_revision))
+                }
+                SyncEvent::ChannelPhotoUpdateChanged(v) => {
+                    Some((&v.principal, v.epoch, v.source_revision))
+                }
+                SyncEvent::ProfilePhotoUpdateChanged(v) => {
+                    Some((&v.principal, v.epoch, v.source_revision))
+                }
+                SyncEvent::AssetChangeChanged(v) => {
+                    Some((&v.principal, v.epoch, v.source_revision))
+                }
+                SyncEvent::ProfilePhotoRepresentationChanged(v) => {
+                    Some((&v.principal, v.epoch, v.source_revision))
+                }
+                SyncEvent::ChatPhotoRepresentationChanged(v) => {
+                    Some((&v.principal, v.epoch, v.source_revision))
+                }
+                SyncEvent::StickerAssetRepresentationChanged(v) => {
+                    Some((&v.principal, v.epoch, v.source_revision))
+                }
+                _ => None,
+            };
+            if let Some((principal, epoch, revision)) = fence {
+                let current = self.principal().await;
+                let live = self.live.read().await;
+                return !self.authorization.is_signed_out()
+                    && current == *principal
+                    && self.reconcile_epoch() == epoch
+                    && self.retirement.revision() == revision
+                    && live.as_ref().is_some_and(|l| {
+                        Arc::ptr_eq(manager, &l.sync_mgr)
+                            && l.generation.returning
+                            && l.generation.open.load(Ordering::SeqCst)
+                    });
+            }
+        }
         let SyncEvent::ReactionEffect(effect) = event else {
             return true;
         };
@@ -4665,10 +4807,45 @@ impl Client {
         result
     }
 
-    /// Drive bounded recovery signals and periodic demand sweeps through the sole reconnect scheduler.
+    /// Keep action queries and their deadlines polling while the sole reconnect/reconcile loop awaits I/O.
     #[cfg(not(target_arch = "wasm32"))]
     async fn supervise(
         self,
+        sig_rx: mpsc::Receiver<RecoverySignal>,
+        shutdown: oneshot::Receiver<()>,
+    ) {
+        #[cfg(tinkle_async_actions)]
+        tokio::select! {
+            _ = self.supervise_reconciliation(sig_rx, shutdown) => {},
+            _ = self.supervise_actions() => {},
+        }
+        #[cfg(not(tinkle_async_actions))]
+        self.supervise_reconciliation(sig_rx, shutdown).await;
+    }
+
+    /// One inline, single-flight query loop shares the supervisor's lifetime, never a detached task.
+    #[cfg(all(not(target_arch = "wasm32"), tinkle_async_actions))]
+    async fn supervise_actions(&self) {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut queue = std::collections::VecDeque::new();
+        loop {
+            tick.tick().await;
+            if self.suspended.load(Ordering::SeqCst) || !self.is_connected().await {
+                continue;
+            }
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                self.sending().recover_next_action(&mut queue),
+            )
+            .await;
+        }
+    }
+
+    /// Drive bounded recovery signals and periodic demand sweeps through the sole reconnect scheduler.
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn supervise_reconciliation(
+        &self,
         mut sig_rx: mpsc::Receiver<RecoverySignal>,
         mut shutdown: oneshot::Receiver<()>,
     ) {

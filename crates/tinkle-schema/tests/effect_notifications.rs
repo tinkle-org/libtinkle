@@ -59,6 +59,8 @@ fn effect_identity_choices_and_timestamps_fail_closed_without_losing_reconcile()
         }
         let invalidated = mode == 7;
         let value = p::MessageChanged {
+            #[cfg(tinkle_async_actions)]
+            representation_revision: None,
             target: Some(p::Target {
                 kind: Some(p::target::Kind::UserId(7)),
             }),

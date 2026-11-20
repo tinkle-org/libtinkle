@@ -9,6 +9,9 @@ use std::{
 };
 use tinkle_schema::proto as p;
 pub use tinkle_storage::{OutgoingJob, OutgoingJobSummary, OutgoingState};
+#[cfg(tinkle_async_actions)]
+#[path = "actions.rs"]
+pub(crate) mod actions;
 
 /// Bound admitted send/preparation work, including detached SQLite workers.
 static SEND_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(8);
@@ -74,6 +77,8 @@ impl From<crate::media::NativeMediaKind> for AttachmentKind {
 
 /// Typed keyed operations supported by the durable coordinator, not arbitrary RPCs.
 #[derive(Debug, Clone)]
+// Preserve existing value constructors; candidate metadata adds a fixed few hundred stack bytes.
+#[cfg_attr(tinkle_async_actions, allow(clippy::large_enum_variant))]
 pub enum OutgoingRequest {
     Text(p::SendMessageRequest),
     Media(p::SendMediaRequest),
@@ -116,9 +121,11 @@ pub struct PreparedAttachment {
     pub source_sha256: [u8; 32],
     pub output_sha256: [u8; 32],
     pub preparation_profile: String,
+    /// Retained display-only JPEG, not yet represented by the pinned public MediaSource.
+    pub tiny_preview: Option<Vec<u8>>,
 }
 
-/// Frozen main-only preparation handoff. The artifact and exact source declaration survive
+/// Frozen preparation handoff. Artifacts and the exact source declaration survive
 /// restart until principal cleanup. Reusing its key never reruns a codec after publication.
 #[derive(Debug, Clone)]
 pub struct AttachmentManifest {
@@ -133,19 +140,72 @@ pub struct AttachmentManifest {
     pub media_source: Vec<u8>,
     /// Exact native measurements captured with this artifact, absent for raw documents/older manifests.
     pub native_facts: Option<crate::media::NativeMediaOutput>,
+    /// Exact JPEG display bytes; absent in older preparations and nonvisual media.
+    pub tiny_preview: Option<Vec<u8>>,
+    /// Separate immutable regular PNG artifact; its upload never changes the main upload key.
+    pub thumbnail: Option<AttachmentThumbnail>,
+}
+
+/// Bounded regular-thumbnail upload input retained in the immutable parent preparation.
+#[derive(Debug, Clone)]
+pub struct AttachmentThumbnail {
+    /// SDK-owned private PNG file, separate from the main path.
+    pub artifact_path: String,
+    /// Digest of the exact retained upload bytes.
+    pub sha256: [u8; 32],
+    pub width: u32,
+    pub height: u32,
 }
 
 impl AttachmentManifest {
     /// Bounded canonical manifest bytes are part of the existing immutable transfer intent.
-    fn encode(&self) -> String {
-        serde_json::json!({"version":1,"input":self.input_path,"settings":self.settings,
+    fn encode(&self) -> Result<String, SendError> {
+        let value = serde_json::json!({"version":1,"input":self.input_path,"settings":self.settings,
             "artifact":self.artifact_path,"source_sha256":self.source_sha256.as_slice(),
             "output_sha256":self.output_sha256.as_slice(),"profile":self.profile,
             "mime":self.mime_type,"media":self.media_source,
             "facts":self.native_facts.as_ref().map(|f|serde_json::json!({"width":f.width,"height":f.height,
                 "frames":f.frame_count,"duration_ms":f.duration_ms,"channels":f.audio_channels,
-                "sample_rate":f.audio_sample_rate,"samples":f.audio_samples,"waveform":f.waveform}))})
-        .to_string()
+                "sample_rate":f.audio_sample_rate,"samples":f.audio_samples,"waveform":f.waveform})),
+            "preview":self.tiny_preview.as_ref().map(|bytes| bytes.iter().map(|b|format!("{b:02x}")).collect::<String>()),
+            "thumbnail":self.thumbnail.as_ref().map(|t|serde_json::json!({"artifact":t.artifact_path,
+                "sha256":t.sha256.as_slice(),"width":t.width,"height":t.height}))});
+        #[cfg(tinkle_schema_candidate)]
+        let mut value = value;
+        #[cfg(tinkle_schema_candidate)]
+        {
+            value["version"] = serde_json::json!(5);
+            value["wire_identity"] = serde_json::json!(env!("TINKLE_SCHEMA_WIRE_ID"));
+        }
+        #[cfg(tinkle_async_actions)]
+        if self
+            .settings
+            .ends_with(":singular-thumbnail-compact-wire-reset-v1")
+        {
+            let mut source = p::MediaSource::decode(self.media_source.as_slice())
+                .map_err(|_| SendError::Storage)?;
+            if source.encode_to_vec() != self.media_source {
+                return Err(SendError::Storage);
+            }
+            let preview = source_preview(&mut source).and_then(Option::take);
+            if let Some(preview) = &preview {
+                if self.tiny_preview.as_deref() != Some(preview.jpeg.as_ref())
+                    || crate::media::validate_tiny_preview(&preview.jpeg)?
+                        != (preview.width, preview.height)
+                {
+                    return Err(SendError::Storage);
+                }
+            } else if self.tiny_preview.is_some() {
+                return Err(SendError::Storage);
+            }
+            // Keep one copy of JPEG bytes inside the unchanged 16-KiB immutable-intent budget.
+            value["media_contract"] = serde_json::json!("singular-thumbnail-compact-wire-reset-v1");
+            value["media"] = serde_json::json!(source.encode_to_vec());
+            value["preview_in_media"] = serde_json::json!(preview.is_some());
+            value["media_hash"] =
+                serde_json::json!(format!("{:x}", Sha256::digest(&self.media_source)));
+        }
+        Ok(value.to_string())
     }
 
     /// Validate persisted state before any path or protobuf is used.
@@ -161,10 +221,65 @@ impl AttachmentManifest {
         let bytes = |key| {
             serde_json::from_value::<Vec<u8>>(value[key].clone()).map_err(|_| SendError::Storage)
         };
-        if value["version"] != 1 {
+        if value["version"] != 1 && value["version"] != 4 && value["version"] != 5 {
             return Err(SendError::Storage);
         }
-        Ok(Self {
+        #[cfg(tinkle_schema_candidate)]
+        if value["version"] != 5 || value["wire_identity"] != env!("TINKLE_SCHEMA_WIRE_ID") {
+            return Err(SendError::Storage);
+        }
+        #[cfg(tinkle_async_actions)]
+        if value["media_contract"] != "singular-thumbnail-compact-wire-reset-v1"
+            || !text("settings")?.ends_with(":singular-thumbnail-compact-wire-reset-v1")
+        {
+            return Err(SendError::Storage);
+        }
+        #[cfg(not(tinkle_schema_candidate))]
+        if value["version"] != 1 {
+            return Err(SendError::Media(crate::media::MediaError::Unsupported));
+        }
+        let tiny_preview = if value["preview"].is_null() {
+            None
+        } else {
+            let hex = value["preview"].as_str().ok_or(SendError::Storage)?;
+            if hex.is_empty()
+                || hex.len() > crate::media::TINY_PREVIEW_BYTES * 2
+                || !hex.len().is_multiple_of(2)
+                || !hex.is_ascii()
+            {
+                return Err(SendError::Storage);
+            }
+            Some(
+                (0..hex.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|_| SendError::Storage))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+        };
+        let thumbnail = if value["thumbnail"].is_null() {
+            None
+        } else {
+            let t = &value["thumbnail"];
+            let axis = |key| {
+                t[key]
+                    .as_u64()
+                    .filter(|v| (1..=320).contains(v))
+                    .map(|v| v as u32)
+                    .ok_or(SendError::Storage)
+            };
+            Some(AttachmentThumbnail {
+                artifact_path: t["artifact"].as_str().ok_or(SendError::Storage)?.into(),
+                sha256: serde_json::from_value::<Vec<u8>>(t["sha256"].clone())
+                    .map_err(|_| SendError::Storage)?
+                    .try_into()
+                    .map_err(|_| SendError::Storage)?,
+                width: axis("width")?,
+                height: axis("height")?,
+            })
+        };
+        let manifest = Self {
+            tiny_preview,
+            thumbnail,
             input_path: text("input")?,
             settings: text("settings")?,
             artifact_path: text("artifact")?,
@@ -200,11 +315,82 @@ impl AttachmentManifest {
                     audio_samples: number("samples")?,
                     waveform: serde_json::from_value(f["waveform"].clone())
                         .map_err(|_| SendError::Storage)?,
+                    thumbnail_frame: None,
                 })
             } else {
                 None
             },
-        })
+        };
+        #[cfg(tinkle_async_actions)]
+        let mut manifest = manifest;
+        #[cfg(tinkle_async_actions)]
+        if value["version"] == 5 {
+            let mut source = p::MediaSource::decode(manifest.media_source.as_slice())
+                .map_err(|_| SendError::Storage)?;
+            let present = value["preview_in_media"]
+                .as_bool()
+                .ok_or(SendError::Storage)?;
+            if present {
+                let jpeg = manifest.tiny_preview.as_ref().ok_or(SendError::Storage)?;
+                let (width, height) = crate::media::validate_tiny_preview(jpeg)?;
+                *source_preview(&mut source).ok_or(SendError::Storage)? = Some(p::InlinePreview {
+                    width,
+                    height,
+                    jpeg: jpeg.clone().into(),
+                });
+            } else if manifest.tiny_preview.is_some() {
+                return Err(SendError::Storage);
+            }
+            let media = source.encode_to_vec();
+            if value["media_hash"].as_str()
+                != Some(format!("{:x}", Sha256::digest(&media)).as_str())
+            {
+                return Err(SendError::Storage);
+            }
+            manifest.media_source = media;
+        }
+        manifest.validate_display()?;
+        Ok(manifest)
+    }
+
+    /// New optional display state is bounded independently; older absent fields remain absent.
+    fn validate_display(&self) -> Result<(), SendError> {
+        if let Some(preview) = &self.tiny_preview {
+            let (width, height) =
+                crate::media::validate_tiny_preview(preview).map_err(|_| SendError::Storage)?;
+            if self
+                .native_facts
+                .as_ref()
+                .is_none_or(|f| width > f.width || height > f.height)
+            {
+                return Err(SendError::Storage);
+            }
+        }
+        if let Some(thumbnail) = &self.thumbnail {
+            if !(1..=320).contains(&thumbnail.width)
+                || !(1..=320).contains(&thumbnail.height)
+                || self
+                    .native_facts
+                    .as_ref()
+                    .is_none_or(|f| thumbnail.width > f.width || thumbnail.height > f.height)
+            {
+                return Err(SendError::Storage);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Supported source preview slot; versioned manifests reconstruct protobufs, never image pixels.
+#[cfg(tinkle_async_actions)]
+fn source_preview(source: &mut p::MediaSource) -> Option<&mut Option<p::InlinePreview>> {
+    match source.media.as_mut()? {
+        p::media_source::Media::Photo(v) => Some(&mut v.inline_preview),
+        p::media_source::Media::Document(v) => Some(&mut v.inline_preview),
+        p::media_source::Media::Video(v) => Some(&mut v.inline_preview),
+        p::media_source::Media::Audio(v) => Some(&mut v.inline_preview),
+        p::media_source::Media::Sticker(v) => Some(&mut v.inline_preview),
+        _ => None,
     }
 }
 
@@ -222,7 +408,7 @@ pub struct Sending<'a> {
 }
 
 /// Account/source ABA fence, independent of reconnects but not trust/enrollment replacement.
-struct Scope {
+pub(crate) struct Scope {
     client: Client,
     authority: crate::authorization::EnrollmentEpoch,
     principal: String,
@@ -231,11 +417,13 @@ struct Scope {
     revision: u64,
     storage: Arc<tinkle_storage::Storage>,
     incarnation: u64,
+    #[cfg(tinkle_async_actions)]
+    generation: Option<Arc<crate::liveness::LiveGeneration>>,
 }
 
 impl Scope {
     /// Capture trust from provisioned state, never from an endpoint or response.
-    async fn capture(client: &Client) -> Result<Arc<Self>, SendError> {
+    pub(crate) async fn capture(client: &Client) -> Result<Arc<Self>, SendError> {
         let authority = client.authorization.generation()?;
         let epoch = client.reconcile_epoch();
         let revision = client.retirement.revision();
@@ -276,13 +464,15 @@ impl Scope {
             revision,
             storage,
             incarnation,
+            #[cfg(tinkle_async_actions)]
+            generation: client.bound_send_generation(),
         });
         scope.check()?;
         Ok(scope)
     }
 
     /// Synchronous fence checks bracket every retained result and worker publication.
-    fn check(&self) -> Result<(), SendError> {
+    pub(crate) fn check(&self) -> Result<(), SendError> {
         self.authority
             .valid()
             .map_err(|_| SendError::ScopeChanged)?;
@@ -292,12 +482,36 @@ impl Scope {
         {
             return Err(SendError::ScopeChanged);
         }
+        #[cfg(tinkle_async_actions)]
+        if self
+            .generation
+            .as_ref()
+            .is_some_and(|g| !g.open.load(Ordering::SeqCst) || g.source_revision != self.revision)
+        {
+            return Err(SendError::ScopeChanged);
+        }
         Ok(())
+    }
+
+    /// Pin both request and commit to the socket that supplied the outcome.
+    #[cfg(tinkle_async_actions)]
+    fn with_generation(&self, generation: Arc<crate::liveness::LiveGeneration>) -> Arc<Self> {
+        Arc::new(Self {
+            client: self.client.clone(),
+            authority: self.authority.duplicate(),
+            principal: self.principal.clone(),
+            source: self.source.clone(),
+            epoch: self.epoch,
+            revision: self.revision,
+            storage: self.storage.clone(),
+            incarnation: self.incarnation,
+            generation: Some(generation),
+        })
     }
 
     /// Blocking work owns both lifecycle gates and its admission until actual completion,
     /// even if its waiter is dropped. No SQLite lock is held across an await.
-    async fn store<T: Send + 'static>(
+    pub(crate) async fn store<T: Send + 'static>(
         self: &Arc<Self>,
         f: impl FnOnce(&tinkle_storage::Storage, &str, &str) -> Result<T, tinkle_storage::StorageError>
             + Send
@@ -342,6 +556,16 @@ impl Scope {
         Ok(result)
     }
 
+    /// A request caller fenced to this captured account/source incarnation.
+    #[cfg(tinkle_async_actions)]
+    pub(crate) fn caller(&self) -> Client {
+        let caller = self.client.for_application_scope(self.epoch, self.revision);
+        match &self.generation {
+            Some(g) => caller.for_session_generation(g.clone()),
+            None => caller,
+        }
+    }
+
     /// Preserve payload identity and use revision CAS for cross-client/process admission.
     async fn transition(
         self: &Arc<Self>,
@@ -350,11 +574,41 @@ impl Scope {
         response: Vec<u8>,
         outcome: Option<tinkle_storage::OutgoingOutcome>,
     ) -> Result<(), SendError> {
+        self.transition_inner(job, state, response, outcome, None)
+            .await
+    }
+
+    /// Status receipts and private remembered IDs commit atomically under the same lifecycle gates.
+    async fn transition_inner(
+        self: &Arc<Self>,
+        job: &mut OutgoingJob,
+        state: OutgoingState,
+        response: Vec<u8>,
+        outcome: Option<tinkle_storage::OutgoingOutcome>,
+        evidence: Option<Vec<u8>>,
+    ) -> Result<(), SendError> {
+        #[cfg(not(tinkle_async_actions))]
+        let _ = &evidence;
         let old = job.clone();
         let retained = response.clone();
         let retained_outcome = outcome.clone();
         if !self
             .store(move |s, p, _| {
+                #[cfg(tinkle_async_actions)]
+                if old.state as i64 >= 14 {
+                    if let Some(evidence) = &evidence {
+                        return s.transition_outgoing_action_with_evidence(
+                            p, &old, state, &retained, evidence,
+                        );
+                    }
+                    return s.transition_outgoing_action(
+                        p,
+                        &old,
+                        state,
+                        &retained,
+                        retained_outcome.as_ref(),
+                    );
+                }
                 s.transition_outgoing_with_outcome(
                     p,
                     &old,
@@ -445,6 +699,8 @@ impl OutgoingRequest {
                 )
             }
         };
+        #[cfg(tinkle_async_actions)]
+        actions::validate_send_sources(method, &payload)?;
         if payload.len() > 262144 {
             return Err(SendError::InvalidRequest);
         }
@@ -541,13 +797,20 @@ impl<'a> Sending<'a> {
         let cache_scope = scope
             .store(move |s, p, _| s.capture_message_scope(p, &stream))
             .await?;
+        let state = OutgoingState::Prepared;
+        #[cfg(tinkle_async_actions)]
+        let state = if actions::is_send(method, &payload)? {
+            OutgoingState::ActionPrepared
+        } else {
+            state
+        };
         let job = OutgoingJob {
             job_id: job_id.clone(),
             source: scope.source.clone(),
             target_key,
             method: method.into(),
             payload,
-            state: OutgoingState::Prepared,
+            state,
             response: Vec::new(),
             last_outcome: None,
             revision: 0,
@@ -592,6 +855,7 @@ impl<'a> Sending<'a> {
     /// One attempt on the captured connection. Never dials, retries or rekeys internally.
     /// Accepted responses are retained before cache hydration; hydration failure cannot resend.
     /// Cancellation/dropped waiters leave Dispatching/Unconfirmed, never Prepared.
+    /// Asynchronous jobs query the original domain keys after submission.
     pub async fn resume(
         &self,
         job_id: String,
@@ -618,6 +882,27 @@ impl<'a> Sending<'a> {
             .store(move |s, p, source| s.outgoing(p, source, &job_id))
             .await?
             .ok_or(SendError::NotFound)?;
+        #[cfg(tinkle_async_actions)]
+        if job.state as i64 >= 14 {
+            return self.resume_action(&scope, job, cancel).await;
+        }
+        #[cfg(tinkle_async_actions)]
+        if actions::is_send(&job.method, &job.payload)? {
+            return Err(SendError::Conflict);
+        }
+        if matches!(
+            job.state,
+            OutgoingState::ActionPending
+                | OutgoingState::ActionProcessing
+                | OutgoingState::ActionSucceeded
+                | OutgoingState::ActionFailed
+                | OutgoingState::ActionCanceled
+                | OutgoingState::ActionPrepared
+                | OutgoingState::ActionDispatching
+                | OutgoingState::ActionUnconfirmed
+        ) {
+            return Err(SendError::Conflict);
+        }
         if job.state == OutgoingState::Accepted {
             self.hydrate(&scope, &job).await?;
             return Ok(job);
@@ -707,6 +992,14 @@ impl<'a> Sending<'a> {
     /// Same-cursor hydration preserves journal progress and existing body freshness ordering.
     async fn hydrate(&self, scope: &Arc<Scope>, job: &OutgoingJob) -> Result<(), SendError> {
         scope.check()?;
+        if !matches!(
+            job.method.as_str(),
+            "/tinkle.v1.MessagesService/SendMessage"
+                | "/tinkle.v1.MessagesService/SendMedia"
+                | "/tinkle.v1.MessagesService/SendAlbum"
+        ) {
+            return Ok(());
+        }
         let (messages, users, chats) = accepted_messages(job, &job.response)?;
         // Pending scheduled acknowledgements have no acceptance position and are not history.
         let messages: Vec<_> = messages
@@ -722,7 +1015,8 @@ impl<'a> Sending<'a> {
         crate::cache_projector::merge_ops(
             &mut ops,
             crate::cache_projector::project_entities_to_ops(&users, &chats),
-        );
+        )
+        .map_err(|_| SendError::InvalidRequest)?;
         crate::cache_projector::rebase_file_origins(&mut ops, &job.target_key);
         let job = job.clone();
         scope
@@ -740,9 +1034,22 @@ impl<'a> Sending<'a> {
         kind: impl Into<AttachmentKind>,
         cancel: Option<crate::CancelToken>,
     ) -> Result<PreparedAttachment, SendError> {
-        if let AttachmentKind::Native(kind) = kind.into() {
+        self.prepare_attachment_mode(key, path, kind.into(), cancel, cfg!(tinkle_async_actions))
+            .await
+    }
+
+    /// One retained recipe path; source capability is fixed before upload submission.
+    async fn prepare_attachment_mode(
+        &self,
+        key: String,
+        path: &Path,
+        kind: AttachmentKind,
+        cancel: Option<crate::CancelToken>,
+        async_actions: bool,
+    ) -> Result<PreparedAttachment, SendError> {
+        if let AttachmentKind::Native(kind) = kind {
             return self
-                .prepare_native_attachment_inner(key, path, kind, None, cancel)
+                .prepare_native_attachment_inner(key, path, kind, None, cancel, async_actions)
                 .await;
         }
         let kind = crate::media::MediaKind::Document;
@@ -755,7 +1062,16 @@ impl<'a> Sending<'a> {
         }
         let input = std::path::absolute(path).map_err(|_| SendError::InvalidRequest)?;
         let input = input.to_str().ok_or(SendError::InvalidRequest)?.to_owned();
-        let settings = format!("main-only-v1:{kind:?}");
+        let settings = format!(
+            "main-only-v1:{kind:?}{}",
+            if async_actions {
+                ":singular-thumbnail-compact-wire-reset-v1"
+            } else if cfg!(tinkle_schema_candidate) {
+                ":compact-wire-reset-v1"
+            } else {
+                ""
+            }
+        );
         let id = preparation_job(&scope.source, &key);
         let read_id = id.clone();
         let retained = scope
@@ -786,7 +1102,12 @@ impl<'a> Sending<'a> {
         let media = p::media_source::Media::Document(p::DocumentSource {
             file_id: 0,
             attributes: vec![],
+            #[cfg(not(tinkle_async_actions))]
             variants: vec![],
+            #[cfg(tinkle_async_actions)]
+            thumbnail: None,
+            #[cfg(tinkle_async_actions)]
+            inline_preview: None,
         });
         let manifest = AttachmentManifest {
             input_path: input,
@@ -798,6 +1119,8 @@ impl<'a> Sending<'a> {
             mime_type: prepared.mime_type.into(),
             media_source: p::MediaSource { media: Some(media) }.encode_to_vec(),
             native_facts: None,
+            tiny_preview: None,
+            thumbnail: None,
         };
         let (intent, manifest) = Self::persist_preparation(&scope, id, manifest, prepared).await?;
         let result = self
@@ -820,6 +1143,7 @@ impl<'a> Sending<'a> {
         ),
         SendError,
     > {
+        manifest.validate_display()?;
         // File publication and parent registration share lifecycle gates. A crash before the
         // SQLite claim leaves only an owned namespace artifact, removed by principal cleanup.
         let incarnation = scope.incarnation;
@@ -887,6 +1211,50 @@ impl<'a> Sending<'a> {
                     tinkle_storage::StorageError::Unavailable("artifact sync failed".into())
                 })?;
                 let mut manifest = manifest;
+                let thumbnail_artifact = if let Some(thumbnail) = &mut manifest.thumbnail {
+                    use std::io::Write as _;
+                    let bytes = prepared.thumbnail.as_ref().ok_or_else(|| {
+                        tinkle_storage::StorageError::InvalidInput("thumbnail unavailable".into())
+                    })?;
+                    if bytes.len() > 1024 * 1024 {
+                        return Err(tinkle_storage::StorageError::InvalidInput(
+                            "thumbnail exceeds budget".into(),
+                        ));
+                    }
+                    if <[u8; 32]>::from(Sha256::digest(bytes)) != thumbnail.sha256 {
+                        return Err(tinkle_storage::StorageError::InvalidInput(
+                            "thumbnail hash changed".into(),
+                        ));
+                    }
+                    let mut file = tempfile::Builder::new()
+                        .prefix("thumbnail-")
+                        .suffix(".png")
+                        .tempfile_in(&root)
+                        .map_err(|_| {
+                            tinkle_storage::StorageError::Unavailable(
+                                "thumbnail unavailable".into(),
+                            )
+                        })?;
+                    file.write_all(bytes)
+                        .and_then(|_| file.as_file().sync_all())
+                        .map_err(|_| {
+                            tinkle_storage::StorageError::Unavailable(
+                                "thumbnail sync failed".into(),
+                            )
+                        })?;
+                    thumbnail.artifact_path = file
+                        .path()
+                        .to_str()
+                        .ok_or_else(|| {
+                            tinkle_storage::StorageError::InvalidInput(
+                                "thumbnail path unavailable".into(),
+                            )
+                        })?
+                        .into();
+                    Some(file)
+                } else {
+                    None
+                };
                 manifest.artifact_path = artifact
                     .path()
                     .to_str()
@@ -896,7 +1264,11 @@ impl<'a> Sending<'a> {
                         )
                     })?
                     .into();
-                let proof = manifest.encode();
+                let proof = manifest.encode().map_err(|_| {
+                    tinkle_storage::StorageError::InvalidInput(
+                        "invalid preparation manifest".into(),
+                    )
+                })?;
                 let initial = tinkle_storage::FileTransferJob {
                     job_id: id,
                     kind: "upload".into(),
@@ -932,6 +1304,13 @@ impl<'a> Sending<'a> {
                 artifact.keep().map_err(|_| {
                     tinkle_storage::StorageError::Unavailable("artifact retention failed".into())
                 })?;
+                if let Some(file) = thumbnail_artifact {
+                    file.keep().map_err(|_| {
+                        tinkle_storage::StorageError::Unavailable(
+                            "thumbnail retention failed".into(),
+                        )
+                    })?;
+                }
                 Ok((intent, manifest))
             })
             .await
@@ -947,8 +1326,15 @@ impl<'a> Sending<'a> {
         preparer: Arc<dyn crate::media::PlatformMediaPreparer>,
         cancel: Option<crate::CancelToken>,
     ) -> Result<PreparedAttachment, SendError> {
-        self.prepare_native_attachment_inner(key, path, kind, Some(preparer), cancel)
-            .await
+        self.prepare_native_attachment_inner(
+            key,
+            path,
+            kind,
+            Some(preparer),
+            cancel,
+            cfg!(tinkle_async_actions),
+        )
+        .await
     }
 
     /// Resolve configured encoders only after retained-artifact lookup, so restart never needs one.
@@ -959,6 +1345,7 @@ impl<'a> Sending<'a> {
         kind: crate::media::NativeMediaKind,
         preparer: Option<Arc<dyn crate::media::PlatformMediaPreparer>>,
         cancel: Option<crate::CancelToken>,
+        async_actions: bool,
     ) -> Result<PreparedAttachment, SendError> {
         let _admission = SEND_ATTEMPTS.try_acquire().map_err(|_| SendError::Busy)?;
         let cancel = cancel.unwrap_or_default();
@@ -970,8 +1357,15 @@ impl<'a> Sending<'a> {
         let input = std::path::absolute(path).map_err(|_| SendError::InvalidRequest)?;
         let input = input.to_str().ok_or(SendError::InvalidRequest)?.to_owned();
         let settings = format!(
-            "{}:main-only:{kind:?}",
-            crate::media::NATIVE_PREPARATION_PROFILE
+            "{}:main-only:{kind:?}{}",
+            crate::media::NATIVE_PREPARATION_PROFILE,
+            if async_actions {
+                ":singular-thumbnail-compact-wire-reset-v1"
+            } else if cfg!(tinkle_schema_candidate) {
+                ":compact-wire-reset-v1"
+            } else {
+                ""
+            }
         );
         let id = preparation_job(&scope.source, &key);
         let read_id = id.clone();
@@ -1012,7 +1406,7 @@ impl<'a> Sending<'a> {
         };
         drop(stage_owner);
         scope.check()?;
-        let manifest = Self::native_manifest(input, settings, &prepared);
+        let manifest = Self::native_manifest(input, settings, &prepared)?;
         let (intent, manifest) =
             Self::persist_preparation(&scope, id, manifest, prepared.main).await?;
         let result = self
@@ -1027,7 +1421,7 @@ impl<'a> Sending<'a> {
         input: String,
         settings: String,
         prepared: &crate::media::NativePreparedMedia,
-    ) -> AttachmentManifest {
+    ) -> Result<AttachmentManifest, SendError> {
         let f = &prepared.output;
         let media = match prepared.kind {
             crate::media::NativeMediaKind::Image => p::media_source::Media::Photo(p::PhotoSource {
@@ -1038,7 +1432,12 @@ impl<'a> Sending<'a> {
                     animated: f.frame_count > 1,
                     ..Default::default()
                 }),
+                #[cfg(not(tinkle_async_actions))]
                 variants: vec![],
+                #[cfg(tinkle_async_actions)]
+                thumbnail: None,
+                #[cfg(tinkle_async_actions)]
+                inline_preview: None,
             }),
             crate::media::NativeMediaKind::Video => p::media_source::Media::Video(p::VideoSource {
                 file_id: 0,
@@ -1048,7 +1447,12 @@ impl<'a> Sending<'a> {
                     duration_ms: f.duration_ms,
                     ..Default::default()
                 }),
+                #[cfg(not(tinkle_async_actions))]
                 variants: vec![],
+                #[cfg(tinkle_async_actions)]
+                thumbnail: None,
+                #[cfg(tinkle_async_actions)]
+                inline_preview: None,
             }),
             crate::media::NativeMediaKind::Audio => p::media_source::Media::Audio(p::AudioSource {
                 file_id: 0,
@@ -1056,7 +1460,12 @@ impl<'a> Sending<'a> {
                     duration_ms: f.duration_ms,
                     ..Default::default()
                 }),
+                #[cfg(not(tinkle_async_actions))]
                 variants: vec![],
+                #[cfg(tinkle_async_actions)]
+                thumbnail: None,
+                #[cfg(tinkle_async_actions)]
+                inline_preview: None,
             }),
             crate::media::NativeMediaKind::Voice(_) => {
                 p::media_source::Media::Voice(p::VoiceSource {
@@ -1066,7 +1475,19 @@ impl<'a> Sending<'a> {
                 })
             }
         };
-        AttachmentManifest {
+        let source = p::MediaSource { media: Some(media) };
+        #[cfg(tinkle_async_actions)]
+        let mut source = source;
+        #[cfg(tinkle_async_actions)]
+        if settings.ends_with(":singular-thumbnail-compact-wire-reset-v1") {
+            let preview = prepared.inline_preview()?;
+            match source.media.as_mut() {
+                Some(p::media_source::Media::Photo(v)) => v.inline_preview = preview,
+                Some(p::media_source::Media::Video(v)) => v.inline_preview = preview,
+                _ => {}
+            }
+        }
+        Ok(AttachmentManifest {
             input_path: input,
             settings,
             artifact_path: String::new(),
@@ -1074,9 +1495,21 @@ impl<'a> Sending<'a> {
             output_sha256: prepared.main.output_sha256,
             profile: prepared.main.profile.into(),
             mime_type: prepared.main.mime_type.into(),
-            media_source: p::MediaSource { media: Some(media) }.encode_to_vec(),
+            media_source: source.encode_to_vec(),
             native_facts: Some(prepared.output.clone()),
-        }
+            tiny_preview: prepared.tiny_preview.clone(),
+            thumbnail: prepared
+                .main
+                .thumbnail
+                .as_ref()
+                .zip(prepared.main.thumbnail_facts.as_ref())
+                .map(|(bytes, facts)| AttachmentThumbnail {
+                    artifact_path: String::new(),
+                    sha256: Sha256::digest(bytes).into(),
+                    width: facts.width.unwrap_or(0),
+                    height: facts.height.unwrap_or(0),
+                }),
+        })
     }
 
     /// Adopt a retained native result under the current account/trust fence without invoking a
@@ -1088,6 +1521,25 @@ impl<'a> Sending<'a> {
         prepared: crate::media::NativePreparedMedia,
         cancel: Option<crate::CancelToken>,
     ) -> Result<PreparedAttachment, SendError> {
+        self.adopt_native_attachment_mode(
+            key,
+            source_path,
+            prepared,
+            cancel,
+            cfg!(tinkle_async_actions),
+        )
+        .await
+    }
+
+    /// Shared immutable adoption; source capability is part of the retained settings.
+    async fn adopt_native_attachment_mode(
+        &self,
+        key: String,
+        source_path: &Path,
+        prepared: crate::media::NativePreparedMedia,
+        cancel: Option<crate::CancelToken>,
+        async_actions: bool,
+    ) -> Result<PreparedAttachment, SendError> {
         let _admission = SEND_ATTEMPTS.try_acquire().map_err(|_| SendError::Busy)?;
         let cancel = cancel.unwrap_or_default();
         let mut cancel_on_drop = CancelOnDrop(Some(cancel.clone()));
@@ -1097,8 +1549,19 @@ impl<'a> Sending<'a> {
         let scope = Scope::capture(self.client).await?;
         let input = std::path::absolute(source_path).map_err(|_| SendError::InvalidRequest)?;
         let input = input.to_str().ok_or(SendError::InvalidRequest)?.to_owned();
-        let settings = format!("{}:main-only:{:?}", prepared.main.profile, prepared.kind);
-        let manifest = Self::native_manifest(input, settings, &prepared);
+        let settings = format!(
+            "{}:main-only:{:?}{}",
+            prepared.main.profile,
+            prepared.kind,
+            if async_actions {
+                ":singular-thumbnail-compact-wire-reset-v1"
+            } else if cfg!(tinkle_schema_candidate) {
+                ":compact-wire-reset-v1"
+            } else {
+                ""
+            }
+        );
+        let manifest = Self::native_manifest(input, settings, &prepared)?;
         let id = preparation_job(&scope.source, &key);
         let read_id = id.clone();
         let retained = scope
@@ -1108,7 +1571,10 @@ impl<'a> Sending<'a> {
             let retained = AttachmentManifest::decode(&intent.job.session_json)?;
             let mut comparison = retained.clone();
             comparison.artifact_path.clear();
-            if comparison.encode() != manifest.encode() || intent.job.file_scope != scope.source {
+            if let Some(thumbnail) = &mut comparison.thumbnail {
+                thumbnail.artifact_path.clear();
+            }
+            if comparison.encode()? != manifest.encode()? || intent.job.file_scope != scope.source {
                 return Err(SendError::Conflict);
             }
             (intent, retained)
@@ -1158,16 +1624,57 @@ impl<'a> Sending<'a> {
             .upload_manager()
             .upload_path(
                 crate::UploadParams {
+                    #[cfg(tinkle_async_actions)]
+                    processing_intent: if manifest
+                        .settings
+                        .ends_with(":singular-thumbnail-compact-wire-reset-v1")
+                    {
+                        match p::MediaSource::decode(manifest.media_source.as_slice())
+                            .ok()
+                            .and_then(|m| m.media)
+                        {
+                            Some(p::media_source::Media::Photo(_)) => {
+                                Some(p::MediaProcessingIntent::Image)
+                            }
+                            Some(p::media_source::Media::Video(_)) => {
+                                Some(p::MediaProcessingIntent::Video)
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    },
                     idempotency_key: format!("{}:main", preparation_job(&scope.source, key)),
                     file_name: None,
                     mime_type: Some(manifest.mime_type.clone()),
                     sha256: Some(manifest.output_sha256.to_vec()),
                 },
                 &path,
-                Some(cancel),
+                Some(cancel.clone()),
             )
             .await?;
         scope.check()?;
+        // Record confirmed main identity before starting the independent optional transfer.
+        let main_id = file.file_id;
+        let intent = scope
+            .store(move |s, p, _| {
+                let mut next = intent.job.clone();
+                if next.state != "complete" {
+                    next.state = "completing".into();
+                }
+                if next.file_id != 0 && next.file_id != main_id {
+                    return Err(tinkle_storage::StorageError::IntentConflict);
+                }
+                next.file_id = main_id;
+                s.advance_upload_intent(p, &intent, &next)
+                    .map_err(Into::into)
+            })
+            .await?;
+        // The optional transfer is a distinct exact-key operation. Propagate uncertain failures;
+        // never turn a submitted two-file operation into a different main-only retry.
+        let thumbnail = self
+            .upload_prepared_thumbnail(scope, key, &manifest, cancel)
+            .await?;
         let mut source = p::MediaSource::decode(manifest.media_source.as_slice())
             .map_err(|_| SendError::Storage)?;
         match source.media.as_mut() {
@@ -1177,6 +1684,53 @@ impl<'a> Sending<'a> {
             Some(p::media_source::Media::Voice(v)) => v.file_id = file.file_id,
             Some(p::media_source::Media::Audio(v)) => v.file_id = file.file_id,
             _ => return Err(SendError::Storage),
+        }
+        #[cfg(tinkle_async_actions)]
+        if manifest
+            .settings
+            .ends_with(":singular-thumbnail-compact-wire-reset-v1")
+        {
+            let preview = manifest
+                .tiny_preview
+                .as_ref()
+                .map(|bytes| {
+                    crate::media::validate_tiny_preview(bytes).map(|(width, height)| {
+                        p::InlinePreview {
+                            width,
+                            height,
+                            jpeg: bytes.clone().into(),
+                        }
+                    })
+                })
+                .transpose()?;
+            let thumbnail_source =
+                thumbnail
+                    .as_ref()
+                    .zip(manifest.thumbnail.as_ref())
+                    .map(|(file, t)| p::ThumbnailSource {
+                        file_id: file.file_id,
+                        width: t.width,
+                        height: t.height,
+                    });
+            match source.media.as_mut() {
+                Some(p::media_source::Media::Photo(v)) => {
+                    v.inline_preview = preview;
+                    v.thumbnail = thumbnail_source;
+                }
+                Some(p::media_source::Media::Video(v)) => {
+                    v.inline_preview = preview;
+                    v.thumbnail = thumbnail_source;
+                }
+                Some(p::media_source::Media::Document(v)) => {
+                    v.inline_preview = preview;
+                    v.thumbnail = thumbnail_source;
+                }
+                Some(p::media_source::Media::Audio(v)) => {
+                    v.inline_preview = preview;
+                    v.thumbnail = thumbnail_source;
+                }
+                _ => {}
+            }
         }
         let file_id = file.file_id;
         scope
@@ -1190,12 +1744,98 @@ impl<'a> Sending<'a> {
             .await?;
         Ok(PreparedAttachment {
             file,
-            thumbnail: None,
+            thumbnail,
             source,
             source_sha256: manifest.source_sha256,
             output_sha256: manifest.output_sha256,
             preparation_profile: manifest.profile,
+            tiny_preview: manifest.tiny_preview,
         })
+    }
+
+    /// Upload only the retained optional PNG after a main attempt; never prepare or change source bytes.
+    async fn upload_prepared_thumbnail(
+        &self,
+        scope: &Arc<Scope>,
+        key: &str,
+        manifest: &AttachmentManifest,
+        cancel: crate::CancelToken,
+    ) -> Result<Option<p::FileInfo>, SendError> {
+        let Some(thumbnail) = &manifest.thumbnail else {
+            return Ok(None);
+        };
+        scope.check()?;
+        let root = scope.store(|s, p, _| s.preparation_directory(p)).await?;
+        let path = Path::new(&thumbnail.artifact_path);
+        if path.parent() != Some(root.as_path())
+            || thumbnail.artifact_path == manifest.artifact_path
+        {
+            return Err(SendError::Storage);
+        }
+        let caller = self
+            .client
+            .for_application_scope(scope.epoch, scope.revision);
+        let file = caller
+            .upload_manager()
+            .upload_path(
+                crate::UploadParams {
+                    #[cfg(tinkle_async_actions)]
+                    processing_intent: manifest
+                        .settings
+                        .ends_with(":singular-thumbnail-compact-wire-reset-v1")
+                        .then_some(p::MediaProcessingIntent::Image),
+                    idempotency_key: format!("{}:thumbnail", preparation_job(&scope.source, key)),
+                    file_name: None,
+                    mime_type: Some("image/png".into()),
+                    sha256: Some(thumbnail.sha256.to_vec()),
+                },
+                path,
+                Some(cancel),
+            )
+            .await?;
+        scope.check()?;
+        Ok(Some(file))
+    }
+
+    /// Explicitly retry only the immutable optional upload after confirmed main completion.
+    /// Errors, including unknown outcomes, propagate without changing the retained media source.
+    pub async fn upload_attachment_thumbnail(
+        &self,
+        key: String,
+        cancel: Option<crate::CancelToken>,
+    ) -> Result<Option<p::FileInfo>, SendError> {
+        let _admission = SEND_ATTEMPTS.try_acquire().map_err(|_| SendError::Busy)?;
+        if key.is_empty() || key.len() > 200 {
+            return Err(SendError::InvalidRequest);
+        }
+        let scope = Scope::capture(self.client).await?;
+        let id = preparation_job(&scope.source, &key);
+        let intent = scope
+            .store(move |s, p, _| s.file_transfer_intent(p, &id).map_err(Into::into))
+            .await?
+            .ok_or(SendError::NotFound)?;
+        if intent.job.file_scope != scope.source
+            || intent.job.file_id <= 0
+            || !matches!(intent.job.state.as_str(), "completing" | "complete")
+        {
+            return Err(SendError::Conflict);
+        }
+        let manifest = AttachmentManifest::decode(&intent.job.session_json)?;
+        let cancel = cancel.unwrap_or_default();
+        let mut owner = CancelOnDrop(Some(cancel.clone()));
+        let result = self
+            .upload_prepared_thumbnail(&scope, &key, &manifest, cancel)
+            .await?;
+        scope
+            .store(move |s, p, _| {
+                let mut next = intent.job.clone();
+                next.state = "complete".into();
+                s.advance_upload_intent(p, &intent, &next)
+                    .map_err(Into::into)
+            })
+            .await?;
+        owner.0 = None;
+        Ok(result)
     }
 
     /// Inspect the durable source/settings/hash/path handoff without preparing or transmitting.
@@ -1234,8 +1874,8 @@ impl Client {
         drop(old);
         Ok(())
     }
-    /// Install or clear the host decoder used by actual video attachment preparation.
-    /// No decoder means Unsupported, never a metadata-only success or implicit document upload.
+    /// Store or clear decoder-only configuration, separate from the normal sending encoder.
+    /// This slot does not satisfy prepare_attachment(Video); install configure_media_preparer.
     pub fn configure_video_decoder(
         &self,
         decoder: Option<Arc<dyn crate::media::PlatformVideoDecoder>>,
@@ -1415,6 +2055,119 @@ fn accepted_messages(job: &OutgoingJob, response: &[u8]) -> Result<AcceptedBodie
 #[cfg(test)]
 mod completion_tests {
     use super::*;
+
+    /// The full approved JPEG budget fits the original immutable-intent budget without duplicate bytes.
+    #[cfg(tinkle_async_actions)]
+    #[test]
+    fn action_manifest_retains_maximum_preview_once_and_verifies_exact_declaration() {
+        let original =
+            crate::media::tiny_jpeg_preview(&image::DynamicImage::new_rgb8(1, 1)).unwrap();
+        let padding = crate::media::TINY_PREVIEW_BYTES - original.len() - 4;
+        let mut jpeg = original[..2].to_vec();
+        jpeg.extend([255, 225]);
+        jpeg.extend(((padding + 2) as u16).to_be_bytes());
+        jpeg.extend(vec![0; padding]);
+        jpeg.extend(&original[2..]);
+        assert_eq!(jpeg.len(), 4096);
+        assert_eq!(crate::media::validate_tiny_preview(&jpeg).unwrap(), (1, 1));
+        let media_source = p::MediaSource {
+            media: Some(p::media_source::Media::Photo(p::PhotoSource {
+                inline_preview: Some(p::InlinePreview {
+                    width: 1,
+                    height: 1,
+                    jpeg: jpeg.clone().into(),
+                }),
+                ..Default::default()
+            })),
+        }
+        .encode_to_vec();
+        let manifest = AttachmentManifest {
+            input_path: "/private/import".into(),
+            settings: "native:singular-thumbnail-compact-wire-reset-v1".into(),
+            artifact_path: "/private/main.png".into(),
+            source_sha256: [1; 32],
+            output_sha256: [2; 32],
+            profile: "native".into(),
+            mime_type: "image/png".into(),
+            media_source: media_source.clone(),
+            native_facts: Some(crate::media::NativeMediaOutput {
+                width: 1,
+                height: 1,
+                frame_count: 1,
+                duration_ms: 0,
+                audio_channels: 0,
+                audio_sample_rate: 0,
+                audio_samples: 0,
+                waveform: vec![],
+                thumbnail_frame: None,
+            }),
+            tiny_preview: Some(jpeg.clone()),
+            thumbnail: None,
+        };
+        let encoded = manifest.encode().unwrap();
+        assert!(encoded.len() <= 16384);
+        let value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(value["version"], 5);
+        assert_eq!(value["wire_identity"], "compact-wire-reset-v1");
+        assert_eq!(
+            value["media_contract"],
+            "singular-thumbnail-compact-wire-reset-v1"
+        );
+        let retained = AttachmentManifest::decode(&encoded).unwrap();
+        assert_eq!(retained.tiny_preview, Some(jpeg));
+        assert_eq!(retained.media_source, media_source);
+        let mut corrupt: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        corrupt["media_hash"] = serde_json::json!("wrong");
+        assert!(AttachmentManifest::decode(&corrupt.to_string()).is_err());
+        for (field, stale) in [
+            ("wire_identity", "previous-wire"),
+            ("media_contract", "singular-thumbnail-v1"),
+            ("settings", "native:singular-thumbnail-v1"),
+        ] {
+            let mut stale_value = value.clone();
+            stale_value[field] = serde_json::json!(stale);
+            assert!(
+                AttachmentManifest::decode(&stale_value.to_string()).is_err(),
+                "{field}"
+            );
+        }
+    }
+
+    /// Absent additive fields preserve legacy pending-source bytes; malformed additions fail closed.
+    #[cfg(not(tinkle_schema_candidate))]
+    #[test]
+    fn legacy_manifest_resumes_without_creating_display_artifacts() {
+        let mut legacy = serde_json::json!({"version":1,"input":"/import","settings":"old",
+            "artifact":"/private/main","source_sha256":vec![0;32],"output_sha256":vec![1;32],
+            "profile":"old","mime":"application/octet-stream","media":vec![1,2,3]});
+        let manifest = AttachmentManifest::decode(&legacy.to_string()).unwrap();
+        assert_eq!(manifest.media_source, vec![1, 2, 3]);
+        assert!(manifest.tiny_preview.is_none() && manifest.thumbnail.is_none());
+        legacy["preview"] = serde_json::json!("ff");
+        assert!(AttachmentManifest::decode(&legacy.to_string()).is_err());
+        legacy["preview"] = serde_json::Value::Null;
+        legacy["thumbnail"] = serde_json::json!({"artifact":"/private/thumbnail","sha256":vec![2;32],"width":321,"height":1});
+        assert!(AttachmentManifest::decode(&legacy.to_string()).is_err());
+    }
+
+    /// Candidate preparation never decodes a prior representation contract as a current source.
+    #[cfg(tinkle_schema_candidate)]
+    #[test]
+    fn old_candidate_manifest_is_not_reinterpreted() {
+        for version in [1, 3] {
+            let old = serde_json::json!({"version":version,"input":"/import","settings":"native:async-actions",
+                "artifact":"/private/main","source_sha256":vec![0;32],"output_sha256":vec![1;32],
+                "profile":"old","mime":"image/png","media":vec![8,9]});
+            assert!(AttachmentManifest::decode(&old.to_string()).is_err());
+        }
+        // A byte-simple source can decode identically across resets: content checks are no epoch.
+        let old = serde_json::json!({"version":4,"media_contract":"singular-thumbnail-v1",
+            "input":"/import","settings":"native:singular-thumbnail-v1",
+            "artifact":"/private/main","source_sha256":vec![0;32],"output_sha256":vec![1;32],
+            "profile":"old","mime":"application/octet-stream","media":Vec::<u8>::new(),
+            "preview_in_media":false,"media_hash":format!("{:x}", Sha256::digest([]))});
+        assert!(AttachmentManifest::decode(&old.to_string()).is_err());
+    }
 
     /// An album fixture preserves ordered source identities independently of numeric message IDs.
     fn album() -> (OutgoingJob, p::SendAlbumResponse) {

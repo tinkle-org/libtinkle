@@ -159,6 +159,194 @@ Run `cargo test --locked -p tinkle-ffi` for the Rust adapter tests. Generated
 bindings and ABI execution are verified by consumers against their own builds.
 See [native integration](docs/platform-ios-android-wasm.md).
 
+## Managed media preparation
+
+Normal `Sending::prepare_attachment` uses the host installed with
+`configure_media_preparer` (UniFFI `configure_native_media_preparer`) for native
+normalization. The separate decoder-only configuration does not replace this
+encoder. Rust independently checks the closed normalized output; no mobile video
+decoder is implemented here. Hosts may return `NativeMediaOutput.thumbnail_frame`
+(`FfiNativeMediaOutput.thumbnail_frame`): display-oriented sRGB RGBA8 from the
+normalized video, tightly packed, at most 320 pixels per axis, fitted without
+upscaling. Unsupported color/HDR frames must be omitted, not misrepresented.
+
+Shared Rust derives a display-only JPEG preview (longest edge at most 40 pixels,
+at most 4096 bytes, aspect fitted without upscaling) and regular PNG thumbnail
+from normalized images, or from that optional host video frame. JPEG previews
+composite alpha on white; main and PNG alpha/animation normalization are unchanged.
+`NativePreparedMedia.tiny_preview` and the FFI local-result accessors expose the
+exact display bytes. The immutable attachment manifest retains the preview and
+a separate PNG path/digest before upload; restart reuses both artifacts without
+reading the import or running a codec. Principal cleanup removes both owned paths.
+
+Managed preparation uploads main first with the stable `:main` key, checkpoints
+its confirmed identity, then uploads optional PNG with the independent
+`:thumbnail` key. Errors, including unknown thumbnail outcomes, propagate rather
+than silently returning a changed main-only result. Explicit
+`Sending::upload_attachment_thumbnail` (UniFFI
+`sending_upload_attachment_thumbnail`) retries only the retained PNG after
+confirmed main completion. It never changes a submitted send's exact payload.
+Local upload completion is not backend validation or publication readiness.
+
+<a name="asynchronous-application-actions-candidate"></a>
+
+### Asynchronous application actions
+
+Ordinary builds with the [published pin](PROTO_PINNING.md#current-published-schema-pin)
+use the async action APIs without a separate opt-in. `Sending::prepare_attachment`,
+`prepare_native_attachment`, and `adopt_native_attachment` fix the exact recipe
+under the retained preparation key before upload.
+
+The main `BeginUpload` declares IMAGE or VIDEO processing explicitly; documents,
+audio, and voice omit processing intent. The separately supplied regular PNG
+declares IMAGE. The SDK never automatically re-uploads server-returned
+representations. Upload intents compare the exact serialized declaration,
+including optional presence.
+
+The returned `MediaSource` includes the exact `InlinePreview` and the completed
+`ThumbnailSource` when present. Regular inputs are <=256 KiB, <=320 per axis, and
+have fewer pixels than the main; a one-pixel main has none.
+The native result's `inline_preview` helper (also exported as InlinePreview
+protobuf bytes on the FFI result) supplies actual preview dimensions for strict
+profile/catalog source builders; those sources still require their original
+purpose-specific main metadata, normalization bounds and validation declarations.
+Manifest v5 stores JPEG bytes once, reconstructs the exact canonical
+prepared source declaration and verifies its digest, staying within the existing
+16-KiB intent budget. This happens before send enqueue, not by reserializing a
+submitted request. Preparation rejects old manifests before using retained paths
+or protobufs. See [wire identity and retained preparation](PROTO_PINNING.md#wire-identity-and-retained-preparation)
+for the required v5 identifiers and settings suffix.
+
+Ordinary `Sending::enqueue` retains sends and albums with their existing numeric
+idempotency keys. `enqueue_chat_photo` retains the positive numeric operation ID;
+`enqueue_channel_photo`, `enqueue_profile_photo`, `enqueue_create_asset` and
+`enqueue_update_asset` retain the caller's canonical lowercase nonzero request
+UUID. All persist the exact original CAS, source and keys before transmission.
+`enqueue_action_raw` retains original photo/asset request bytes after recursive
+unknown-field rejection, including legal noncanonical field ordering/presence.
+Reusing a local job key with different bytes fails before dispatch. Scheduling,
+text and non-file-backed sends retain their existing semantics, not wire-number
+compatibility across the global renumbering.
+
+ActionPrepared, ActionDispatching, ActionUnconfirmed, ActionPending,
+ActionProcessing, ActionSucceeded, ActionFailed and ActionCanceled are distinct
+from the original send/scheduling states. Pending and processing
+acknowledgements hydrate no message, draft or file membership. The backend owns
+automatic completion. After submission, `resume` queries original domain keys
+instead of replaying the mutation. Owner-specific `get_send_status`/`cancel_send`,
+`get_chat_photo_update`/`cancel_chat_photo_update`,
+`get_channel_photo_update`/`cancel_channel_photo_update`,
+`get_profile_photo_update`/`cancel_profile_photo_update` and
+`get_asset_change`/`cancel_asset_change` take the durable job ID. Typed service
+facades also expose the schema's direct query/cancel requests. Claimed work may
+remain PROCESSING after cancellation; a timeout proves no durable outcome. A
+successful query retains the validated original receipt before any body read.
+SUCCEEDED requires every ordered send receipt with exact original keys and
+explicit `reference_withheld` decisions, including when the
+original typed result is withheld or expired. Per-call identity disclosure may
+change without advancing the terminal operation revision; withheld slots never
+reuse an earlier disclosed reference. The domain-specific `retained_*` methods
+and matching `sending_retained_*` FFI adapters expose retained status without
+guessing accepted IDs from file IDs. Offline inspection is not fresh permission
+evidence. Querying any album member returns the first original key as canonical
+and the complete original ordered receipt list, never a reordered or partial group.
+
+For sends/albums, current bodies are fetched through GetMessages using only
+disclosed accepted message targets/IDs, even if the original main/caption changed.
+The original request and accepted receipt remain unchanged by that current-body
+read. Original typed result bodies are never replayed into cache by action
+recovery. Missing current items do not collapse album slots, synthesize a partial
+original result, establish deletion, or advance a journal. Current bodies/file
+refs commit under the pre-fetch scope/tombstone/revision fences. SUCCEEDED with
+no disclosed original result stays successful, including hidden current bodies,
+and cannot authorize another send. On supervised Returning connections, bounded
+periodic recovery uses `GetSendStatus` with the original target and key (the first
+key for an album). It covers unresolved sends and successful sends with unfinished
+hydration, including retained jobs on startup or reconnect. It never resubmits.
+`SendStatusChanged` is a read hint, not a receipt. Manual clients call the explicit
+recovery methods themselves.
+
+Representation journal markers use existing GetMessages reconciliation.
+Semantic body revisions and representation revisions compare independently only
+for the same owning capture and immutable main. Cache merges and exact file-ref
+replacement run inside the same scope/tombstone-fenced SQLite transaction. Legacy
+captures stay frozen; stale responses cannot transfer a representation set to a
+replacement main. Avatar enrichment may advance only an otherwise identical
+complete user/chat projection, not replace unversioned entity semantics.
+Conflicting equal message/representation clocks fail projection or storage before
+the batch's journal progress can commit. Schema-aware mergers return both the
+selected body and its semantic revision metadata; SQLite persists that selected
+clock, never the incoming batch's clock on a hybrid. `fresher_body` authorizes
+installing its candidate unchanged only when that standalone body preserves both
+clocks; callers needing a hybrid use `merge_message` and install its returned body.
+Action hints and representation notifications are source-fenced fetch demands,
+not receipts or file grants. `refresh_media_representation` fetches exact chat
+photo, profile entry or asset-version projections using existing query methods;
+it returns a typed Any and narrowly refreshes matching cached avatars. There is
+no new durable catalog/gallery cache or representation RPC. Hosts query known
+owning references on startup/reconnect even without a hint.
+Action-status reads retain a connection-local demand counter independently of
+best-effort app event delivery. A hint arriving during a durable query causes one
+additional authoritative read, including after a cancellation decision, under the
+original query budget. Direct typed status reads also refetch once; direct cancel
+calls are not resubmitted. Continued hint churn and missing notifications remain
+covered by the bounded periodic retained-job recovery after startup/reconnect.
+Kindless chat-photo references query Channels.GetChannels first, then
+Messages.GetChats only after an authoritative empty channel result, using the
+same ID and one bounded lookup budget. Errors (including policy denial,
+unavailability, NotFound and Unimplemented) never select the other owner.
+Nonempty responses must match the queried room kind/ID and original photo/main
+identities with a positive representation revision; replacements do not fall
+back. The GetChannels response uses the existing `chats` projection field. This
+requires the gateway channel lookup implementation, including empty results for
+non-channel IDs; an undeployed stub fails closed.
+
+UniFFI uses ordinary preparation/adoption/send methods, domain-specific durable
+enqueue/query/cancel/inspection adapters, representation refresh, and domain hint
+payloads. Consumer execution and backend workers require separate qualification.
+
+The published schema exposes one optional `thumbnail`, not a role or
+variant list. `ThumbnailSource` declares one completed uploaded file with positive
+width/height; `Thumbnail` reports the same shape with measured dimensions. Missing
+is valid and differs from a present record with zero dimensions. Inline tiny JPEG
+preview bytes remain separate. Photo/document/video/audio/sticker inputs and
+profile/catalog sources all use this shared shape; voice accepts no thumbnail.
+Cache enrichment compares independent representation revisions only within the
+same immutable source identity and replaces exact file membership atomically.
+
+UniFFI preparation returns `FfiUploadedThumbnail`, pairing the ordinary
+`FileInfo` protobuf with a typed `FfiThumbnailSource` for that exact file ID.
+`media_source_with_thumbnail`, `chat_photo_source_with_thumbnail`,
+`profile_photo_source_with_thumbnail`, and
+`sticker_asset_source_with_thumbnail` explicitly assemble new sources and reject
+unknown fields against the selected descriptor before decoding. They never edit
+retained requests or keys. `thumbnail_from_protobuf` returns the shared owned
+`FfiThumbnail` projection.
+
+Regenerate bindings from the exact native build; do not mix them with bindings
+generated before the cutover. This repository has no binding generator or
+committed Swift/Kotlin bindings. Consumers own binding generation and device
+qualification.
+
+The wire change is not an in-place upgrade. Follow the
+[clean cutover gate](PROTO_PINNING.md#clean-media-cutover-gate) before using the
+published pin against a server or opening retained application state.
+
+SQLite action numbers 7..13 are incompatible experimental data. Opening a job or
+inventory containing those values fails explicitly. No migration reinterprets
+their payload, uncertainty or keys. Only disposable candidate data may be removed
+with `Storage::discard_incompatible_candidate_actions`, scoped to one principal;
+this loses local evidence and does not cancel remote work. Never use disposal to
+rekey uncertain real actions. New actions use distinct discriminants 14..21.
+
+The shared uploader accepts negotiated parts of exactly 64, 128, 256 or
+512 KiB. Boundaries are retained per immutable upload intent across restart and
+checked against subsequent server snapshots. All mains and regular thumbnails use
+this path, with at most the server's allowed parallelism and the existing local
+byte/task caps. A 2-GiB file at 512 KiB needs 4096 parts and is not rejected by an
+artificially smaller part-count limit. Audio, voice and raw documents omit media
+inspection intent; uploading them never requires an image/video worker.
+
 ## Logout
 
 `logout().await` fences the Client permanently, erases SDK-owned key/capability
@@ -196,13 +384,13 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v
 cargo check --locked -p libtinkle-web -p tinkle-schema --target wasm32-unknown-unknown
 ```
 
-`scripts/test-schema-candidate.sh` is optional tooling for future-schema
-development, not release qualification. See [public pinning](PROTO_PINNING.md).
-
-The published schema dependency is
-`=0.5.0-20261112172535-6099d89af63f.2`. Locked Rust checks and host transport
-fixtures qualify only their executed lanes.
-Production-server acceptance and consumer application execution require separate evidence.
+Use the [exact published schema pin](PROTO_PINNING.md#current-published-schema-pin)
+for ordinary locked checks, without a local schema override. The
+[local generator](PROTO_PINNING.md#optional-future-schema-development) is for
+unpublished schema development and does not qualify the release. These commands
+and fixtures are not evidence of live-server, backend-worker, or simulator/device
+execution. Production-server acceptance and consumer application execution need
+separate evidence.
 
 `Messages::get_scheduled_messages`, `cancel_scheduled_messages`, and
 `close_poll` have corresponding named mobile protobuf-byte adapters. Scheduled

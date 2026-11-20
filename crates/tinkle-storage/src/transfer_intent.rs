@@ -66,6 +66,12 @@ CREATE TABLE IF NOT EXISTS file_transfer_intents_v1(
  PRIMARY KEY(principal,job_id),
  FOREIGN KEY(principal,job_id) REFERENCES file_transfers(principal,job_id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS file_upload_negotiations_v1(
+ principal TEXT NOT NULL, job_id TEXT NOT NULL, incarnation BLOB NOT NULL,
+ upload_id TEXT NOT NULL, part_size INTEGER NOT NULL CHECK(part_size>0),
+ PRIMARY KEY(principal,job_id),
+ FOREIGN KEY(principal,job_id) REFERENCES file_transfer_intents_v1(principal,job_id) ON DELETE CASCADE
+);
 CREATE TRIGGER IF NOT EXISTS file_transfer_intent_guard_v1 BEFORE UPDATE ON file_transfers
 WHEN EXISTS(SELECT 1 FROM file_transfer_intents_v1 i WHERE i.principal=OLD.principal AND i.job_id=OLD.job_id)
 BEGIN
@@ -148,6 +154,43 @@ fn read(
 }
 
 impl Storage {
+    /// Bind the first authoritative upload geometry to the immutable intent across restart.
+    /// A new response cannot renegotiate boundaries or adopt another upload session.
+    pub fn bind_upload_part_size(
+        &self,
+        principal: &str,
+        expected: &TransferIntentCheckpoint,
+        upload_id: &str,
+        part_size: i64,
+    ) -> Result<(), TransferIntentError> {
+        check_principal(principal)?;
+        if expected.job.kind != "upload"
+            || upload_id.is_empty()
+            || upload_id.len() > 4096
+            || !(1..=1024 * 1024).contains(&part_size)
+        {
+            return Err(TransferIntentError::Invalid);
+        }
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute_batch(SCHEMA)?;
+        let current =
+            read(&tx, principal, &expected.job.job_id)?.ok_or(TransferIntentError::Changed)?;
+        if current.incarnation != expected.incarnation
+            || current.proof != expected.proof
+            || (!current.job.upload_id.is_empty() && current.job.upload_id != upload_id)
+        {
+            return Err(TransferIntentError::Conflict);
+        }
+        tx.execute("INSERT INTO file_upload_negotiations_v1(principal,job_id,incarnation,upload_id,part_size) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(principal,job_id) DO NOTHING",params![principal,expected.job.job_id,expected.incarnation,upload_id,part_size])?;
+        let same:bool=tx.query_row("SELECT incarnation=?3 AND upload_id=?4 AND part_size=?5 FROM file_upload_negotiations_v1 WHERE principal=?1 AND job_id=?2",params![principal,expected.job.job_id,expected.incarnation,upload_id,part_size],|r|r.get(0))?;
+        if !same {
+            return Err(TransferIntentError::Conflict);
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Scratch files live beside the host-configured database, outside principal artifact cleanup.
     /// The host must provision a private writable database directory. In-memory storage retains
     /// the system temporary-directory behavior; this does not derive paths from imported media.
@@ -270,7 +313,8 @@ impl Storage {
 
     /// Conditional row update: match immutable proof/incarnation AND exact state/revision.
     /// No missing/deleted row is recreated. Legacy unconditional upserts cannot mutate
-    /// registered rows because only this transaction arms their update guard.
+    /// registered rows because only this transaction arms their update guard. A disclosed
+    /// upload session must already match its durable geometry binding in this transaction.
     pub fn compare_and_swap_file_transfer(
         &self,
         principal: &str,
@@ -298,6 +342,17 @@ impl Storage {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         if tx.execute("UPDATE file_transfer_intents_v1 SET writing_revision=revision WHERE principal=?1 AND job_id=?2 AND proof=?3 AND incarnation=?4 AND revision=?5",
             params![principal,old.job_id,expected.proof,expected.incarnation,revision])? !=1 { return Ok(None); }
+        if next.kind == "upload" && !next.upload_id.is_empty() {
+            let bound: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM file_upload_negotiations_v1
+                 WHERE principal=?1 AND job_id=?2 AND incarnation=?3 AND upload_id=?4)",
+                params![principal, next.job_id, expected.incarnation, next.upload_id],
+                |r| r.get(0),
+            )?;
+            if !bound {
+                return Err(TransferIntentError::Conflict);
+            }
+        }
         let changed=tx.execute("UPDATE file_transfers SET file_id=?3,upload_id=?4,state=?5,session_json=?6,temp_path=?7,resume_offset=?8,updated_at=?9
             WHERE principal=?1 AND job_id=?2 AND state=?10 AND session_json=?11 AND file_id=?12 AND upload_id=?13 AND temp_path=?14 AND resume_offset=?15 AND updated_at=?16 AND kind=?17 AND file_scope=?18",
             params![principal,next.job_id,next.file_id,next.upload_id,next.state,next.session_json,next.temp_path,next.resume_offset,next.updated_at,
@@ -312,6 +367,7 @@ impl Storage {
 
     /// Merge diagnostic upload checkpoints monotonically within the SAME registered
     /// incarnation. Concurrent identical workers may advance; terminal state wins.
+    /// Bind every authoritative session/part-size response before exposing its session here.
     /// Server snapshots, never these local counters, decide which parts to send.
     pub fn advance_upload_intent(
         &self,
@@ -363,6 +419,92 @@ impl Storage {
 mod tests {
     use super::*;
     use std::sync::{Arc, Barrier};
+
+    /// Part boundaries cannot change across restart, a conflicting Begin response or principal wipe.
+    #[test]
+    fn negotiated_upload_geometry_is_durable_and_incarnation_scoped() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("cache.sqlite");
+        let s = Storage::open(path.to_str().unwrap()).unwrap();
+        let initial = job("proof");
+        let old = s
+            .create_or_compare_file_transfer_intent("user:1", &initial, "proof")
+            .unwrap();
+        s.bind_upload_part_size("user:1", &old, "upload", 524288)
+            .unwrap();
+        drop(s);
+        let s = Storage::open(path.to_str().unwrap()).unwrap();
+        s.bind_upload_part_size("user:1", &old, "upload", 524288)
+            .unwrap();
+        assert!(s
+            .bind_upload_part_size("user:1", &old, "upload", 65536)
+            .is_err());
+        assert!(s
+            .bind_upload_part_size("user:1", &old, "different", 524288)
+            .is_err());
+        s.clear_principal("user:1").unwrap();
+        let new = s
+            .create_or_compare_file_transfer_intent("user:1", &initial, "proof")
+            .unwrap();
+        assert!(s
+            .bind_upload_part_size("user:1", &old, "upload", 524288)
+            .is_err());
+        s.bind_upload_part_size("user:1", &new, "fresh", 65536)
+            .unwrap();
+    }
+
+    /// Preparation parents permit a confirmed main ID while completing the optional upload;
+    /// repeated completion and late active progress preserve terminal identity across restart.
+    #[test]
+    fn preparation_main_identity_survives_completing_and_repeated_complete() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache.sqlite");
+        let storage = Storage::open(path.to_str().unwrap()).unwrap();
+        let mut initial = job("immutable preparation");
+        initial.job_id = "prepare:key".into();
+        let first = storage
+            .create_or_compare_file_transfer_intent("user:1", &initial, &initial.session_json)
+            .unwrap();
+        let mut active = initial.clone();
+        active.state = "active".into();
+        let active_token = storage
+            .advance_upload_intent("user:1", &first, &active)
+            .unwrap();
+        let mut completing = active.clone();
+        completing.state = "completing".into();
+        completing.file_id = 9;
+        let completing_token = storage
+            .advance_upload_intent("user:1", &active_token, &completing)
+            .unwrap();
+        assert_eq!(completing_token.job.file_id, 9);
+        let mut complete = completing.clone();
+        complete.state = "complete".into();
+        storage
+            .advance_upload_intent("user:1", &completing_token, &complete)
+            .unwrap();
+        drop(storage);
+        let storage = Storage::open(path.to_str().unwrap()).unwrap();
+        let current = storage
+            .file_transfer_intent("user:1", &initial.job_id)
+            .unwrap()
+            .unwrap();
+        let repeated = storage
+            .advance_upload_intent("user:1", &current, &complete)
+            .unwrap();
+        assert_eq!(
+            (repeated.job.state.as_str(), repeated.job.file_id),
+            ("complete", 9)
+        );
+        let late = storage
+            .advance_upload_intent("user:1", &first, &active)
+            .unwrap();
+        assert_eq!((late.job.state.as_str(), late.job.file_id), ("complete", 9));
+        let mut changed = complete;
+        changed.file_id = 10;
+        assert!(storage
+            .advance_upload_intent("user:1", &repeated, &changed)
+            .is_err());
+    }
 
     fn job(proof: &str) -> FileTransferJob {
         FileTransferJob {
@@ -470,6 +612,9 @@ mod tests {
         active.state = "active".into();
         active.upload_id = "remote".into();
         active.resume_offset = 1;
+        storage
+            .bind_upload_part_size("user:1", &first, "remote", 65536)
+            .unwrap();
         let advanced = storage
             .compare_and_swap_file_transfer("user:1", &first, &active)
             .unwrap()

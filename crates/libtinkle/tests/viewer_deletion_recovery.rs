@@ -89,6 +89,8 @@ async fn serve(
                         p::ListMessageChangesResponse {
                             changes: if hidden && req.after_accept_seq < 2 {
                                 vec![p::TargetChange {
+                                    #[cfg(tinkle_async_actions)]
+                                    representation_revision: None,
                                     message_id: 10,
                                     kind: p::TargetChangeKind::Deleted as i32,
                                     accept_seq: 2,

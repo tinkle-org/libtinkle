@@ -1,8 +1,9 @@
-"""Isolated Rust schema-candidate checks without Buf, Cargo, or network access."""
+"""Isolated candidate checks without Buf, Cargo, or network; cfg checks use rustc."""
 
 from contextlib import redirect_stdout
 import io
 import json
+import os
 from pathlib import Path
 import runpy
 import shutil
@@ -32,6 +33,7 @@ class SchemaCandidateTests(unittest.TestCase):
         (self.root / ".cargo/config.toml").write_text("")
 
     def generate(self, syntra_version="1.0.0-rc.5", fail_command=False):
+        """Run the candidate helper on disposable fixtures with Buf and Cargo mocked."""
         commands = []
         def run(command, **kwargs):
             commands.append((command, kwargs))
@@ -39,7 +41,7 @@ class SchemaCandidateTests(unittest.TestCase):
                 Path(command[-1]).write_bytes(b"descriptor")
             elif command[:2] == ["buf", "generate"]:
                 path = self.output / "prost-candidate/src/tinkle/v1/tinkle.v1.rs"
-                path.parent.mkdir(parents=True)
+                path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("generated proto")
             elif command == ["true"] and fail_command:
                 raise subprocess.CalledProcessError(1, command)
@@ -51,13 +53,99 @@ class SchemaCandidateTests(unittest.TestCase):
                       "source": "registry+https://github.com/rust-lang/crates.io-index"}
                      for name in ("syntra-core", "syntra-runtime", "syntra-net")]
         metadata = {"packages": packages, "resolve": {"nodes": [{"id": "syntra-net", "features": ["tcp"]}]}}
-        args = [str(self.script), "--schema", str(self.schema), "--output", str(self.output)]
+        args = [str(self.script), "--schema", str(self.schema), "--output", str(self.output), "--async-actions"]
         with patch.object(sys, "argv", [*args, "--", "true"]), \
                 patch("subprocess.run", side_effect=run), \
                 patch("subprocess.check_output", return_value=json.dumps(metadata).encode()), \
                 redirect_stdout(io.StringIO()):
             runpy.run_path(str(self.script), run_name="__main__")
         return commands
+
+    def test_async_actions_capability_is_explicit_and_isolated(self):
+        commands = self.generate()
+        self.assertEqual(commands[-1][1]["env"]["TINKLE_SCHEMA_CANDIDATE_ASYNC_ACTIONS"], "1")
+        evidence = json.loads((self.output / "candidate.json").read_text())
+        self.assertTrue(evidence["async_actions"])
+        self.assertEqual(evidence["media_contract"], "singular-thumbnail-compact-wire-reset-v1")
+        self.assertEqual(commands[-1][1]["env"]["TINKLE_SCHEMA_CANDIDATE_MEDIA_CONTRACT"], "singular-thumbnail-compact-wire-reset-v1")
+
+    def test_reset_identity_overrides_stale_environment(self):
+        with patch.dict("os.environ", {
+            "TINKLE_SCHEMA_CANDIDATE_WIRE_ID": "stale-candidate",
+            "TINKLE_SCHEMA_CANDIDATE_MEDIA_CONTRACT": "singular-thumbnail-v1",
+        }):
+            commands = self.generate()
+        evidence = json.loads((self.output / "candidate.json").read_text())
+        self.assertEqual(evidence["wire_identity"], "compact-wire-reset-v1")
+        for command, options in commands:
+            if command[0] != "buf":
+                self.assertEqual(options["env"]["TINKLE_SCHEMA_CANDIDATE_WIRE_ID"], "compact-wire-reset-v1")
+
+    def test_generator_uses_one_isolated_source_snapshot(self):
+        """Both generation operations consume the same frozen source, never the live checkout."""
+        (self.schema / "media.proto").write_text("source before generation")
+        commands = self.generate()
+        inputs = [command[2] for command, _ in commands if command[:2] in (["buf", "build"], ["buf", "generate"])]
+        self.assertEqual(inputs, [str(self.output / "schema-source")] * 2)
+        self.assertEqual((self.output / "schema-source/media.proto").read_text(), "source before generation")
+
+    def test_source_hash_and_snapshot_exclude_build_and_git_directories(self):
+        """Ignored protos/configs are neither traversed for hashing nor copied into generation."""
+        (self.schema / "media.proto").write_text("included source")
+        (self.schema / "buf.yaml").write_text("included config")
+        self.generate()
+        before = json.loads((self.output / "candidate.json").read_text())["schema_source_sha256"]
+        for parent in (self.schema, self.schema / "nested"):
+            for name in (".git", "node_modules", "target", "__pycache__"):
+                ignored = parent / name
+                ignored.mkdir(parents=True)
+                (ignored / "excluded.proto").write_text("not a generation input")
+                (ignored / "buf.yaml").write_text("not a generation config")
+        original_read = Path.read_bytes
+
+        def read_input(path):
+            """Fail if hashing attempts to read any ignored schema input."""
+            if path.is_relative_to(self.schema):
+                self.assertFalse(set(path.relative_to(self.schema).parts) & {
+                    ".git", "node_modules", "target", "__pycache__"
+                })
+            return original_read(path)
+
+        with patch.object(Path, "read_bytes", read_input):
+            self.generate()
+        evidence = json.loads((self.output / "candidate.json").read_text())
+        self.assertEqual(evidence["schema_source_sha256"], before)
+        snapshot = self.output / "schema-source"
+        self.assertEqual((snapshot / "media.proto").read_text(), "included source")
+        self.assertEqual((snapshot / "buf.yaml").read_text(), "included config")
+        for parent in (snapshot, snapshot / "nested"):
+            for name in (".git", "node_modules", "target", "__pycache__"):
+                self.assertFalse((parent / name).exists())
+        (self.schema / "media.proto").write_text("changed included source")
+        self.generate()
+        self.assertNotEqual(
+            json.loads((self.output / "candidate.json").read_text())["schema_source_sha256"], before
+        )
+
+    def test_candidate_requires_explicit_actions_before_creating_output(self):
+        stderr = io.StringIO()
+        with patch.dict("os.environ", {"TINKLE_SCHEMA_CANDIDATE_ASYNC_ACTIONS": "1"}), \
+                patch.object(sys, "argv", [str(self.script), "--output", str(self.output)]), \
+                patch("subprocess.run") as invoke, patch.object(sys, "stderr", stderr):
+            with self.assertRaises(SystemExit) as error:
+                runpy.run_path(str(self.script), run_name="__main__")
+            self.assertEqual(error.exception.code, 2)
+            self.assertIn("required: --async-actions", stderr.getvalue())
+            invoke.assert_not_called()
+        self.assertFalse(self.output.exists())
+
+    def test_repeat_copy_removes_deleted_sources(self):
+        workspace = self.output / "workspace"
+        workspace.mkdir(parents=True)
+        stale = workspace / "deleted.rs"
+        stale.write_text("stale")
+        self.generate()
+        self.assertFalse(stale.exists())
 
     def test_candidate_runs_in_isolated_workspace_without_changing_source_pins(self):
         originals = {name: (self.root / name).read_bytes() for name in ("Cargo.toml", "Cargo.lock")}
@@ -83,12 +171,55 @@ class SchemaCandidateTests(unittest.TestCase):
     def test_output_cannot_overwrite_sources_or_repository_ancestors(self):
         for output in (self.root / "crates", self.root / "scripts", self.root.parent):
             with self.subTest(output=output), patch.object(sys, "argv", [
-                str(self.script), "--output", str(output)
+                str(self.script), "--async-actions", "--output", str(output)
             ]), patch("subprocess.run") as invoke:
                 with self.assertRaisesRegex(SystemExit, "separate temporary/build directory"):
                     runpy.run_path(str(self.script), run_name="__main__")
                 invoke.assert_not_called()
 
+
+class SchemaCfgTests(unittest.TestCase):
+    """Run the real shared build script to verify fail-closed capability combinations."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Compile once without Cargo or dependency resolution."""
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.temp.cleanup)
+        cls.binary = Path(cls.temp.name) / "schema-cfg"
+        subprocess.run(["rustc", str(ROOT / "scripts/schema-cfg.rs"), "-o", str(cls.binary)], check=True)
+
+    def configure(self, **variables):
+        """Do not inherit candidate flags from the test runner."""
+        env = {key: value for key, value in os.environ.items() if not key.startswith("TINKLE_SCHEMA_")}
+        env.update({"TINKLE_SCHEMA_CANDIDATE_" + key: value for key, value in variables.items()})
+        return subprocess.run([str(self.binary)], env=env, capture_output=True, text=True)
+
+    def test_published_and_explicit_candidate_have_same_contract(self):
+        """Selecting a registry or isolated source does not change the wire contract."""
+        published = self.configure()
+        self.assertEqual(published.returncode, 0, published.stderr)
+        self.assertIn("cargo:rustc-env=TINKLE_SCHEMA_WIRE_ID=compact-wire-reset-v1", published.stdout)
+        self.assertIn("cargo:rustc-cfg=tinkle_schema_candidate", published.stdout)
+        self.assertIn("cargo:rustc-cfg=tinkle_async_actions", published.stdout)
+        candidate = self.configure(WIRE_ID="compact-wire-reset-v1", ASYNC_ACTIONS="1",
+                                   MEDIA_CONTRACT="singular-thumbnail-compact-wire-reset-v1")
+        self.assertEqual(candidate.returncode, 0, candidate.stderr)
+        self.assertEqual(candidate.stdout, published.stdout)
+
+    def test_invalid_or_incomplete_build_flags_fail_closed(self):
+        """Typos and the previous candidate capability cannot fall back to published identity."""
+        for variables in (
+            {"WIRE_ID": ""}, {"WIRE_ID": "unknown"}, {"ASYNC_ACTIONS": "true"},
+            {"ASYNC_ACTIONS": ""}, {"ASYNC_ACTIONS": "1"},
+            {"ASYNC_ACTIONS": "1", "MEDIA_CONTRACT": "singular-thumbnail-v1"},
+            {"WIRE_ID": "compact-wire-reset-v1", "ASYNC_ACTIONS": "1"},
+            {"WIRE_ID": "compact-wire-reset-v1", "ASYNC_ACTIONS": "1", "MEDIA_CONTRACT": "singular-thumbnail-v1"},
+            {"MEDIA_CONTRACT": "singular-thumbnail-compact-wire-reset-v1"},
+            {"WIRE_ID": "compact-wire-reset-v1", "ASYNC_ACTIONS": "0"},
+        ):
+            with self.subTest(variables=variables):
+                self.assertNotEqual(self.configure(**variables).returncode, 0)
 
 if __name__ == "__main__":
     unittest.main()

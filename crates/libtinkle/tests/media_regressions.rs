@@ -1,6 +1,7 @@
 //! Actual codec fixtures with coordinated access to process-wide admission.
 #[path = "../src/media.rs"]
-#[allow(dead_code)] // Compile the module directly to exercise its test-only snapshot controls.
+#[allow(dead_code)]
+// Local module: crate-visible helpers and test-only snapshot controls stay private to each crate.
 mod media;
 
 use image::ImageEncoder;
@@ -62,6 +63,7 @@ fn verify_real_native_encoder_profiles() {
             audio_sample_rate: 48000,
             audio_samples: 19200,
             waveform: vec![],
+            thumbnail_frame: None,
         };
         assert_eq!(
             media::test_verify_native_output(&directory.join(format!("{name}.mp4")), kind, &facts),
@@ -94,6 +96,7 @@ async fn native_voice_waveform_from_real_aac_fixture() {
                 audio_sample_rate: 48000,
                 audio_samples: 19200,
                 waveform: vec![],
+                thumbnail_frame: None,
             })
         }
     }
@@ -197,6 +200,7 @@ impl media::PlatformMediaPreparer for NativePngPreparer {
             audio_sample_rate: 0,
             audio_samples: 0,
             waveform: vec![],
+            thumbnail_frame: None,
         })
     }
 }
@@ -354,6 +358,14 @@ async fn native_owned_artifact_source_precedes_output_quota_and_precancel() {
         libtinkle::sha256(b"frozen source")
     );
     assert_ne!(artifact.main.source_sha256, artifact.main.output_sha256);
+    let preview = artifact.tiny_preview.as_ref().unwrap();
+    assert!(preview.len() <= 4096);
+    let decoded = image::load_from_memory_with_format(preview, image::ImageFormat::Jpeg).unwrap();
+    assert_eq!((decoded.width(), decoded.height()), (1, 1));
+    assert!(
+        artifact.main.thumbnail.is_none(),
+        "one-pixel mains have no lower-pixel regular thumbnail"
+    );
     assert_eq!(
         artifact.main.disposition,
         media::PreparationDisposition::NativeEncoded
@@ -905,6 +917,61 @@ fn sixteen_bit_png_is_preserved() {
 }
 
 use std::io::Cursor;
+
+/// Tiny display previews keep aspect ratio and never upscale; main pixels remain lossless.
+#[test]
+fn tiny_preview_fits_noisy_portrait_landscape_and_small_images() {
+    let _test = MEDIA_TESTS.blocking_lock();
+    for (width, height, expected) in [
+        (800, 400, (40, 20)),
+        (60, 120, (20, 40)),
+        (3, 2, (3, 2)),
+        (1, 500, (1, 40)),
+    ] {
+        let raster =
+            image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(width, height, |x, y| {
+                image::Rgba([
+                    (x.wrapping_mul(97) ^ y) as u8,
+                    y.wrapping_mul(73) as u8,
+                    x as u8,
+                    128,
+                ])
+            }));
+        let preview = media::tiny_jpeg_preview(&raster).unwrap();
+        assert!(preview.len() <= 4096);
+        let decoded =
+            image::load_from_memory_with_format(&preview, image::ImageFormat::Jpeg).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), expected);
+    }
+}
+
+/// Supplied regular inputs obey public byte/lower-pixel bounds, independently of tiny JPEGs.
+#[test]
+fn regular_thumbnail_is_optional_for_one_pixel_and_bounded_for_noise() {
+    let _test = MEDIA_TESTS.blocking_lock();
+    assert!(
+        media::regular_thumbnail(&image::DynamicImage::new_rgba8(1, 1), 1, 1)
+            .unwrap()
+            .is_none()
+    );
+    let mut seed = 17u32;
+    let raster = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(320, 320, |_, _| {
+        let mut p = [0; 4];
+        for b in &mut p {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            *b = seed as u8;
+        }
+        image::Rgba(p)
+    }));
+    let bytes = media::regular_thumbnail(&raster, 320, 320)
+        .unwrap()
+        .unwrap();
+    assert!(bytes.len() <= 256 * 1024);
+    let image = image::load_from_memory(&bytes).unwrap();
+    assert!(image.width() * image.height() < 320 * 320);
+}
 
 /// Signed 24-bit integer minima/maxima survive without quantization or resampling.
 #[test]

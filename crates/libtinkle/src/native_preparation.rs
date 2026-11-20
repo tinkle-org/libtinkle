@@ -77,10 +77,14 @@ pub struct NativeMediaOutput {
     pub audio_samples: u64,
     /// Voice only: 100 unsigned linear-amplitude peak bins, derived from source PCM in Rust.
     pub waveform: Vec<u8>,
+    /// Optional display-oriented sRGB RGBA8 frame from the normalized video output, <=320 per axis.
+    /// Hosts omit unsupported color/HDR frames. Rust consumes it into retained display artifacts.
+    pub thumbnail_frame: Option<DecodedVideoFrame>,
 }
 
 /// Native encoders must fully close/join readers, writers and finalization before returning.
-/// This callback writes only the invocation's output path and returns small owned facts, not media buffers.
+/// Write only the invocation's output path; return small owned facts and an optional bounded
+/// display frame, never full-size media buffers. Retain the input lease through actual teardown.
 #[async_trait::async_trait]
 pub trait PlatformMediaPreparer: Send + Sync {
     async fn prepare(&self, input: Arc<NativeMediaInput>) -> Result<NativeMediaOutput, MediaError>;
@@ -92,6 +96,30 @@ pub struct NativePreparedMedia {
     pub main: PreparedMediaPath,
     pub kind: NativeMediaKind,
     pub output: NativeMediaOutput,
+    /// Exact bounded JPEG display preview; separate from the optional regular PNG upload.
+    pub tiny_preview: Option<Vec<u8>>,
+}
+
+#[cfg(tinkle_async_actions)]
+impl NativePreparedMedia {
+    /// Exact owned public preview input for photo/profile/catalog source builders, with decoded
+    /// dimensions. This is display data, not main validation or a publication/access decision.
+    pub fn inline_preview(
+        &self,
+    ) -> Result<Option<tinkle_schema::proto::InlinePreview>, MediaError> {
+        self.tiny_preview
+            .as_ref()
+            .map(|jpeg| {
+                validate_tiny_preview(jpeg).map(|(width, height)| {
+                    tinkle_schema::proto::InlinePreview {
+                        width,
+                        height,
+                        jpeg: jpeg.clone().into(),
+                    }
+                })
+            })
+            .transpose()
+    }
 }
 
 /// Integer-pixel, no-upscale fitting. Both orientations use the same long/short edge policy.
@@ -324,17 +352,46 @@ async fn prepare_native_media_inner(
             prepare_path_with_policy(&path, MediaKind::Document, Some(token.clone()), policy)
                 .await?;
         let artifact = main.output.clone();
+        let frame = facts.thumbnail_frame.take();
         let measured = facts.clone();
-        let image_facts = tokio::task::spawn_blocking(move || {
-            verify_output_container(artifact.as_file(), kind, &measured)
-        })
-        .await
-        .map_err(|_| MediaError::Codec)??;
+        let (image_facts, thumbnail, thumbnail_facts, tiny_preview) =
+            tokio::task::spawn_blocking(move || {
+                let image_facts = verify_output_container(artifact.as_file(), kind, &measured)?;
+                let display = match kind {
+                    NativeMediaKind::Image => {
+                        if frame.is_some() {
+                            return Err(MediaError::Invalid);
+                        }
+                        let bytes = std::fs::read(artifact.path()).map_err(|_| MediaError::Io)?;
+                        Some(normalized_display_image(&bytes, false)?)
+                    }
+                    NativeMediaKind::Video => frame
+                        .map(|f| validated_video_frame(f, measured.width, measured.height))
+                        .transpose()?,
+                    _ if frame.is_some() => return Err(MediaError::Invalid),
+                    _ => None,
+                };
+                let thumbnail = display
+                    .as_ref()
+                    .map(|image| regular_thumbnail(image, measured.width, measured.height))
+                    .transpose()?
+                    .flatten();
+                let tiny_preview = display.as_ref().map(tiny_jpeg_preview).transpose()?;
+                let thumbnail_facts = thumbnail
+                    .as_ref()
+                    .map(|bytes| inspect_image(bytes))
+                    .transpose()?;
+                Ok::<_, MediaError>((image_facts, thumbnail, thumbnail_facts, tiny_preview))
+            })
+            .await
+            .map_err(|_| MediaError::Codec)??;
         // The exact stable snapshot is the artifact; foreign code never owns this new output path.
         main.source_sha256 = input.source_sha256;
         main.profile = NATIVE_PREPARATION_PROFILE;
         main.disposition = PreparationDisposition::NativeEncoded;
         main.main_facts = image_facts;
+        main.thumbnail_facts = thumbnail_facts;
+        main.thumbnail = thumbnail;
         main.mime_type = match kind {
             NativeMediaKind::Image => "image/png",
             NativeMediaKind::Video => "video/mp4",
@@ -356,6 +413,7 @@ async fn prepare_native_media_inner(
             main,
             kind,
             output: facts,
+            tiny_preview,
         })
     });
     let failure = tokio::select! { biased;
@@ -448,6 +506,7 @@ fn prepare_shared_animation(
         audio_sample_rate: 0,
         audio_samples: 0,
         waveform: Vec::new(),
+        thumbnail_frame: None,
     };
     let mut file =
         tempfile::NamedTempFile::new_in(input.source_path().parent().ok_or(MediaError::Io)?)
@@ -457,19 +516,24 @@ fn prepare_shared_animation(
     if input.is_cancelled() {
         return Err(MediaError::Cancelled);
     }
+    let display = normalized_display_image(&result.bytes, facts.animated)?;
+    let thumbnail = regular_thumbnail(&display, output.width, output.height)?;
+    let thumbnail_facts = thumbnail.as_ref().map(|b| inspect_image(b)).transpose()?;
+    let tiny_preview = Some(tiny_jpeg_preview(&display)?);
     Ok(Some(NativePreparedMedia {
         kind: NativeMediaKind::Image,
         output,
+        tiny_preview,
         main: PreparedMediaPath {
             output: Arc::new(file),
             source_sha256: input.source_sha256,
             output_sha256: result.output_sha256,
             profile: NATIVE_PREPARATION_PROFILE,
             mime_type: result.mime_type,
-            thumbnail: result.thumbnail,
+            thumbnail,
             disposition: result.disposition,
             main_facts: result.main_facts,
-            thumbnail_facts: result.thumbnail_facts,
+            thumbnail_facts,
         },
     }))
 }
@@ -765,6 +829,12 @@ fn validate_native_facts(
     f: &NativeMediaOutput,
     limits: NativePreparationLimits,
 ) -> Result<(), MediaError> {
+    if let Some(frame) = &f.thumbnail_frame {
+        if !matches!(kind, NativeMediaKind::Video) {
+            return Err(MediaError::Invalid);
+        }
+        validate_video_frame(frame, f.width, f.height)?;
+    }
     match kind {
         NativeMediaKind::Image => {
             if f.width == 0

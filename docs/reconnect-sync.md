@@ -7,12 +7,11 @@ fresh channel proof under the explicit trust source. The `request_id` space dies
 connection; subscriptions, live state, and in-flight RPCs do not
 survive.
 
-On loss, all in-flight RPCs report `UNAVAILABLE` with unknown outcome
-(`is_unknown_outcome()==true`). Retry only when no terminal `result`
-arrived AND the operation is idempotent or carries an application
-operation key (`idempotency_key` for sends), with a fresh `request_id`, bounded
-retries, and jittered backoff (`ReconnectPolicy`: 500 ms base, ×2,
-30 s cap, 10 attempts default).
+On transport loss, an in-flight RPC can report `UNAVAILABLE` with unknown
+outcome (`is_unknown_outcome()==true`). Reconnection never replays RPCs. For
+immediate file-backed sends, query the original send instead of
+retrying the mutation. The reconnect policy defaults to a 500 ms base, ×2
+backoff, a 30 s cap, and 10 attempts, with jitter.
 
 Supervised apps call `start(targets, watch)` once: the SDK establishes the
 session and owns reconnection from there on (hint-driven plus a
@@ -61,9 +60,13 @@ authorization proof; malformed recognized payloads are discarded.
 Conversations are addressed by `Target` (`target::Kind::UserId` for
 direct messages, `target::Kind::ChatId` for groups; kind names `"user"`
 and `"room"`/`"chat"` on text surfaces). The canonical per-target key is
-`target:user:<id>` / `target:room:<id>` (`target_key_for`). There is no
-durable update feed and no replay cursor: each conversation carries its
-own mutation journal, and sync reconciles journals per target.
+`target:user:<id>` / `target:room:<id>` (`target_key_for`). Conversations have
+no global replay cursor: each carries its own mutation journal, and sync reconciles
+journals per target. [Send status recovery](architecture.md#app-event-consumption-and-update-application)
+is separate and never advances conversation journals. Reconnect resumes only
+within a compatible wire epoch. When switching to `compact-wire-reset-v1`, follow
+the [clean cutover gate](../PROTO_PINNING.md#clean-media-cutover-gate): old host
+cursor checkpoints and uncertain mutations must not be carried into fresh state.
 
 1. Authenticate and establish the principal (`user:<id>`) through acknowledged
    activation or ACTIVE secure-store restoration and fresh Returning. SignIn
@@ -133,8 +136,12 @@ own mutation journal, and sync reconciles journals per target.
    (the journal cursor itself never moves on either policy).
 10. Connectivity observations are ephemeral, never checkpointed, cleared
     on disconnect.
-11. Sends persist `{request, idempotency_key≠0}` before transmitting; lost
-    results retry unchanged with fresh correlation.
+11. Sends persist `{request, idempotency_key≠0}` before transmitting. Supervised
+     immediate-media and album sends recover lost replies with
+     `GetSendStatus` using the original target and key, never by submitting again.
+     For albums, status recovery queries with the first original key. Manual
+     clients query explicitly. Where a synchronous send supports explicit retry,
+     the request and key stay unchanged within the same wire epoch.
 
 ## Demand-driven contract (hosts)
 
