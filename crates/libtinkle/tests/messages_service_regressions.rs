@@ -473,13 +473,64 @@ async fn all_messages_methods_cross_the_encrypted_boundary() {
             let remote = remote.clone();
             async move {
                 assert!(request.method.starts_with("/tinkle.v1.MessagesService/"));
-                remote.lock().unwrap().insert(request.method);
+                remote.lock().unwrap().insert(request.method.clone());
+                #[cfg(tinkle_room_queries)]
+                let outcome = match request.method.as_str() {
+                    "/tinkle.v1.MessagesService/GetRoomMembers" => {
+                        use p::room_query_target::Room::ChannelId;
+                        let req =
+                            p::GetRoomMembersRequest::decode(request.payload.as_slice()).unwrap();
+                        assert_eq!(req.target.unwrap().room, Some(ChannelId(i64::MAX)));
+                        assert_eq!(req.limit, 0);
+                        let page = match req.after_user_id {
+                            0 | 9 => p::GetRoomMembersResponse {
+                                members: vec![p::Participant {
+                                    user_id: 9,
+                                    ..Default::default()
+                                }],
+                                next_after_user_id: 9,
+                            },
+                            i64::MAX => p::GetRoomMembersResponse::default(),
+                            _ => panic!("unexpected members cursor"),
+                        };
+                        syntra_core::proto::rpc_result::Outcome::Payload(page.encode_to_vec())
+                    }
+                    "/tinkle.v1.MessagesService/GetRoomOnlineCount" => {
+                        use p::room_query_target::Room::ChatId;
+                        use syntra_core::proto::rpc_result::Outcome;
+                        let req = p::GetRoomOnlineCountRequest::decode(request.payload.as_slice())
+                            .unwrap();
+                        match req.target.unwrap().room {
+                            Some(ChatId(7)) => Outcome::Payload(vec![]),
+                            Some(ChatId(8)) => Outcome::Payload(
+                                p::GetRoomOnlineCountResponse {
+                                    sample: Some(p::RoomOnlineCountSample {
+                                        count: 0,
+                                        sampled_at: Some(prost_types::Timestamp {
+                                            seconds: 42,
+                                            nanos: 7,
+                                        }),
+                                    }),
+                                }
+                                .encode_to_vec(),
+                            ),
+                            Some(ChatId(9)) => Outcome::Error(syntra_core::proto::RpcError {
+                                code: syntra_core::ErrorCode::NotFound as i32,
+                                message: "room not found".into(),
+                            }),
+                            _ => panic!("unexpected count target"),
+                        }
+                    }
+                    _ => syntra_core::proto::rpc_result::Outcome::Payload(vec![]),
+                };
+                #[cfg(not(tinkle_room_queries))]
+                let outcome = syntra_core::proto::rpc_result::Outcome::Payload(vec![]);
                 syntra_core::proto::Frame {
                     version: 1,
                     request_id: 1,
                     body: Some(syntra_core::proto::frame::Body::Result(
                         syntra_core::proto::RpcResult {
-                            outcome: Some(syntra_core::proto::rpc_result::Outcome::Payload(vec![])),
+                            outcome: Some(outcome),
                         },
                     )),
                 }
@@ -583,6 +634,57 @@ async fn all_messages_methods_cross_the_encrypted_boundary() {
     );
     invoke!(get_chats, GetChatsRequest { chat_ids: vec![7] });
     invoke!(get_chat_details, GetChatDetailsRequest { chat_id: 7 });
+    #[cfg(tinkle_room_queries)]
+    {
+        use p::room_query_target::Room::{ChannelId, ChatId};
+        let target = Some(p::RoomQueryTarget {
+            room: Some(ChannelId(i64::MAX)),
+        });
+        let members = c.messages();
+        let page = |after_user_id| p::GetRoomMembersRequest {
+            target,
+            after_user_id,
+            limit: 0,
+        };
+        assert!(matches!(
+            members.get_room_members(page(-1)).await,
+            Err(TinkleError::Codec(_))
+        ));
+        let first = members.get_room_members(page(0)).await.unwrap();
+        assert_eq!(first.members[0].user_id, 9);
+        assert_eq!(first.next_after_user_id, 9);
+        assert!(matches!(
+            members
+                .get_room_members(page(first.next_after_user_id))
+                .await,
+            Err(TinkleError::Codec(_))
+        ));
+        let end = members.get_room_members(page(i64::MAX)).await.unwrap();
+        assert!(end.members.is_empty());
+        assert_eq!(end.next_after_user_id, 0);
+
+        let count = |id| p::GetRoomOnlineCountRequest {
+            target: Some(p::RoomQueryTarget {
+                room: Some(ChatId(id)),
+            }),
+        };
+        assert!(members
+            .get_room_online_count(count(7))
+            .await
+            .unwrap()
+            .sample
+            .is_none());
+        let zero = members
+            .get_room_online_count(count(8))
+            .await
+            .unwrap()
+            .sample
+            .unwrap();
+        assert_eq!(zero.count, 0);
+        assert_eq!(zero.sampled_at.unwrap().seconds, 42);
+        let denial = members.get_room_online_count(count(9)).await.unwrap_err();
+        assert_eq!(denial.code(), syntra_core::ErrorCode::NotFound);
+    }
     invoke!(
         add_chat_participant,
         AddChatParticipantRequest {
@@ -789,7 +891,8 @@ async fn all_messages_methods_cross_the_encrypted_boundary() {
     }
     assert_eq!(
         expected.len(),
-        if cfg!(tinkle_async_actions) { 47 } else { 43 }
+        43 + 4 * usize::from(cfg!(tinkle_async_actions))
+            + 2 * usize::from(cfg!(tinkle_room_queries))
     );
     assert_eq!(*seen.lock().unwrap(), expected);
     c.close().await;

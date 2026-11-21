@@ -264,6 +264,51 @@ impl TinkleClient {
     }
 }
 
+#[cfg(all(test, tinkle_room_queries))]
+#[tokio::test]
+async fn room_query_adapters_reject_bad_bytes_and_validate_before_transport() {
+    use tinkle_schema::proto as p;
+
+    let info = libtinkle::ClientInfo::new(
+        "test".into(),
+        "test".into(),
+        "1".into(),
+        "1".into(),
+        "1".into(),
+        Default::default(),
+    )
+    .unwrap();
+    let client = TinkleClient {
+        inner: libtinkle::Client::new(
+            libtinkle::ClientConfig::new("127.0.0.1", info),
+            libtinkle::TrustSource::Bootstrap(libtinkle::ServerTrust {
+                server_public_key: [7; 32],
+                server_key_id: 1,
+                scope: "test".into(),
+            }),
+            libtinkle::InMemoryCursorStore::new(),
+        ),
+    };
+    for bytes in [vec![], vec![0xff], vec![0; 262145]] {
+        assert!(matches!(
+            client.messages_get_room_members(bytes.clone()).await,
+            Err(FfiError::Codec(_))
+        ));
+        assert!(matches!(
+            client.messages_get_room_online_count(bytes).await,
+            Err(FfiError::Codec(_))
+        ));
+    }
+    let target = Some(p::RoomQueryTarget {
+        room: Some(p::room_query_target::Room::ChannelId(i64::MAX)),
+    });
+    let request = p::GetRoomOnlineCountRequest { target }.encode_to_vec();
+    assert!(matches!(
+        client.messages_get_room_online_count(request).await,
+        Err(FfiError::NotConnected)
+    ));
+}
+
 /// Validate native route and metadata inputs through the shared FFI configuration adapter.
 fn build_config(config: ClientConfigFfi) -> Result<libtinkle::ClientConfig, FfiError> {
     crate::config::validated_core_config(config)

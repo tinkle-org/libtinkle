@@ -880,6 +880,18 @@ pub const ALL_METHODS: &[(&str, &str, &str)] = &[
         "GetChatDetailsRequest",
         "GetChatDetailsResponse",
     ),
+    #[cfg(tinkle_room_queries)]
+    (
+        messagesservice::GET_ROOM_MEMBERS,
+        "GetRoomMembersRequest",
+        "GetRoomMembersResponse",
+    ),
+    #[cfg(tinkle_room_queries)]
+    (
+        messagesservice::GET_ROOM_ONLINE_COUNT,
+        "GetRoomOnlineCountRequest",
+        "GetRoomOnlineCountResponse",
+    ),
     (
         "/tinkle.v1.MessagesService/GetChats",
         "GetChatsRequest",
@@ -1451,6 +1463,12 @@ pub mod messagesservice {
     pub const EDIT_MESSAGE: &str = "/tinkle.v1.MessagesService/EditMessage";
     /// `/tinkle.v1.MessagesService/GetChatDetails`: `GetChatDetailsRequest` → `GetChatDetailsResponse`.
     pub const GET_CHAT_DETAILS: &str = "/tinkle.v1.MessagesService/GetChatDetails";
+    /// `/tinkle.v1.MessagesService/GetRoomMembers`: one page of current members.
+    #[cfg(tinkle_room_queries)]
+    pub const GET_ROOM_MEMBERS: &str = "/tinkle.v1.MessagesService/GetRoomMembers";
+    /// `/tinkle.v1.MessagesService/GetRoomOnlineCount`: an optional sampled aggregate.
+    #[cfg(tinkle_room_queries)]
+    pub const GET_ROOM_ONLINE_COUNT: &str = "/tinkle.v1.MessagesService/GetRoomOnlineCount";
     /// `/tinkle.v1.MessagesService/GetChats`: `GetChatsRequest` → `GetChatsResponse`.
     pub const GET_CHATS: &str = "/tinkle.v1.MessagesService/GetChats";
     /// `/tinkle.v1.MessagesService/GetDialogs`: `GetDialogsRequest` → `GetDialogsResponse`.

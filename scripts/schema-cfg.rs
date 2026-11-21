@@ -7,22 +7,34 @@ fn main() {
         "TINKLE_SCHEMA_CANDIDATE_ASYNC_ACTIONS",
         "TINKLE_SCHEMA_CANDIDATE_MEDIA_CONTRACT",
     ];
+    const ROOM_QUERIES: &str = "TINKLE_SCHEMA_CANDIDATE_ROOM_QUERIES";
     for key in keys {
         println!("cargo:rerun-if-env-changed={key}");
     }
     let [wire, actions, media] = keys.map(std::env::var);
+    let candidate = matches!(
+        (wire.as_deref(), actions.as_deref(), media.as_deref()),
+        (Ok(WIRE), Ok("1"), Ok(MEDIA))
+    );
+    let published = [&wire, &actions, &media]
+        .iter()
+        .all(|value| matches!(value, Err(std::env::VarError::NotPresent)));
     assert!(
-        matches!(
-            (wire.as_deref(), actions.as_deref(), media.as_deref()),
-            (Ok(WIRE), Ok("1"), Ok(MEDIA))
-                | (
-                    Err(std::env::VarError::NotPresent),
-                    Err(std::env::VarError::NotPresent),
-                    Err(std::env::VarError::NotPresent)
-                )
-        ),
+        candidate || published,
         "invalid candidate contract; use schema-candidate.py --async-actions"
     );
+    println!("cargo:rerun-if-env-changed={ROOM_QUERIES}");
+    println!("cargo:rustc-check-cfg=cfg(tinkle_room_queries)");
+    let room_queries = match std::env::var(ROOM_QUERIES).as_deref() {
+        Err(std::env::VarError::NotPresent) => published,
+        Ok("1") if candidate => true,
+        _ => panic!(
+            "invalid room query capability; use schema-candidate.py --async-actions --room-queries"
+        ),
+    };
+    if room_queries {
+        println!("cargo:rustc-cfg=tinkle_room_queries");
+    }
     // Historical cfg names: these describe the schema shape, not its registry source.
     for capability in ["tinkle_schema_candidate", "tinkle_async_actions"] {
         println!("cargo:rustc-check-cfg=cfg({capability})");

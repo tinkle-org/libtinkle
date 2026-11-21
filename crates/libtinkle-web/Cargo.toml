@@ -1,4 +1,5 @@
 [package]
+build = "../../scripts/schema-cfg.rs"
 name = "libtinkle-web"
 version.workspace = true
 edition.workspace = true

@@ -665,6 +665,67 @@ typed_methods! { Messages, "MessagesService",
     list_thread_messages(ListThreadMessagesRequest) -> ListThreadMessagesResponse, "ListThreadMessages", |r| { validate_target(r.target.as_ref())?; require(r.message_id > 0 && !(r.offset_id.is_some() && r.offset_date.is_some()), "invalid thread/offset")?; page(r.limit, 100, false)?; };
 }
 
+#[cfg(all(tinkle_room_queries, not(target_arch = "wasm32")))]
+impl Messages<'_> {
+    /// Read one page of current members. Continue with the returned cursor on the same room.
+    /// This is not a snapshot across requests, and nothing is written to the cache or journal.
+    pub async fn get_room_members(
+        &self,
+        req: p::GetRoomMembersRequest,
+    ) -> Result<p::GetRoomMembersResponse, TinkleError> {
+        use tinkle_schema::{methods::messagesservice::GET_ROOM_MEMBERS, room_queries};
+        room_queries::validate_members_request(&req).map_err(room_query_error)?;
+        let page = self.call_room_query(GET_ROOM_MEMBERS, &req).await?;
+        room_queries::validate_members_page(&req, &page).map_err(room_query_error)?;
+        Ok(page)
+    }
+
+    /// Read a sampled aggregate of visible connected members, not room viewers or per-user
+    /// presence. An absent sample means unavailable or withheld, not zero.
+    pub async fn get_room_online_count(
+        &self,
+        req: p::GetRoomOnlineCountRequest,
+    ) -> Result<p::GetRoomOnlineCountResponse, TinkleError> {
+        use tinkle_schema::{methods::messagesservice::GET_ROOM_ONLINE_COUNT, room_queries};
+        room_queries::validate_online_count_request(&req).map_err(room_query_error)?;
+        let response = self.call_room_query(GET_ROOM_ONLINE_COUNT, &req).await?;
+        room_queries::validate_online_count_response(&response).map_err(room_query_error)?;
+        Ok(response)
+    }
+
+    /// Discard a reply from a retired connection or application scope.
+    async fn call_room_query<Req: Message, Resp: Message + Default>(
+        &self,
+        method: &str,
+        req: &Req,
+    ) -> Result<Resp, TinkleError> {
+        use std::sync::atomic::Ordering::SeqCst;
+
+        let (epoch, revision) = self.client.transfer_application_fence()?;
+        let mut caller = self.client.for_application_scope(epoch, revision);
+        let generation = caller.session_state.generation();
+        if let Some(generation) = &generation {
+            caller = caller.for_session_generation(generation.clone());
+        }
+        let result = call_typed(&caller, method, req, 30_000).await?;
+        caller.transfer_application_fence()?;
+        if generation.is_none_or(|generation| {
+            !generation.open.load(SeqCst) || generation.retiring.load(SeqCst)
+        }) {
+            return Err(TinkleError::NotConnected(
+                "room query connection changed".into(),
+            ));
+        }
+        Ok(result)
+    }
+}
+
+#[cfg(all(tinkle_room_queries, not(target_arch = "wasm32")))]
+/// Keep room schema failures in the same error category as other invalid payloads.
+fn room_query_error(error: tinkle_schema::room_queries::RoomQueryError) -> TinkleError {
+    TinkleError::Codec(error.to_string())
+}
+
 /// Privacy-filtered user/profile reads on the current authenticated channel.
 pub struct Users<'a> {
     client: &'a Client,
