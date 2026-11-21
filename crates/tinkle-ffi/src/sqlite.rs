@@ -315,7 +315,7 @@ impl SqliteStorage {
 
     /// Delete all rows for `principal`, including journal cursors.
     ///
-    /// Coordination required: [`TinkleClient`] holds in-memory accept
+    /// Coordination required: [`crate::TinkleClient`] holds in-memory accept
     /// positions. If the client is still running, the next journal commit
     /// fails the SQLite scope fence because memory expects the deleted
     /// cursor, breaking sync until reconciliation. Callers must

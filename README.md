@@ -79,7 +79,8 @@ The first public unary call on every connection is InitConnect-wrapped. See
 contract, recovery path and runnable checks.
 
 The published schema includes enrollment disposition, session review, and typed
-session-change hints. Release qualification uses the published Cargo pin and
+session-change hints, as well as [room member pages and sampled online counts](docs/architecture.md#room-queries).
+Release qualification uses the published Cargo pin and
 ordinary `--locked` checks, without Buf or schema candidates in required CI.
 See [public pins](PROTO_PINNING.md#current-published-schema-pin).
 

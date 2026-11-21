@@ -10,6 +10,8 @@ pub mod methods;
 pub mod proto;
 #[cfg(tinkle_async_actions)]
 pub mod representations;
+#[cfg(tinkle_room_queries)]
+pub mod room_queries;
 pub mod sync;
 #[cfg(tinkle_async_actions)]
 pub mod wire;

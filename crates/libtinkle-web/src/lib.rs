@@ -3,6 +3,11 @@
 
 use wasm_bindgen::prelude::*;
 
+#[cfg(tinkle_room_queries)]
+mod room_queries;
+#[cfg(tinkle_room_queries)]
+pub use room_queries::*;
+
 /// Browser network support is explicitly unavailable for this native package.
 #[wasm_bindgen]
 pub fn network_supported() -> bool {

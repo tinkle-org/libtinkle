@@ -240,6 +240,33 @@ sends once hydration is complete. `SendStatusChanged` notices are best-effort;
 hosts can reread retained jobs or explicitly query current status. A notification
 does not select an outcome or disclose current bodies.
 
+### Room queries
+
+`Messages::get_room_members` and `Messages::get_room_online_count` are single
+native RPCs. Use a positive chat or channel ID, not a DM target. The server
+checks current membership and disclosure for each request. The SDK does not
+retry, fall back to chat details or local presence, write to the cache, or
+advance a journal.
+
+The public Room denial contract is `NotFound` (`room not found`), with no
+details that distinguish a missing room, refused Room access, or a hidden
+roster. A hidden roster must not require an existence check. This is an RPC
+error, not an empty page or absent sample, and it leaves an active device
+session authorized. Actual device authorization errors keep their existing
+`Unauthenticated` / `PermissionDenied` behavior, including on Room RPCs.
+
+Member pages use an exclusive user-ID cursor. Begin at zero; continue with
+`next_after_user_id` on the same room, or stop when it is zero. A short page
+can still have a continuation. Each request reads current members, so pages
+do not form a snapshot. The online count describes a sample of visible
+connected members, not room viewers or per-user presence. No sample means
+unavailable or withheld; a disclosed zero has its own observation timestamp.
+
+The [published pin](../PROTO_PINNING.md#current-published-schema-pin)
+includes the UniFFI protobuf-byte methods `messages_get_room_members` and
+`messages_get_room_online_count`. Web exports validate request and response
+bytes offline; they do not issue the RPCs.
+
 ### Shared message search
 
 `Messages::search(SearchRequest)` and the UniFFI `messages_search` protobuf-byte

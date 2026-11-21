@@ -2,7 +2,7 @@
 //!
 //! The durable store is implemented by the foreign host via
 //! the [`FfiCursorStore`] callback interface, or with the in-memory
-//! [`InMemoryFfiStore`] in tests. [`FfiStoreAdapter`] adapts either into
+//! [`InMemoryFfiStore`] in tests. `FfiStoreAdapter` adapts either into
 //! the [`libtinkle::CursorStore`] expected by [`libtinkle::Client`].
 //!
 //! Vocabulary is per-target journals: `target_key` is

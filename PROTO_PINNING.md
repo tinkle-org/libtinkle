@@ -46,6 +46,7 @@ cargo fmt --all -- --check
 cargo check --locked --workspace --all-targets --all-features
 cargo test --locked --workspace --all-features --verbose
 cargo clippy --locked --workspace --all-targets --all-features --no-deps -- -D warnings
+RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --all-features --no-deps
 cargo check --locked -p libtinkle-web -p tinkle-schema --target wasm32-unknown-unknown
 python3 scripts/with-native-fixture.py --port 0 cargo test --locked -p libtinkle --test mobile_fixture -- --ignored
 ```
@@ -62,15 +63,16 @@ exit results, skips, and raw evidence paths.
 
 ## Current published schema pin
 
-Use the latest published prost artifact with the exact pin
-`=0.5.0-20261118031328-a03ec89f7e36.2`. BSR module commit
-`a03ec89f7e3640b5bcd5b86c5bc297f1` maps to schema Git revision
-`45c4e3d0e7901e680aa2830de2946156939c5199`. The Syntra pins above are unchanged.
+The public `buf` registry pin for `tinkle-org_schema_community_neoeinstein-prost`
+is `=0.5.0-20261121050128-d22f8d315797.2`, with crate SHA-256
+`af565cf092d160c310283cc73652afafc3eea80233ebd4567f107d77bd9b394c`.
+BSR module commit `d22f8d315797432cbfae8d80788c1693` maps to schema Git revision
+`33b065883db8dc1f1b34cfe3ca0d9d9d0095e10f`. The Syntra pins above are unchanged.
 Go consumers own their independent published coordinates in their manifests.
 
 Ordinary registry builds with this pin and matching SDK source use
 `compact-wire-reset-v1` and the [asynchronous action APIs](README.md#asynchronous-application-actions),
-including with `--all-features`.
+as well as the [Room queries](docs/architecture.md#room-queries), with default features or `--all-features`.
 Before qualifying a build, verify that `Cargo.toml` and `Cargo.lock` resolve this
 exact dependency for `--locked` CI. A checkout that still resolves the previous
 pin does not exercise this contract. Registry builds need no extra environment
@@ -156,27 +158,47 @@ prost/prost-types `=0.14.4`.
 
 The helper checks that the registry patch resolves to the generated manifest in
 the copied workspace. The patch, generated prost files, and candidate lockfile
-stay outside this repository. `candidate.json` records the source and descriptor
-SHA-256 digests, wire identity, media contract, and action opt-in as local evidence.
+stay outside this repository. Use a dedicated output directory and one invocation
+at a time per directory. A rerun discards old generation outputs and evidence
+but can reuse the Cargo target cache. `candidate.json` records the source and
+descriptor SHA-256 digests, wire identity, media contract, and selected opt-ins
+only after generation, resolution checks, and the requested command pass.
 The generated package version matches the registry pin solely to make the patch
 resolve; it does not assign a release coordinate or qualify the published artifact.
+
+When checking a local schema containing `GetRoomMembers` and `GetRoomOnlineCount`,
+add `--room-queries` to the candidate command so its method inventory matches
+the local descriptor. Omit it for older candidates without these methods.
+This opt-in is only for local replacements; the registry build always includes both.
 
 See [device enrollment](docs/device-enrollment.md#published-schema-checks) for
 SDK checks and their verification boundaries.
 
 ## Published artifact integration
 
-For a subsequent upgrade, retrieve the actual published prost
-coordinate rather than constructing a version:
+### Verifying the published Room queries
+
+Check the coordinate against BSR rather than constructing the version:
 
 ```sh
-buf registry sdk version --module=buf.build/tinkle-org/schema --plugin=buf.build/community/neoeinstein-prost
+buf registry sdk version --module=buf.build/tinkle-org/schema:d22f8d315797432cbfae8d80788c1693 \
+  --plugin=buf.build/community/neoeinstein-prost:v0.5.0
 ```
 
-Update the workspace dependency with that returned coordinate, update Cargo.lock,
-and run ordinary workspace checks against the released artifact.
-Descriptor tests must match the full method inventory and exact
-SignIn/enrollment/InitConnect fields.
+In the ordinary workspace, run the [locked checks above](#sdk-pins-and-qualification)
+and CI's MSRV check. The focused checks below cover both Room methods, including
+the full descriptor inventory, native encrypted calls, and the UniFFI/web adapters:
+
+```sh
+cargo test --locked -p tinkle-schema --test room_queries --test auth_contract
+cargo test --locked -p libtinkle --test messages_service_regressions --test service_review_regressions
+cargo test --locked -p tinkle-ffi -p libtinkle-web --lib room
+python3 -m unittest discover -s tests -p 'test_schema_candidate.py'
+```
+
+Consumers must regenerate Swift/Kotlin from the matching native library. Verify
+the [Room denial contract](docs/architecture.md#room-queries) against a separately
+qualified server using the same published schema; the SDK fixture cannot establish it.
 
 Keep the three Syntra dependencies aligned with the
 [SDK pins](#sdk-pins-and-qualification), without source

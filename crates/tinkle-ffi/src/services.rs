@@ -70,6 +70,12 @@ service_methods! { users;
     users_get_user_complete => get_user_complete(GetUserCompleteRequest);
 }
 
+#[cfg(tinkle_room_queries)]
+service_methods! { messages;
+    messages_get_room_members => get_room_members(GetRoomMembersRequest);
+    messages_get_room_online_count => get_room_online_count(GetRoomOnlineCountRequest);
+}
+
 service_methods! { account;
     account_update_profile => update_profile(UpdateProfileRequest);
     account_update_username => update_username(UpdateUsernameRequest);

@@ -1542,9 +1542,9 @@ dependencies = [
 
 [[package]]
 name = "tinkle-org_schema_community_neoeinstein-prost"
-version = "0.5.0-20261118031328-a03ec89f7e36.2"
+version = "0.5.0-20261121050128-d22f8d315797.2"
 source = "sparse+https://buf.build/gen/cargo/public/"
-checksum = "0ef9be7fe4e04df2beba6754fd81dae07c6f661766a999fe0e31ea5229025af7"
+checksum = "af565cf092d160c310283cc73652afafc3eea80233ebd4567f107d77bd9b394c"
 dependencies = [
  "prost",
  "prost-types",

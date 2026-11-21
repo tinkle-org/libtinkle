@@ -16,6 +16,8 @@ use syntra_core::{
 };
 use syntra_runtime::{ConnectionConfig, FnHandler, HandlerOutcome};
 use tinkle_schema::methods::accountservice as account_methods;
+#[cfg(tinkle_room_queries)]
+use tinkle_schema::methods::messagesservice as message_methods;
 use tinkle_schema::proto::*;
 use tokio::net::TcpListener;
 
@@ -57,9 +59,9 @@ impl KeyStore for Keys {
 }
 
 #[tokio::test]
-/// Check denial classification without clearing credentials or preventing Returning reconnect.
-async fn account_denials_clear_authorization_without_retiring_credentials() {
-    for (method, code) in [
+/// Check RPC denial classification on Returning; none of these errors retires credentials.
+async fn rpc_denials_withdraw_authorization_only_for_device_errors() {
+    let cases = [
         account_methods::GET_SESSIONS,
         account_methods::REVOKE_SESSION,
         account_methods::REVOKE_SESSIONS,
@@ -72,7 +74,18 @@ async fn account_denials_clear_authorization_without_retiring_credentials() {
             ErrorCode::ResourceExhausted,
         ]
         .map(|code| (method, code))
-    }) {
+    });
+    #[cfg(tinkle_room_queries)]
+    let cases = cases.chain([
+        (message_methods::GET_ROOM_MEMBERS, ErrorCode::NotFound),
+        (message_methods::GET_ROOM_ONLINE_COUNT, ErrorCode::NotFound),
+        // Device denial can still arrive at a Room RPC; never classify by method alone.
+        (
+            message_methods::GET_ROOM_ONLINE_COUNT,
+            ErrorCode::PermissionDenied,
+        ),
+    ]);
+    for (method, code) in cases {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let config = support::config(listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
@@ -87,7 +100,14 @@ async fn account_denials_clear_authorization_without_retiring_credentials() {
                         let request = InitConnectRequest::decode(bytes.as_slice()).unwrap();
                         assert_eq!(wire_method, "/tinkle.v1.ConnectionService/InitConnect");
                         assert_eq!(request.method, method);
-                        HandlerOutcome::error(code, "denied")
+                        HandlerOutcome::error(
+                            code,
+                            if code == ErrorCode::NotFound {
+                                "room not found"
+                            } else {
+                                "denied"
+                            },
+                        )
                     },
                 ));
                 keep(
@@ -135,6 +155,10 @@ async fn account_denials_clear_authorization_without_retiring_credentials() {
         );
         let connection = client.connection_id().await;
         let account = client.account();
+        #[cfg(tinkle_room_queries)]
+        let target = Some(RoomQueryTarget {
+            room: Some(room_query_target::Room::ChannelId(7)),
+        });
         let error = match method {
             account_methods::GET_SESSIONS => account.get_sessions().await.map(|_| ()).unwrap_err(),
             account_methods::REVOKE_SESSION => account
@@ -147,6 +171,21 @@ async fn account_denials_clear_authorization_without_retiring_credentials() {
                 .await
                 .map(|_| ())
                 .unwrap_err(),
+            #[cfg(tinkle_room_queries)]
+            message_methods::GET_ROOM_MEMBERS => client
+                .messages()
+                .get_room_members(GetRoomMembersRequest {
+                    target,
+                    ..Default::default()
+                })
+                .await
+                .unwrap_err(),
+            #[cfg(tinkle_room_queries)]
+            message_methods::GET_ROOM_ONLINE_COUNT => client
+                .messages()
+                .get_room_online_count(GetRoomOnlineCountRequest { target })
+                .await
+                .unwrap_err(),
             _ => unreachable!(),
         };
         assert_eq!(error.code(), code);
@@ -158,11 +197,11 @@ async fn account_denials_clear_authorization_without_retiring_credentials() {
         }
         assert_eq!(
             status.authorization,
-            if code == ErrorCode::ResourceExhausted {
-                SessionAuthorization::Active
-            } else {
-                SessionAuthorization::Unknown
-            }
+            match code {
+                ErrorCode::NotFound | ErrorCode::ResourceExhausted => SessionAuthorization::Active,
+                _ => SessionAuthorization::Unknown,
+            },
+            "{method}: {code:?}"
         );
         assert_eq!(status.cleanup, SessionCleanup::NotStarted);
         assert!(!client.is_signed_out());
